@@ -7,6 +7,7 @@ SOURCES += \
     $$PWD/body_fitter.cpp \
     $$PWD/body_measurer.cpp \
     $$PWD/body_model.cpp \
+    $$PWD/body_wrap.cpp \
     $$PWD/cloth_solver.cpp \
     $$PWD/garment_mesh.cpp \
     $$PWD/piece_mesher.cpp \
@@ -21,6 +22,7 @@ HEADERS += \
     $$PWD/body_fitter.h \
     $$PWD/body_measurer.h \
     $$PWD/body_model.h \
+    $$PWD/body_wrap.h \
     $$PWD/cloth_solver.h \
     $$PWD/garment_mesh.h \
     $$PWD/piece_mesher.h \

@@ -46,6 +46,8 @@ private slots:
     void fitMatchesMeasurements() const;
     void fitReachesTypicalBodies() const;
     void fitStaysInRange() const;
+    void wrapFindsBodyParts() const;
+    void wrappedPiecesStartOutsideTheBody() const;
 
 private:
     Q_DISABLE_COPY(TST_BodyModel)

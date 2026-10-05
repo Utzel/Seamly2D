@@ -24,15 +24,19 @@
 
 #include "tst_bodymodel.h"
 
+#include <QLineF>
 #include <QtMath>
 #include <QtTest>
 
 #include <limits>
 
+#include "../vgarment/body_collider.h"
 #include "../vgarment/body_data.h"
 #include "../vgarment/body_fitter.h"
 #include "../vgarment/body_measurer.h"
 #include "../vgarment/body_model.h"
+#include "../vgarment/body_wrap.h"
+#include "../vgarment/piece_mesher.h"
 
 namespace
 {
@@ -288,4 +292,80 @@ void TST_BodyModel::fitStaysInRange() const
     QCOMPARE(fit.shape.measures.value(QStringLiteral("torso/measure-waist-circ")), 1.0);
     QVERIFY(fit.measured.waist < 300);
     QVERIFY(qAbs(fit.measured.height - 170) < 0.5);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A click in front of the chest or behind the hips goes on the body, one on the front of a thigh on that leg.
+void TST_BodyModel::wrapFindsBodyParts() const
+{
+    const BodyModel model;
+    const QVector<QVector3D> positions = model.evaluate(female());
+    const BodyWrap wrap(model, positions);
+    const QVector3D pelvis = model.joint(positions, QStringLiteral("pelvis"));
+    const QVector3D chest = model.joint(positions, QStringLiteral("spine-3"));
+    const QVector3D knee = model.joint(positions, QStringLiteral("l-knee"));
+
+    const PieceArrangement front = wrap.arrangementAt(QVector3D(pelvis.x(), chest.y(), pelvis.z() + 15));
+    QVERIFY(front.part == BodyPart::Body);
+    QVERIFY(qAbs(front.angle) < 1.0);
+    QCOMPARE(front.height, static_cast<qreal>(chest.y()));
+
+    const PieceArrangement back = wrap.arrangementAt(QVector3D(pelvis.x(), pelvis.y(), pelvis.z() - 15));
+    QVERIFY(back.part == BodyPart::Body);
+    QVERIFY(qAbs(qAbs(back.angle) - 180.0) < 1.0);
+
+    const PieceArrangement thigh = wrap.arrangementAt(knee + QVector3D(0, 10, 7));
+    QVERIFY(thigh.part == BodyPart::LeftLeg);
+    QVERIFY(qAbs(thigh.angle) < 20.0);
+
+    for (const BodyPart part : {BodyPart::Body, BodyPart::LeftLeg, BodyPart::RightLeg})
+    {
+        QVERIFY(BodyWrap::partFromName(BodyWrap::partName(part)) == part);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Pieces placed on the body or a leg start outside the skin, bent but not stretched.
+void TST_BodyModel::wrappedPiecesStartOutsideTheBody() const
+{
+    const BodyModel model;
+    const QVector<QVector3D> positions = model.evaluate(female());
+    const BodyWrap wrap(model, positions);
+    const BodyCollider skin(positions.mid(0, model.skinVertexCount()), model.triangles());
+    const GarmentMesh mesh = PieceMesher().meshPolygon({QPointF(0, 0), QPointF(24, 0), QPointF(24, 30),
+                                                        QPointF(0, 30)});
+
+    PieceArrangement on_hips;
+    on_hips.height = model.joint(positions, QStringLiteral("pelvis")).y();
+    PieceArrangement on_thigh;
+    on_thigh.part = BodyPart::LeftLeg;
+    on_thigh.angle = 180;
+    on_thigh.height = model.joint(positions, QStringLiteral("l-knee")).y() + 15;
+
+    for (const PieceArrangement& arrangement : {on_hips, on_thigh})
+    {
+        const QVector<QVector3D> placed = wrap.place(mesh, arrangement);
+        QCOMPARE(placed.size(), mesh.vertexCount());
+
+        for (const QVector3D& point : placed)
+        {
+            BodyContact contact;
+            if (skin.closest(point, skin.trianglesWithin(point, 30), &contact))
+            {
+                QVERIFY2(contact.distance > 0, qUtf8Printable(QStringLiteral("(%1, %2, %3) is %4 cm inside")
+                    .arg(point.x()).arg(point.y()).arg(point.z()).arg(-contact.distance)));
+            }
+        }
+
+        qreal worst_strain = 0;
+        for (int t = 0; t + 2 < mesh.indices.size(); t += 3)
+        {
+            const int a = static_cast<int>(mesh.indices.at(t));
+            const int b = static_cast<int>(mesh.indices.at(t + 1));
+            const qreal rest = QLineF(mesh.rest_positions.at(a), mesh.rest_positions.at(b)).length();
+            worst_strain = qMax(worst_strain, qAbs((placed.at(a) - placed.at(b)).length() / rest - 1.0));
+        }
+        QVERIFY2(worst_strain < 0.01, qUtf8Printable(QStringLiteral("%1: an edge is %2 % off its length")
+            .arg(BodyWrap::partName(arrangement.part)).arg(worst_strain * 100)));
+    }
 }
