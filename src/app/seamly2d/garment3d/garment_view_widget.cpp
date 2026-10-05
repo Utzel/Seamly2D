@@ -51,6 +51,7 @@
 #include "../ifc/xml/vabstractpattern.h"
 #include "../vmisc/def.h"
 #include "../vmisc/vabstractapplication.h"
+#include "../vpatterndb/floatItemData/vpiecelabeldata.h"
 #include "../vpatterndb/measurements_def.h"
 #include "../vpatterndb/variables/vinternalvariable.h"
 #include "../vpatterndb/vcontainer.h"
@@ -64,6 +65,30 @@
 
 namespace
 {
+//---------------------------------------------------------------------------------------------------------------------
+// How the piece is made up into the garment, from what its label says.
+PieceSymmetry symmetryOf(const VPiece& piece)
+{
+    const VPieceLabelData& label = piece.GetPatternPieceData();
+    PieceSymmetry symmetry = PieceSymmetry::Single;
+    if (label.IsOnFold())
+    {
+        symmetry = PieceSymmetry::Fold;
+    }
+    else if (label.GetQuantity() >= 2)
+    {
+        symmetry = PieceSymmetry::Pair;
+    }
+    return symmetry;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The pattern piece a piece of the garment is, or is the mirrored copy of.
+quint32 patternPiece(quint32 id)
+{
+    return PieceOutline::isMirrorId(id) ? PieceOutline::mirrorId(id) : id;
+}
+
 // Edits come in bursts (dragging a point sends one per mouse move), so re-mesh once they pause.
 const int rebuild_delay_ms = 150;
 
@@ -255,6 +280,7 @@ void GarmentViewWidget::rebuildScene()
     QVector<GarmentSceneModel::Piece> scene_pieces;
     QVector<SeamEditor::Piece> seam_pieces;
     QHash<quint32, CachedMesh> mesh_cache;
+    m_garment_pieces.clear();
     for (const quint32 id : ids)
     {
         const VPiece& piece = pieces->constFind(id).value();
@@ -263,13 +289,13 @@ void GarmentViewWidget::rebuildScene()
             try
             {
                 const PieceOutline outline = PieceOutline::fromPiece(piece, m_data);
+                const PieceSymmetry wanted = symmetryOf(piece);
                 CachedMesh cached = m_mesh_cache.value(id);
-                if (cached.outline != outline)
+                if (cached.outline != outline || cached.wanted != wanted || cached.mesh.isEmpty())
                 {
-                    cached.outline = outline;
-                    cached.mesh = m_mesher.meshOutline(outline);
-                    cached.mesh.piece_id = id;
+                    cached = garmentMeshes(id, outline, wanted);
                     m_draped.remove(id);
+                    m_draped.remove(PieceOutline::mirrorId(id));
                 }
                 mesh_cache.insert(id, cached);
 
@@ -281,16 +307,36 @@ void GarmentViewWidget::rebuildScene()
                     scene_piece.id = id;
                     scene_piece.name = piece.GetName();
                     scene_piece.color = color.isValid() ? color : QColor(Qt::white);
-                    scene_piece.mesh = cached.mesh;
-                    scene_piece.positions = piecePositions(id, cached.mesh);
-                    scene_pieces.append(scene_piece);
 
-                    // Seams are sewn on the board, so only the pieces lying there take part.
-                    if (scene_piece.positions.isEmpty())
+                    const bool placed = !m_wrap.isNull() && m_arrangements.contains(id)
+                                        && !cached.garment_mesh.isEmpty();
+                    if (placed)
                     {
+                        scene_piece.mesh = cached.garment_mesh;
+                        scene_piece.positions = piecePositions(id, cached.garment_mesh);
+                        scene_pieces.append(scene_piece);
+                        m_garment_pieces.append({id, cached.garment_mesh});
+
+                        if (cached.symmetry == PieceSymmetry::Pair)
+                        {
+                            GarmentSceneModel::Piece mirror_piece = scene_piece;
+                            mirror_piece.id = PieceOutline::mirrorId(id);
+                            mirror_piece.mesh = cached.mirror_mesh;
+                            mirror_piece.positions = piecePositions(mirror_piece.id, cached.mirror_mesh);
+                            scene_pieces.append(mirror_piece);
+                            m_garment_pieces.append({mirror_piece.id, cached.mirror_mesh});
+                        }
+                    }
+                    else
+                    {
+                        // Pieces lie on the board as drafted, and seams are sewn there.
+                        scene_piece.mesh = cached.mesh;
+                        scene_pieces.append(scene_piece);
+
                         SeamEditor::Piece seam_piece;
                         seam_piece.id = id;
                         seam_piece.outline = cached.outline;
+                        seam_piece.mirrored = cached.symmetry == PieceSymmetry::Pair;
                         seam_pieces.append(seam_piece);
                     }
                 }
@@ -305,7 +351,7 @@ void GarmentViewWidget::rebuildScene()
     m_mesh_cache = mesh_cache;
     for (auto draped = m_draped.begin(); draped != m_draped.end();)
     {
-        draped = m_mesh_cache.contains(draped.key()) ? std::next(draped) : m_draped.erase(draped);
+        draped = m_mesh_cache.contains(patternPiece(draped.key())) ? std::next(draped) : m_draped.erase(draped);
     }
 
     m_scene_model->setPieces(scene_pieces);
@@ -464,7 +510,7 @@ void GarmentViewWidget::scenePicked(quint32 id)
 {
     if (id != 0)
     {
-        emit pieceSelected(id);
+        emit pieceSelected(patternPiece(id));
     }
 }
 
@@ -498,9 +544,10 @@ void GarmentViewWidget::readArrangements()
 
     for (auto draped = m_draped.begin(); draped != m_draped.end();)
     {
-        const PieceArrangement before = m_arrangements.value(draped.key());
-        const PieceArrangement after = arrangements.value(draped.key());
-        const bool same = arrangements.contains(draped.key()) && before.part == after.part
+        const quint32 piece = patternPiece(draped.key());
+        const PieceArrangement before = m_arrangements.value(piece);
+        const PieceArrangement after = arrangements.value(piece);
+        const bool same = arrangements.contains(piece) && before.part == after.part
                           && qFuzzyCompare(1.0 + before.angle, 1.0 + after.angle)
                           && qFuzzyCompare(1.0 + before.height, 1.0 + after.height);
         draped = same ? std::next(draped) : m_draped.erase(draped);
@@ -509,20 +556,66 @@ void GarmentViewWidget::readArrangements()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Where a piece is shown: where the drape took it, else where it is arranged on the avatar, else nowhere in
-// particular, which puts it on the board.
+// Where a piece of the garment is shown: where the drape took it, else where it is arranged on the avatar, a
+// mirrored copy mirrored to the other side of the body, else nowhere in particular, which puts it on the board.
 QVector<QVector3D> GarmentViewWidget::piecePositions(quint32 id, const GarmentMesh& mesh) const
 {
     QVector<QVector3D> positions;
-    if (!m_wrap.isNull() && m_arrangements.contains(id))
+    const quint32 piece = patternPiece(id);
+    if (!m_wrap.isNull() && m_arrangements.contains(piece))
     {
         positions = m_draped.value(id);
         if (positions.size() != mesh.vertexCount())
         {
-            positions = m_wrap->place(mesh, m_arrangements.value(id));
+            if (PieceOutline::isMirrorId(id))
+            {
+                positions = m_wrap->place(m_mesh_cache.value(piece).garment_mesh, m_arrangements.value(piece));
+                for (QVector3D& position : positions)
+                {
+                    position = m_wrap->mirrored(position);
+                }
+            }
+            else
+            {
+                positions = m_wrap->place(mesh, m_arrangements.value(piece));
+            }
         }
     }
     return positions;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Meshes a piece for the board and for the garment. A piece cut on the fold without a straight side to fold along
+// is taken as it is.
+GarmentViewWidget::CachedMesh GarmentViewWidget::garmentMeshes(quint32 id, const PieceOutline& outline,
+                                                               PieceSymmetry wanted) const
+{
+    CachedMesh cached;
+    cached.outline = outline;
+    cached.wanted = wanted;
+    cached.mesh = m_mesher.meshOutline(outline);
+    cached.mesh.piece_id = id;
+    cached.symmetry = wanted;
+    cached.garment_mesh = cached.mesh;
+
+    if (wanted == PieceSymmetry::Fold)
+    {
+        if (outline.findFoldLine(&cached.fold_start, &cached.fold_end))
+        {
+            cached.garment_mesh = m_mesher.meshOutline(outline.unfolded(cached.fold_start, cached.fold_end));
+            cached.garment_mesh.piece_id = id;
+        }
+        else
+        {
+            cached.symmetry = PieceSymmetry::Single;
+        }
+    }
+    else if (wanted == PieceSymmetry::Pair)
+    {
+        cached.mirror_mesh = cached.mesh.mirrored();
+        cached.mirror_mesh.piece_id = PieceOutline::mirrorId(id);
+    }
+    return cached;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -655,20 +748,23 @@ void GarmentViewWidget::startSimulation()
 
     QSharedPointer<ClothSolver> solver(new ClothSolver());
     QHash<quint32, quint32> offsets;
-    QList<quint32> ids = m_mesh_cache.keys();
-    std::sort(ids.begin(), ids.end());
-    for (const quint32 id : ids)
+    QHash<quint32, GarmentMesh> meshes;
+    GarmentSymmetry symmetry;
+    for (const GarmentPiece& garment_piece : m_garment_pieces)
     {
-        const GarmentMesh& mesh = m_mesh_cache.value(id).mesh;
-        const QVector<QVector3D> positions = piecePositions(id, mesh);
-        if (!mesh.isEmpty() && !positions.isEmpty())
+        const QVector<QVector3D> positions = piecePositions(garment_piece.id, garment_piece.mesh);
+        if (!positions.isEmpty())
         {
             DrapePiece drape_piece;
-            drape_piece.id = id;
-            drape_piece.offset = static_cast<int>(solver->addMesh(mesh, positions));
-            drape_piece.count = mesh.vertexCount();
+            drape_piece.id = garment_piece.id;
+            drape_piece.offset = static_cast<int>(solver->addMesh(garment_piece.mesh, positions));
+            drape_piece.count = garment_piece.mesh.vertexCount();
             m_drape_pieces.append(drape_piece);
-            offsets.insert(id, static_cast<quint32>(drape_piece.offset));
+            offsets.insert(garment_piece.id, static_cast<quint32>(drape_piece.offset));
+            meshes.insert(garment_piece.id, garment_piece.mesh);
+
+            const CachedMesh& cached = m_mesh_cache.value(patternPiece(garment_piece.id));
+            symmetry.setPiece(patternPiece(garment_piece.id), cached.symmetry, cached.fold_start, cached.fold_end);
         }
     }
 
@@ -680,16 +776,25 @@ void GarmentViewWidget::startSimulation()
         return;
     }
 
-    for (const VSeam& seam : m_doc->getSeams())
+    // The pattern's seams, and their twins on the other side of the garment.
+    QVector<GarmentSeam> seams;
+    for (const VSeam& stored : m_doc->getSeams())
     {
-        if (offsets.contains(seam.first.piece_id) && offsets.contains(seam.second.piece_id))
+        GarmentSeam seam;
+        seam.first = {stored.first.piece_id, stored.first.start_node, stored.first.end_node};
+        seam.second = {stored.second.piece_id, stored.second.start_node, stored.second.end_node};
+        seam.reverse = stored.reverse;
+        seams.append(seam);
+    }
+    for (const GarmentSeam& seam : symmetry.madeUp(seams))
+    {
+        if (offsets.contains(seam.first.piece) && offsets.contains(seam.second.piece))
         {
-            const GarmentMesh& first_mesh = m_mesh_cache.value(seam.first.piece_id).mesh;
-            const GarmentMesh& second_mesh = m_mesh_cache.value(seam.second.piece_id).mesh;
-            const SeamStretch first = first_mesh.stretch(seam.first.start_node, seam.first.end_node,
-                                                         offsets.value(seam.first.piece_id));
-            SeamStretch second = second_mesh.stretch(seam.second.start_node, seam.second.end_node,
-                                                     offsets.value(seam.second.piece_id));
+            const SeamStretch first = meshes.value(seam.first.piece).stretch(seam.first.start_node,
+                                                                             seam.first.end_node,
+                                                                             offsets.value(seam.first.piece));
+            SeamStretch second = meshes.value(seam.second.piece).stretch(seam.second.start_node, seam.second.end_node,
+                                                                         offsets.value(seam.second.piece));
             if (seam.reverse)
             {
                 second = second.reversed();

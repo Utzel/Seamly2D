@@ -327,9 +327,11 @@ bool SeamEditor::click(qreal x, qreal y, qreal tolerance)
         {
             setStarted(edge);
         }
-        else if (!edge.sameSegment(m_started))
+        else if (!edge.sameSegment(m_started) || isMirrored(edge.piece_id))
         {
-            const VSeam seam = seamBetween(m_started, edge);
+            VSeam seam = seamBetween(m_started, edge);
+            // Sewn to its mirror image, a segment meets it end to end.
+            seam.reverse = seam.reverse && !edge.sameSegment(m_started);
             setStarted(Edge());
             if (!knowsSeam(seam))
             {
@@ -371,6 +373,15 @@ const PieceOutline* SeamEditor::outline(quint32 piece_id) const
         }
     }
     return found;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool SeamEditor::isMirrored(quint32 piece_id) const
+{
+    return std::any_of(m_pieces.cbegin(), m_pieces.cend(), [piece_id](const Piece& piece)
+    {
+        return piece.id == piece_id && piece.mirrored;
+    });
 }
 
 //---------------------------------------------------------------------------------------------------------------------

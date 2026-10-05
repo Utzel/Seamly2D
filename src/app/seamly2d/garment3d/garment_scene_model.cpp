@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <limits>
 
+#include "../vgarment/piece_outline.h"
 #include "avatar_geometry.h"
 #include "piece_geometry.h"
 
@@ -37,6 +38,13 @@ namespace
 {
 // Gap in cm between the back of the avatar and the board of pieces behind it.
 const float board_gap = 40.0f;
+
+//---------------------------------------------------------------------------------------------------------------------
+// The pattern piece a row shows, or shows the mirrored copy of.
+quint32 patternPiece(quint32 id)
+{
+    return PieceOutline::isMirrorId(id) ? PieceOutline::mirrorId(id) : id;
+}
 
 //---------------------------------------------------------------------------------------------------------------------
 QVector3D lowerCorner(const QVector3D& a, const QVector3D& b)
@@ -99,7 +107,7 @@ QVariant GarmentSceneModel::data(const QModelIndex& index, int role) const
                 value = QVariant::fromValue(static_cast<QObject*>(row.outline));
                 break;
             case SelectedRole:
-                value = row.id == m_selected_piece;
+                value = patternPiece(row.id) == m_selected_piece;
                 break;
             case PlacedRole:
                 value = row.placed;
@@ -248,7 +256,7 @@ void GarmentSceneModel::setSelectedPiece(quint32 id)
 {
     const bool shown = std::any_of(m_rows.cbegin(), m_rows.cend(), [id](const Row& row)
     {
-        return row.id == id;
+        return patternPiece(row.id) == id;
     });
     const quint32 piece_id = shown ? id : 0;
 
@@ -258,7 +266,8 @@ void GarmentSceneModel::setSelectedPiece(quint32 id)
         m_selected_piece = piece_id;
         for (int i = 0; i < m_rows.size(); ++i)
         {
-            if (m_rows.at(i).id == previous || m_rows.at(i).id == piece_id)
+            const quint32 row_piece = patternPiece(m_rows.at(i).id);
+            if (row_piece == previous || row_piece == piece_id)
             {
                 emit dataChanged(index(i), index(i), {SelectedRole});
             }
@@ -291,7 +300,7 @@ qreal GarmentSceneModel::sceneRadius() const
 /// @brief Called from QML when a piece is clicked, with 0 when the click hits no piece.
 void GarmentSceneModel::pickPiece(int id)
 {
-    const quint32 piece_id = id > 0 ? static_cast<quint32>(id) : 0;
+    const quint32 piece_id = id != 0 ? patternPiece(static_cast<quint32>(id)) : 0;
     setSelectedPiece(piece_id);
     emit piecePicked(piece_id);
 }

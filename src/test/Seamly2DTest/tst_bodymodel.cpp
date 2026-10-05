@@ -322,6 +322,11 @@ void TST_BodyModel::wrapFindsBodyParts() const
     {
         QVERIFY(BodyWrap::partFromName(BodyWrap::partName(part)) == part);
     }
+
+    // Mirrored across the body, the left knee lands on the right one.
+    const QVector3D right_knee = model.joint(positions, QStringLiteral("r-knee"));
+    QVERIFY((wrap.mirrored(knee) - right_knee).length() < 0.5f);
+    QVERIFY((wrap.mirrored(wrap.mirrored(knee)) - knee).length() < 1e-4f);
 }
 
 //---------------------------------------------------------------------------------------------------------------------

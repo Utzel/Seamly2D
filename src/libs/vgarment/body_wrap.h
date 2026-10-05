@@ -63,6 +63,7 @@ public:
 
     PieceArrangement   arrangementAt(const QVector3D& point) const;
     QVector<QVector3D> place(const GarmentMesh& mesh, const PieceArrangement& arrangement) const;
+    QVector3D          mirrored(const QVector3D& point) const;
 
     static QString     partName(BodyPart part);
     static BodyPart    partFromName(const QString& name);

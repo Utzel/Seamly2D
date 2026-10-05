@@ -38,6 +38,7 @@
 #include "../vgarment/body_model.h"
 #include "../vgarment/body_wrap.h"
 #include "../vgarment/garment_mesh.h"
+#include "../vgarment/garment_symmetry.h"
 #include "../vgarment/piece_mesher.h"
 #include "../vgarment/piece_outline.h"
 
@@ -102,10 +103,25 @@ private slots:
 private:
     Q_DISABLE_COPY(GarmentViewWidget)
 
+    // A piece's mesh as drafted, for the board, and as it is in the garment: unfolded for a piece cut on the fold,
+    // with a mirrored copy for a piece cut twice.
     struct CachedMesh
     {
-        PieceOutline outline;
-        GarmentMesh  mesh;
+        PieceOutline  outline;
+        PieceSymmetry wanted = PieceSymmetry::Single;
+        GarmentMesh   mesh;
+        PieceSymmetry symmetry = PieceSymmetry::Single;
+        quint32       fold_start = 0;
+        quint32       fold_end = 0;
+        GarmentMesh   garment_mesh;
+        GarmentMesh   mirror_mesh;
+    };
+
+    // A piece in the garment: a pattern piece or a mirrored copy, with the mesh it is simulated with.
+    struct GarmentPiece
+    {
+        quint32     id = 0;
+        GarmentMesh mesh;
     };
 
     // What an avatar is fitted to; a new fit only starts when this changes.
@@ -164,6 +180,7 @@ private:
     QHash<quint32, PieceArrangement>   m_arrangements;
     QHash<quint32, QVector<QVector3D>> m_draped;
     QVector<DrapePiece>        m_drape_pieces;
+    QVector<GarmentPiece>      m_garment_pieces;
     DrapeRunner*               m_runner;
 
     void               createScene();
@@ -174,6 +191,7 @@ private:
     void               saveArrangements(const QString& text, const QVector<VPieceArrangement>& arrangements);
     void               readArrangements();
     QVector<QVector3D> piecePositions(quint32 id, const GarmentMesh& mesh) const;
+    CachedMesh         garmentMeshes(quint32 id, const PieceOutline& outline, PieceSymmetry wanted) const;
     void               startSimulation();
     void               updateHint();
     void               updateAvatar();

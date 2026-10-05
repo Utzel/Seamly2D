@@ -135,6 +135,14 @@ QVector<QVector3D> BodyWrap::place(const GarmentMesh& mesh, const PieceArrangeme
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief The point mirrored to the other side of the body, across the upright plane through the middle of the
+/// pelvis; where a piece's mirrored copy goes.
+QVector3D BodyWrap::mirrored(const QVector3D& point) const
+{
+    return QVector3D(2.0f * m_pelvis.x() - point.x(), point.y(), point.z());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief How a body part is written in the pattern file.
 QString BodyWrap::partName(BodyPart part)
 {

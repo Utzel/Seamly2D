@@ -42,6 +42,9 @@
 /// starts, then the segment it is sewn to near the end that meets that start. Lines join the places that meet, so a
 /// twisted seam shows as crossing lines. Positions come from QML in the board's coordinates: cm, y up.
 ///
+/// A piece cut twice has a mirror image that isn't on the board; sewing one of its segments to itself sews it to the
+/// mirror image, as a centre back seam.
+///
 /// The editor only proposes seams (seamSewn); they are made through the undo stack and come back with setSeams().
 class SeamEditor : public QObject
 {
@@ -59,6 +62,7 @@ public:
     {
         quint32      id = 0;
         PieceOutline outline;
+        bool         mirrored = false;  ///< cut twice, so a side can be sewn to its mirror image
     };
 
     explicit             SeamEditor(QObject* parent = nullptr);
@@ -125,6 +129,7 @@ private:
     SeamGeometry*        m_preview_lines;
 
     const PieceOutline*  outline(quint32 piece_id) const;
+    bool                 isMirrored(quint32 piece_id) const;
     Edge                 edgeAt(const QPointF& point, qreal tolerance) const;
     SeamStretch          edgeStretch(const Edge& edge) const;
     VSeam                seamBetween(const Edge& first, const Edge& second) const;
