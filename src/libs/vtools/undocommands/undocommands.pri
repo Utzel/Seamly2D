@@ -14,6 +14,7 @@ HEADERS += \
     $$PWD/movesplinepath.h \
     $$PWD/remove_groupitem.h \
     $$PWD/rename_draftblock.h \
+    $$PWD/save_arrangements.h \
     $$PWD/save_seams.h \
     $$PWD/savetooloptions.h \
     $$PWD/deltool.h \
@@ -49,6 +50,7 @@ SOURCES += \
     $$PWD/movesplinepath.cpp \
     $$PWD/remove_groupitem.cpp \
     $$PWD/rename_draftblock.cpp \
+    $$PWD/save_arrangements.cpp \
     $$PWD/save_seams.cpp \
     $$PWD/savetooloptions.cpp \
     $$PWD/deltool.cpp \

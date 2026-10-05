@@ -161,6 +161,24 @@
             </xs:sequence>
           </xs:complexType>
         </xs:element>
+        <xs:element name="arrangements" minOccurs="0" maxOccurs="1">
+          <xs:complexType>
+            <xs:sequence minOccurs="0" maxOccurs="unbounded">
+              <xs:element name="arrangement" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="piece" type="xs:unsignedInt" use="required"/>
+                  <xs:attribute name="part" type="bodyPart" use="required"/>
+                  <xs:attribute name="angle" type="xs:double" use="required"/>
+                  <xs:attribute name="height" type="xs:double" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+          <xs:unique name="arrangementPiece">
+            <xs:selector xpath="arrangement"/>
+            <xs:field xpath="@piece"/>
+          </xs:unique>
+        </xs:element>
         <xs:element name="draftBlock" minOccurs="1" maxOccurs="unbounded">
           <xs:complexType>
             <xs:sequence>
@@ -775,6 +793,13 @@
   <xs:simpleType name="shortName">
     <xs:restriction base="xs:string">
       <xs:pattern value="([^\p{Nd}\\\p{Zs}*\\/&amp;|!&lt;&gt;^&#10;\()\-−+.,٫, ٬.’=?:;'\\&quot;]){1,1}([^\\\p{Zs}*\\/&amp;|!&lt;&gt;^&#10;\()\-−+.,٫, ٬.’=?:;\\&quot;]){0,}"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="bodyPart">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="body"/>
+      <xs:enumeration value="leftLeg"/>
+      <xs:enumeration value="rightLeg"/>
     </xs:restriction>
   </xs:simpleType>
   <xs:simpleType name="units">

@@ -35,6 +35,7 @@
 #include "../ifc/exception/vexception.h"
 #include "../ifc/xml/vabstractpattern.h"
 #include "../ifc/xml/vpatternconverter.h"
+#include "../vtools/undocommands/save_arrangements.h"
 #include "../vtools/undocommands/save_seams.h"
 
 namespace
@@ -109,6 +110,17 @@ VSeam seam(quint32 first_piece, quint32 second_piece, bool reverse)
     made.second.start_node = second_piece + 1;
     made.second.end_node = second_piece + 2;
     made.reverse = reverse;
+    return made;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+VPieceArrangement arrangement(quint32 piece, const QString& part, qreal angle, qreal height)
+{
+    VPieceArrangement made;
+    made.piece_id = piece;
+    made.part = part;
+    made.angle = angle;
+    made.height = height;
     return made;
 }
 
@@ -238,4 +250,60 @@ void TST_PatternSeams::olderPatternsAreConverted() const
     {
         QFAIL(qUtf8Printable(error.ErrorMessage()));
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_PatternSeams::arrangementsAreReadBack() const
+{
+    SeamsPattern pattern;
+    const QVector<VPieceArrangement> arrangements = {arrangement(10, QStringLiteral("body"), 0, 120.5),
+                                                     arrangement(20, QStringLiteral("leftLeg"), 180, 60)};
+    pattern.setArrangements(arrangements);
+
+    QCOMPARE(pattern.getArrangements(), arrangements);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Whichever is made first, the seams come before the arrangements, and both before the draft blocks.
+void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
+{
+    SeamsPattern pattern;
+    pattern.setArrangements({arrangement(10, QStringLiteral("body"), 0, 120)});
+    pattern.setSeams({seam(10, 20, false)});
+
+    QCOMPARE(childTags(pattern.documentElement()),
+             QStringList({QStringLiteral("version"), QStringLiteral("unit"), QStringLiteral("measurements"),
+                          QStringLiteral("finalMeasurements"), QStringLiteral("seams"), QStringLiteral("arrangements"),
+                          QStringLiteral("draftBlock"), QStringLiteral("draftBlock")}));
+
+    QTemporaryDir folder;
+    QVERIFY(folder.isValid());
+    const QString path = folder.filePath(QStringLiteral("garment.sm2d"));
+    QVERIFY(writeFile(path, pattern.toString()));
+    try
+    {
+        VDomDocument::ValidateXML(VPatternConverter::CurrentSchema, path);
+    }
+    catch (const VException& error)
+    {
+        QFAIL(qUtf8Printable(error.ErrorMessage()));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_PatternSeams::undoRestoresArrangements() const
+{
+    SeamsPattern pattern;
+    const QVector<VPieceArrangement> before = {arrangement(10, QStringLiteral("body"), 0, 120)};
+    const QVector<VPieceArrangement> after = {arrangement(10, QStringLiteral("body"), 90, 110)};
+    pattern.setArrangements(before);
+
+    QSignalSpy changes(&pattern, &VAbstractPattern::arrangementsChanged);
+    QUndoStack stack;
+    stack.push(new SaveArrangements(QStringLiteral("place"), before, after, &pattern));
+    QCOMPARE(pattern.getArrangements(), after);
+
+    stack.undo();
+    QCOMPARE(pattern.getArrangements(), before);
+    QCOMPARE(changes.count(), 2);
 }

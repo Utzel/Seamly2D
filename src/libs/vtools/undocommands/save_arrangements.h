@@ -1,5 +1,5 @@
 //---------------------------------------------------------------------------------------------------------------------
-//  @file   tst_patternseams.h
+//  @file   save_arrangements.h
 //  @author Julius
 //  @date   5 Oct, 2026
 //
@@ -22,29 +22,33 @@
 //  along with Seamly2D. If not, see <http://www.gnu.org/licenses/>.
 //---------------------------------------------------------------------------------------------------------------------
 
-#ifndef TST_PATTERNSEAMS_H
-#define TST_PATTERNSEAMS_H
+#ifndef SAVE_ARRANGEMENTS_H
+#define SAVE_ARRANGEMENTS_H
 
-#include <QObject>
+#include <QString>
+#include <QVector>
 
-class TST_PatternSeams : public QObject
+#include "vundocommand.h"
+
+/// @brief Replaces where the pieces start out on the avatar.
+class SaveArrangements : public VUndoCommand
 {
     Q_OBJECT
 public:
-    explicit TST_PatternSeams(QObject* parent = nullptr);
+                               SaveArrangements(const QString& text, const QVector<VPieceArrangement>& old_arrangements,
+                                                const QVector<VPieceArrangement>& new_arrangements,
+                                                VAbstractPattern* doc, QUndoCommand* parent = nullptr);
+    virtual                   ~SaveArrangements() = default;
 
-private slots:
-    void seamsAreReadBack() const;
-    void seamsFollowTheSchema() const;
-    void noSeamsLeaveNoElement() const;
-    void undoRestoresSeams() const;
-    void olderPatternsAreConverted() const;
-    void arrangementsAreReadBack() const;
-    void garmentDataKeepsSchemaOrder() const;
-    void undoRestoresArrangements() const;
+    virtual void               undo() override;
+    virtual void               redo() override;
+    virtual int                id() const override;
 
 private:
-    Q_DISABLE_COPY(TST_PatternSeams)
+    Q_DISABLE_COPY(SaveArrangements)
+
+    QVector<VPieceArrangement> m_old_arrangements;
+    QVector<VPieceArrangement> m_new_arrangements;
 };
 
-#endif // TST_PATTERNSEAMS_H
+#endif // SAVE_ARRANGEMENTS_H

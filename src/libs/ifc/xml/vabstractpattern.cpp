@@ -100,6 +100,8 @@ const QString VAbstractPattern::TagFinalMeasurements    = QStringLiteral("finalM
 const QString VAbstractPattern::TagFinalMeasurement     = QStringLiteral("finalMeasurement");
 const QString VAbstractPattern::TagSeams                = QStringLiteral("seams");
 const QString VAbstractPattern::TagSeam                 = QStringLiteral("seam");
+const QString VAbstractPattern::TagArrangements         = QStringLiteral("arrangements");
+const QString VAbstractPattern::TagArrangement          = QStringLiteral("arrangement");
 const QString VAbstractPattern::TagDraftBlock           = QStringLiteral("draftBlock");
 const QString VAbstractPattern::TagGroups               = QStringLiteral("groups");
 const QString VAbstractPattern::TagGroup                = QStringLiteral("group");
@@ -191,6 +193,8 @@ const QString VAbstractPattern::AttrFirstEnd            = QStringLiteral("firstE
 const QString VAbstractPattern::AttrSecondPiece         = QStringLiteral("secondPiece");
 const QString VAbstractPattern::AttrSecondStart         = QStringLiteral("secondStart");
 const QString VAbstractPattern::AttrSecondEnd           = QStringLiteral("secondEnd");
+const QString VAbstractPattern::AttrPiece               = QStringLiteral("piece");
+const QString VAbstractPattern::AttrPart                = QStringLiteral("part");
 
 const QString VAbstractPattern::AttrAll                 = QStringLiteral("all");
 
@@ -2180,6 +2184,13 @@ bool VSeam::operator==(const VSeam& other) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+bool VPieceArrangement::operator==(const VPieceArrangement& other) const
+{
+    return piece_id == other.piece_id && part == other.part && qFuzzyCompare(1.0 + angle, 1.0 + other.angle)
+           && qFuzzyCompare(1.0 + height, 1.0 + other.height);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief The seams sewing the pieces together, in the order they were made.
 ///
 /// A seam can name a piece or point that is gone, after the piece was deleted or its path edited. Such seams are
@@ -2224,9 +2235,7 @@ void VAbstractPattern::setSeams(const QVector<VSeam>& seams)
     {
         if (element.isNull())
         {
-            // The seams come before the draft blocks, as new draft blocks are added at the end.
-            element = createElement(TagSeams);
-            pattern.insertBefore(element, pattern.firstChildElement(TagDraftBlock));
+            element = createGarmentElement(TagSeams);
         }
         else
         {
@@ -2251,6 +2260,84 @@ void VAbstractPattern::setSeams(const QVector<VSeam>& seams)
     }
 
     emit seamsChanged();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Where the pieces start out on the avatar; pieces without one stay on the board.
+QVector<VPieceArrangement> VAbstractPattern::getArrangements() const
+{
+    QVector<VPieceArrangement> arrangements;
+    QDomElement element = documentElement().firstChildElement(TagArrangements).firstChildElement(TagArrangement);
+    while (!element.isNull())
+    {
+        VPieceArrangement arrangement;
+        arrangement.piece_id = GetParametrUInt(element, AttrPiece, NULL_ID_STR);
+        arrangement.part = GetParametrString(element, AttrPart);
+        arrangement.angle = GetParametrDouble(element, AttrAngle, QStringLiteral("0"));
+        arrangement.height = GetParametrDouble(element, AttrHeight, QStringLiteral("0"));
+        arrangements.append(arrangement);
+
+        element = element.nextSiblingElement(TagArrangement);
+    }
+    return arrangements;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Replaces all arrangements, one per piece at most. Meant to be called by the SaveArrangements undo command.
+void VAbstractPattern::setArrangements(const QVector<VPieceArrangement>& arrangements)
+{
+    QDomElement pattern = documentElement();
+    QDomElement element = pattern.firstChildElement(TagArrangements);
+
+    if (arrangements.isEmpty())
+    {
+        if (!element.isNull())
+        {
+            pattern.removeChild(element);
+        }
+    }
+    else
+    {
+        if (element.isNull())
+        {
+            element = createGarmentElement(TagArrangements);
+        }
+        else
+        {
+            RemoveAllChildren(element);
+        }
+
+        for (const VPieceArrangement& arrangement : arrangements)
+        {
+            QDomElement tag = createElement(TagArrangement);
+            SetAttribute(tag, AttrPiece, arrangement.piece_id);
+            SetAttribute(tag, AttrPart, arrangement.part);
+            SetAttribute(tag, AttrAngle, arrangement.angle);
+            SetAttribute(tag, AttrHeight, arrangement.height);
+            element.appendChild(tag);
+        }
+    }
+
+    emit arrangementsChanged();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Adds an empty element for the 3D garment's data where the schema wants it: the seams, then the arrangements, all
+// before the draft blocks, which are added at the end.
+QDomElement VAbstractPattern::createGarmentElement(const QString& tag)
+{
+    const QStringList order = {TagSeams, TagArrangements, TagDraftBlock};
+    QDomElement pattern = documentElement();
+
+    QDomElement before;
+    for (int i = static_cast<int>(order.indexOf(tag)) + 1; i < order.size() && before.isNull(); ++i)
+    {
+        before = pattern.firstChildElement(order.at(i));
+    }
+
+    QDomElement element = createElement(tag);
+    pattern.insertBefore(element, before);
+    return element;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

@@ -178,7 +178,8 @@ void VPattern::Parse(const Document &parse)
     QStringList tags = QStringList() << TagDraftBlock << TagVariables << TagDescription << TagNotes
                                      << TagMeasurements << TagVersion << TagGradation << TagImage << TagUnit
                                      << TagPatternName << TagPatternNum << TagCompanyName << TagCustomerName
-                                     << TagPatternLabel << TagFinalMeasurements << TagSeams;
+                                     << TagPatternLabel << TagFinalMeasurements << TagSeams
+                                     << TagArrangements;
     PrepareForParse(parse);
     QDomNode domNode = documentElement().firstChild();
     while (domNode.isNull() == false)
@@ -255,6 +256,9 @@ void VPattern::Parse(const Document &parse)
                         break;
                     case 15: // TagSeams
                         qCDebug(vXML, "Tag seams.");
+                        break;
+                    case 16: // TagArrangements
+                        qCDebug(vXML, "Tag arrangements.");
                         break;
                     default:
                         qCDebug(vXML, "Wrong tag name %s", qUtf8Printable(domElement.tagName()));

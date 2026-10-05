@@ -127,6 +127,18 @@ struct VSeam
     bool      operator==(const VSeam& other) const;
 };
 
+/// Where a piece starts out on the avatar: wrapped around a part of the body, "body", "leftLeg" or "rightLeg", at an
+/// angle around it in degrees, 0 in front, and with its middle at a height in cm above the floor.
+struct VPieceArrangement
+{
+    quint32 piece_id {NULL_ID};
+    QString part {};
+    qreal   angle {0};
+    qreal   height {0};
+
+    bool    operator==(const VPieceArrangement& other) const;
+};
+
 struct GroupAttributes
 {
    QString  name;
@@ -156,6 +168,9 @@ public:
 
     QVector<VSeam>                 getSeams() const;
     void                           setSeams(const QVector<VSeam>& seams);
+
+    QVector<VPieceArrangement>     getArrangements() const;
+    void                           setArrangements(const QVector<VPieceArrangement>& arrangements);
     bool                           isVariableUsed(const QStringList &variable_names) const;
 
     virtual void                   CreateEmptyFile()=0;
@@ -337,6 +352,8 @@ public:
     static const QString TagFinalMeasurement;
     static const QString TagSeams;
     static const QString TagSeam;
+    static const QString TagArrangements;
+    static const QString TagArrangement;
     static const QString TagDraftBlock;
     static const QString TagGroups;
     static const QString TagGroup;
@@ -428,6 +445,8 @@ public:
     static const QString AttrSecondPiece;
     static const QString AttrSecondStart;
     static const QString AttrSecondEnd;
+    static const QString AttrPiece;
+    static const QString AttrPart;
 
     static const QString AttrAll;
 
@@ -542,6 +561,7 @@ signals:
     void           UpdateInLayoutList(quint32 id);
     void           showPiece(quint32 id);
     void           seamsChanged();
+    void           arrangementsChanged();
     void           setCurrentDraftBlock(const QString &draftblock);
     void           patternHasGroups(bool value);
     void           updateGroups();
@@ -591,6 +611,8 @@ protected:
 
 private:
     Q_DISABLE_COPY(VAbstractPattern)
+
+    QDomElement                    createGarmentElement(const QString& tag);
 
     QStringList            listVariables() const;
     QVector<VFormulaField> ListPointExpressions() const;
