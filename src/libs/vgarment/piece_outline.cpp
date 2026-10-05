@@ -26,6 +26,8 @@
 
 #include <QHash>
 #include <QLineF>
+#include <QPolygonF>
+#include <QRectF>
 
 #include <algorithm>
 #include <limits>
@@ -44,6 +46,26 @@ const qreal same_point_tolerance = 0.01;
 
 // Projections this close to a segment's end, as a share of its length, are taken as that end.
 const qreal end_tolerance = 1e-6;
+
+// Ids of mirror images, of path points on a piece's unfolded half or of a piece's mirrored copy, have this bit set.
+const quint32 mirror_bit = 0x80000000u;
+
+// A fold line runs straight along a side of the piece; its points may be this far off that side, in cm.
+const qreal fold_tolerance = 0.05;
+
+// Straight stretches shorter than this, in cm, aren't taken for a fold line.
+const qreal shortest_fold = 5.0;
+
+//---------------------------------------------------------------------------------------------------------------------
+// The point mirrored across the line through a and b.
+QPointF reflect(const QPointF& point, const QPointF& a, const QPointF& b)
+{
+    const QPointF along = b - a;
+    const qreal length_squared = QPointF::dotProduct(along, along);
+    const QPointF offset = point - a;
+    const QPointF onto = along * (QPointF::dotProduct(offset, along) / length_squared);
+    return a + onto * 2.0 - offset;
+}
 
 //---------------------------------------------------------------------------------------------------------------------
 // Distance from the point to the segment, and how far along the segment its nearest point is, from 0 to 1.
@@ -313,6 +335,159 @@ SeamStretch PieceOutline::stretch(quint32 start_node, quint32 end_node) const
         }
     }
     return SeamStretch(points, notches, indices);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Finds where a piece cut on the fold is folded: the longest straight run of segments along a side of the
+/// piece's bounding box, where centre front and centre back lie. False if there is none.
+bool PieceOutline::findFoldLine(quint32* start_node, quint32* end_node) const
+{
+    const int segments = segmentCount();
+    if (segments < 2)
+    {
+        return false;
+    }
+
+    const QRectF bounds = QPolygonF(m_points).boundingRect();
+    auto on_side = [&bounds](const QPointF& point, int side)
+    {
+        switch (side)
+        {
+            case 0:
+                return qAbs(point.x() - bounds.left()) <= fold_tolerance;
+            case 1:
+                return qAbs(point.x() - bounds.right()) <= fold_tolerance;
+            case 2:
+                return qAbs(point.y() - bounds.top()) <= fold_tolerance;
+            default:
+                return qAbs(point.y() - bounds.bottom()) <= fold_tolerance;
+        }
+    };
+
+    const int count = static_cast<int>(m_points.size());
+    qreal longest = shortest_fold;
+    bool found = false;
+    for (int side = 0; side < 4; ++side)
+    {
+        // Which segments lie along this side, all their points.
+        QVector<bool> along(segments, true);
+        for (int k = 0; k < segments; ++k)
+        {
+            const int last = m_nodes.at((k + 1) % segments).index;
+            for (int i = m_nodes.at(k).index; along.at(k); i = (i + 1) % count)
+            {
+                along[k] = on_side(m_points.at(i), side);
+                if (i == last)
+                {
+                    break;
+                }
+            }
+        }
+
+        // The longest run of such segments, going round past the last one to the first.
+        for (int first = 0; first < segments; ++first)
+        {
+            const bool starts_run = along.at(first) && !along.at((first + segments - 1) % segments);
+            if (starts_run)
+            {
+                int last = first;
+                while (along.at((last + 1) % segments) && (last + 1) % segments != first)
+                {
+                    last = (last + 1) % segments;
+                }
+                const OutlineNode& from = m_nodes.at(first);
+                const OutlineNode& to = m_nodes.at((last + 1) % segments);
+                const qreal length = QLineF(m_points.at(from.index), m_points.at(to.index)).length();
+                if (length > longest)
+                {
+                    longest = length;
+                    *start_node = from.id;
+                    *end_node = to.id;
+                    found = true;
+                }
+            }
+        }
+    }
+    return found;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The whole piece of a piece cut on the fold: the half unfolded across the straight fold line from one path
+/// point to another, which is left out.
+///
+/// The seam line runs from the fold's end round the half to the fold's start, as before, and on round the mirrored
+/// half back to the fold's end. Path points on the mirrored half have mirrored ids; the fold's ends stay as they are.
+PieceOutline PieceOutline::unfolded(quint32 start_node, quint32 end_node) const
+{
+    const int start = nodePosition(start_node);
+    const int end = nodePosition(end_node);
+    if (start < 0 || end < 0 || start == end || isEmpty())
+    {
+        return *this;
+    }
+
+    const int count = static_cast<int>(m_points.size());
+    const QPointF fold_start = m_points.at(m_nodes.at(start).index);
+    const QPointF fold_end = m_points.at(m_nodes.at(end).index);
+    if (QLineF(fold_start, fold_end).length() <= same_point_tolerance)
+    {
+        return *this;
+    }
+
+    // The half, from the fold's end forward to its start.
+    const int from = m_nodes.at(end).index;
+    const int steps = (m_nodes.at(start).index - from + count) % count;
+    QVector<QPointF> points;
+    for (int step = 0; step <= steps; ++step)
+    {
+        points.append(m_points.at((from + step) % count));
+    }
+
+    QVector<OutlineNode> nodes;
+    const int node_count = static_cast<int>(m_nodes.size());
+    for (int k = end;; k = (k + 1) % node_count)
+    {
+        OutlineNode node = m_nodes.at(k);
+        node.index = (node.index - from + count) % count;
+        nodes.append(node);
+        if (k == start)
+        {
+            break;
+        }
+    }
+
+    // The mirrored half, from the fold's start back to its end, leaving out the fold's ends, which it shares.
+    const int half_count = static_cast<int>(points.size());
+    for (int p = half_count - 2; p >= 1; --p)
+    {
+        points.append(reflect(points.at(p), fold_start, fold_end));
+    }
+    for (int k = static_cast<int>(nodes.size()) - 1; k >= 0; --k)
+    {
+        const OutlineNode& node = nodes.at(k);
+        if (node.index > 0 && node.index < half_count - 1)
+        {
+            OutlineNode mirrored = node;
+            mirrored.id = mirrorId(node.id);
+            mirrored.index = 2 * half_count - 2 - node.index;
+            nodes.append(mirrored);
+        }
+    }
+    return PieceOutline(points, nodes);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The id of a path point's mirror image on an unfolded piece, or of a piece's mirrored copy. Mirroring an id
+/// twice gives it back.
+quint32 PieceOutline::mirrorId(quint32 id)
+{
+    return id ^ mirror_bit;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool PieceOutline::isMirrorId(quint32 id)
+{
+    return (id & mirror_bit) != 0;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

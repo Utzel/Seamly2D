@@ -26,6 +26,8 @@
 
 #include <QPolygonF>
 
+#include <utility>
+
 //---------------------------------------------------------------------------------------------------------------------
 bool GarmentMesh::isEmpty() const
 {
@@ -86,4 +88,21 @@ SeamStretch GarmentMesh::stretch(quint32 start_node, quint32 end_node, quint32 v
         vertices.append(boundary.at(static_cast<int>(position)) + vertex_offset);
     }
     return SeamStretch(along_seam_line.points(), along_seam_line.notches(), vertices);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The mirror image of the piece, as cut from the other side of folded fabric: flipped left to right, with
+/// the same vertices, seam line and path points, its triangles still facing the same way.
+GarmentMesh GarmentMesh::mirrored() const
+{
+    GarmentMesh mirror = *this;
+    for (QPointF& position : mirror.rest_positions)
+    {
+        position.setX(-position.x());
+    }
+    for (int i = 0; i + 2 < mirror.indices.size(); i += 3)
+    {
+        std::swap(mirror.indices[i + 1], mirror.indices[i + 2]);
+    }
+    return mirror;
 }

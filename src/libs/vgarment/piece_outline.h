@@ -77,6 +77,12 @@ public:
 
     SeamStretch                 stretch(quint32 start_node, quint32 end_node) const;
 
+    bool                        findFoldLine(quint32* start_node, quint32* end_node) const;
+    PieceOutline                unfolded(quint32 start_node, quint32 end_node) const;
+
+    static quint32              mirrorId(quint32 id);
+    static bool                 isMirrorId(quint32 id);
+
     bool                        operator==(const PieceOutline& other) const;
     bool                        operator!=(const PieceOutline& other) const;
 

@@ -56,6 +56,7 @@ SOURCES += \
     tst_bodymodel.cpp \
     tst_pieceoutline.cpp \
     tst_clothsolver.cpp \
+    tst_garmentsymmetry.cpp \
     tst_patternseams.cpp
 
 *msvc*:SOURCES += stable.cpp
@@ -89,6 +90,7 @@ HEADERS += \
     tst_bodymodel.h \
     tst_pieceoutline.h \
     tst_clothsolver.h \
+    tst_garmentsymmetry.h \
     tst_patternseams.h
 
 include(warnings.pri)

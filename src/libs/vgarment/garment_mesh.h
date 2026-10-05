@@ -52,6 +52,7 @@ struct GarmentMesh
     qreal                area() const;
 
     SeamStretch          stretch(quint32 start_node, quint32 end_node, quint32 vertex_offset = 0) const;
+    GarmentMesh          mirrored() const;
 };
 
 #endif // GARMENT_MESH_H
