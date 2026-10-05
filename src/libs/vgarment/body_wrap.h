@@ -72,7 +72,7 @@ private:
     QVector3D          m_pelvis;
     qreal              m_crotch;      // height where the legs part
     QVector3D          m_legs[2][3];  // hip, knee and ankle of the left and the right leg
-    QVector3D          m_arms[2][3];  // shoulder, elbow and hand of the left and the right arm
+    QVector3D          m_arms[2][6];  // shoulder, elbow, wrist, and middle finger, thumb and little finger tips
 
     QVector3D          axisAt(BodyPart part, qreal height) const;
     qreal              radiusAround(BodyPart part, const QVector3D& axis, qreal from, qreal to) const;

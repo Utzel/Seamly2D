@@ -347,6 +347,15 @@ void TST_BodyModel::wrappedPiecesStartOutsideTheBody() const
         const QVector<QVector3D> placed = wrap.place(mesh, arrangement);
         QCOMPARE(placed.size(), mesh.vertexCount());
 
+        // Close around the hips, not out where the hands hang beside them.
+        if (arrangement.part == BodyPart::Body)
+        {
+            const QVector3D pelvis = model.joint(positions, QStringLiteral("pelvis"));
+            const QVector3D middle = placed.at(0);
+            const qreal reach = qSqrt(qPow(middle.x() - pelvis.x(), 2) + qPow(middle.z() - pelvis.z(), 2));
+            QVERIFY2(reach < 26.0, qUtf8Printable(QStringLiteral("the hip piece starts %1 cm out").arg(reach)));
+        }
+
         for (const QVector3D& point : placed)
         {
             BodyContact contact;

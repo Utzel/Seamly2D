@@ -34,11 +34,9 @@ namespace
 // How far a placed piece starts out from the body, in cm.
 const qreal clearance = 2.0;
 
-// Skin this close to an arm's bones, in cm, belongs to the arm, which pieces aren't wrapped around.
-const float arm_reach = 6.0f;
-
-// The hand joint sits at the wrist; the fingers reach on by this share of the forearm.
-const float finger_share = 0.5f;
+// Skin this close to an arm's bones, from the shoulder down to the finger tips, in cm, belongs to the arm, which
+// pieces aren't wrapped around.
+const float arm_reach = 7.0f;
 
 // Skin this close to the middle of the body, in cm, is where the legs part.
 const float crotch_width = 1.5f;
@@ -79,6 +77,9 @@ BodyWrap::BodyWrap(const BodyModel& model, const QVector<QVector3D>& positions)
         m_arms[side][0] = model.joint(positions, sides[side] + QStringLiteral("shoulder"));
         m_arms[side][1] = model.joint(positions, sides[side] + QStringLiteral("elbow"));
         m_arms[side][2] = model.joint(positions, sides[side] + QStringLiteral("hand"));
+        m_arms[side][3] = model.joint(positions, sides[side] + QStringLiteral("finger-3-4"));
+        m_arms[side][4] = model.joint(positions, sides[side] + QStringLiteral("finger-1-4"));
+        m_arms[side][5] = model.joint(positions, sides[side] + QStringLiteral("finger-5-4"));
     }
 
     // The legs part at the lowest skin in the middle of the body below the pelvis.
@@ -213,13 +214,17 @@ qreal BodyWrap::radiusAround(BodyPart part, const QVector3D& axis, qreal from, q
 //---------------------------------------------------------------------------------------------------------------------
 bool BodyWrap::onArm(const QVector3D& point) const
 {
+    // Upper arm, forearm, and from the wrist to the tips of the middle finger, the thumb and the little finger.
+    const int bones[5][2] = {{0, 1}, {1, 2}, {2, 3}, {2, 4}, {2, 5}};
+
     bool on_arm = false;
     for (int side = 0; side < 2 && !on_arm; ++side)
     {
         const QVector3D* arm = m_arms[side];
-        const QVector3D finger_tips = arm[2] + (arm[2] - arm[1]) * finger_share;
-        on_arm = distanceToSegment(point, arm[0], arm[1]) < arm_reach
-                 || distanceToSegment(point, arm[1], finger_tips) < arm_reach;
+        for (int bone = 0; bone < 5 && !on_arm; ++bone)
+        {
+            on_arm = distanceToSegment(point, arm[bones[bone][0]], arm[bones[bone][1]]) < arm_reach;
+        }
     }
     return on_arm;
 }
