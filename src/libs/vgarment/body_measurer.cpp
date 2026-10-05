@@ -42,6 +42,10 @@ const float search_step = 1.0f;
 // to the arms.
 const float torso_share = 0.8f;
 
+// Near the armpits the arms join the torso in one slice outline. An outline reaching further out than this share of
+// the shoulder joint's distance has arms in it, so the bust isn't measured there.
+const float chest_share = 1.25f;
+
 struct Segment
 {
     quint64 start;
@@ -127,12 +131,13 @@ qreal BodyMeasurer::height(const QVector<QVector3D>& positions) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-/// @brief Fullest girth between the waist and the armpits.
+/// @brief Fullest girth between the waist and the armpits, where the arms are still clear of the chest.
 qreal BodyMeasurer::bust(const QVector<QVector3D>& positions) const
 {
     const float tall = static_cast<float>(height(positions));
     return extremeGirth(positions, m_model.joint(positions, QStringLiteral("spine-2")).y(),
-                        m_model.joint(positions, QStringLiteral("l-shoulder")).y() - 0.02f * tall, true);
+                        m_model.joint(positions, QStringLiteral("l-shoulder")).y() - 0.04f * tall, true,
+                        chest_share * shoulderDistance(positions));
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -163,9 +168,10 @@ qreal BodyMeasurer::neck(const QVector<QVector3D>& positions) const
 
 //---------------------------------------------------------------------------------------------------------------------
 /// @brief Length of a tape around the body at a height: the convex hull of the slice outlines whose centre lies
-/// within max_center_x of the body's middle (x = 0).
+/// within max_center_x of the body's middle (x = 0). With a max_extent_x, a kept outline reaching further out than
+/// that makes the slice unusable and the result 0.
 qreal BodyMeasurer::tapeGirth(const QVector<QVector3D>& positions, const QVector<quint32>& triangles, float level,
-                              float max_center_x)
+                              float max_center_x, float max_extent_x)
 {
     // Where the slice crosses a mesh edge, keyed by that edge, so neighbouring triangles share their crossings.
     QHash<quint64, QPointF> crossings;
@@ -202,6 +208,7 @@ qreal BodyMeasurer::tapeGirth(const QVector<QVector3D>& positions, const QVector
     // Follow the segments around into closed outlines and keep those of the torso or legs.
     QVector<bool> used(segments.size(), false);
     QVector<QPointF> kept_points;
+    bool too_wide = false;
     for (int first = 0; first < segments.size(); ++first)
     {
         if (!used.at(first))
@@ -227,33 +234,37 @@ qreal BodyMeasurer::tapeGirth(const QVector<QVector3D>& positions, const QVector
             }
 
             qreal center_x = 0;
+            qreal extent_x = 0;
             for (const QPointF& point : outline)
             {
                 center_x += point.x();
+                extent_x = qMax(extent_x, qAbs(point.x()));
             }
             center_x /= outline.size();
             if (qAbs(center_x) <= max_center_x)
             {
                 kept_points += outline;
+                too_wide = too_wide || (max_extent_x > 0 && extent_x > max_extent_x);
             }
         }
     }
 
-    return kept_points.size() >= 3 ? hullPerimeter(kept_points) : 0;
+    return (kept_points.size() >= 3 && !too_wide) ? hullPerimeter(kept_points) : 0;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Largest or smallest tape girth between two heights.
-qreal BodyMeasurer::extremeGirth(const QVector<QVector3D>& positions, float from, float to, bool largest) const
+// Largest or smallest tape girth between two heights, leaving out unusable slices.
+qreal BodyMeasurer::extremeGirth(const QVector<QVector3D>& positions, float from, float to, bool largest,
+                                 float max_extent_x) const
 {
-    const float reach = torsoReach(positions);
-    auto girth = [this, &positions, reach](float level)
+    const float reach = torso_share * shoulderDistance(positions);
+    auto girth = [this, &positions, reach, max_extent_x](float level)
     {
-        return tapeGirth(positions, m_model.triangles(), level, reach);
+        return tapeGirth(positions, m_model.triangles(), level, reach, max_extent_x);
     };
     auto better = [largest](qreal candidate, qreal best)
     {
-        return largest ? candidate > best : (candidate > 0 && (best <= 0 || candidate < best));
+        return candidate > 0 && (best <= 0 || (largest ? candidate > best : candidate < best));
     };
 
     float best_level = from;
@@ -281,7 +292,8 @@ qreal BodyMeasurer::extremeGirth(const QVector<QVector3D>& positions, float from
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-float BodyMeasurer::torsoReach(const QVector<QVector3D>& positions) const
+// How far the shoulder joint is from the body's middle.
+float BodyMeasurer::shoulderDistance(const QVector<QVector3D>& positions) const
 {
-    return torso_share * qAbs(m_model.joint(positions, QStringLiteral("l-shoulder")).x());
+    return qAbs(m_model.joint(positions, QStringLiteral("l-shoulder")).x());
 }

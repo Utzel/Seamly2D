@@ -237,6 +237,42 @@ void TST_BodyModel::fitMatchesMeasurements() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// Everyday measurements from a size chart have to be reached. Measuring the model against itself (see above) can't
+// catch a girth taken in the wrong place, this can.
+void TST_BodyModel::fitReachesTypicalBodies() const
+{
+    const BodyModel model;
+
+    struct Case
+    {
+        qreal gender;
+        BodyMeasurements wanted;
+    };
+    BodyMeasurements woman;
+    woman.height = 168;
+    woman.bust = 92;
+    woman.waist = 74;
+    woman.hip = 100;
+    BodyMeasurements man;
+    man.height = 178;
+    man.bust = 100;
+    man.waist = 86;
+    man.hip = 100;
+
+    for (const Case& body : {Case{0.0, woman}, Case{1.0, man}})
+    {
+        const BodyFit fit = BodyFitter(model).fit(body.wanted, body.gender, BodyShape::ageFromYears(35));
+        const QString report = QStringLiteral("gender %1: height %2, bust %3, waist %4, hip %5")
+                                   .arg(body.gender).arg(fit.measured.height).arg(fit.measured.bust)
+                                   .arg(fit.measured.waist).arg(fit.measured.hip);
+        QVERIFY2(qAbs(fit.measured.height - body.wanted.height) < 0.5, qUtf8Printable(report));
+        QVERIFY2(qAbs(fit.measured.bust - body.wanted.bust) < 1.5, qUtf8Printable(report));
+        QVERIFY2(qAbs(fit.measured.waist - body.wanted.waist) < 1.5, qUtf8Printable(report));
+        QVERIFY2(qAbs(fit.measured.hip - body.wanted.hip) < 1.5, qUtf8Printable(report));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Measurements beyond what the model can do give the closest body, not a broken one.
 void TST_BodyModel::fitStaysInRange() const
 {

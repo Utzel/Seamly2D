@@ -60,13 +60,14 @@ public:
     qreal              neck(const QVector<QVector3D>& positions) const;
 
     static qreal       tapeGirth(const QVector<QVector3D>& positions, const QVector<quint32>& triangles, float level,
-                                 float max_center_x);
+                                 float max_center_x, float max_extent_x = 0);
 
 private:
     const BodyModel&   m_model;
 
-    qreal              extremeGirth(const QVector<QVector3D>& positions, float from, float to, bool largest) const;
-    float              torsoReach(const QVector<QVector3D>& positions) const;
+    qreal              extremeGirth(const QVector<QVector3D>& positions, float from, float to, bool largest,
+                                    float max_extent_x = 0) const;
+    float              shoulderDistance(const QVector<QVector3D>& positions) const;
 };
 
 #endif // BODY_MEASURER_H

@@ -44,6 +44,7 @@ private slots:
     void tapeGirthOfCylinder() const;
     void tapeLeavesOutArms() const;
     void fitMatchesMeasurements() const;
+    void fitReachesTypicalBodies() const;
     void fitStaysInRange() const;
 
 private:
