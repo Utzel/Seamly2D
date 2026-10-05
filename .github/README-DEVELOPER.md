@@ -73,6 +73,8 @@ Read [.github\CONTRIBUTING.md](.github\CONTRIBUTING.md) to get started on GitFlo
         * Additional Librairies
           * Qt Multimedia
           * Qt Image Formats
+          * Qt Quick 3D (draws the 3D View dock)
+          * Qt Shader Tools (needed by Qt Quick 3D)
     * Build Tools
       * Qt Creator
       * Qt Creator CDB Debugger Support
