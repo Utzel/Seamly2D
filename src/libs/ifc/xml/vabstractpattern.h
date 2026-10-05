@@ -105,6 +105,28 @@ struct VFinalMeasurement
     QString description;
 };
 
+/// One side of a seam: the stretch of a piece's seam line from one point of the piece's path to another, going the
+/// way the path goes. The ids are the piece's and its path nodes'.
+struct VSeamSide
+{
+    quint32 piece_id {NULL_ID};
+    quint32 start_node {NULL_ID};
+    quint32 end_node {NULL_ID};
+
+    bool    operator==(const VSeamSide& other) const;
+};
+
+/// Two stretches of seam line sewn together. The sides' starts meet and their ends meet; with reverse the first
+/// side's start meets the second side's end.
+struct VSeam
+{
+    VSeamSide first {};
+    VSeamSide second {};
+    bool      reverse {false};
+
+    bool      operator==(const VSeam& other) const;
+};
+
 struct GroupAttributes
 {
    QString  name;
@@ -131,6 +153,9 @@ public:
 
     QVector<VFinalMeasurement>     getFinalMeasurements() const;
     void                           setFinalMeasurements(const QVector<VFinalMeasurement> &measurements);
+
+    QVector<VSeam>                 getSeams() const;
+    void                           setSeams(const QVector<VSeam>& seams);
     bool                           isVariableUsed(const QStringList &variable_names) const;
 
     virtual void                   CreateEmptyFile()=0;
@@ -310,6 +335,8 @@ public:
     static const QString TagVariable;
     static const QString TagFinalMeasurements;
     static const QString TagFinalMeasurement;
+    static const QString TagSeams;
+    static const QString TagSeam;
     static const QString TagDraftBlock;
     static const QString TagGroups;
     static const QString TagGroup;
@@ -395,6 +422,12 @@ public:
     static const QString AttrIncludeAs;
     static const QString AttrWidth;
     static const QString AttrRotation;
+    static const QString AttrFirstPiece;
+    static const QString AttrFirstStart;
+    static const QString AttrFirstEnd;
+    static const QString AttrSecondPiece;
+    static const QString AttrSecondStart;
+    static const QString AttrSecondEnd;
 
     static const QString AttrAll;
 
@@ -508,6 +541,7 @@ signals:
     void           patternParsed();
     void           UpdateInLayoutList(quint32 id);
     void           showPiece(quint32 id);
+    void           seamsChanged();
     void           setCurrentDraftBlock(const QString &draftblock);
     void           patternHasGroups(bool value);
     void           updateGroups();

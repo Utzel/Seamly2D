@@ -98,6 +98,8 @@ const QString VAbstractPattern::TagVariables            = QStringLiteral("variab
 const QString VAbstractPattern::TagVariable             = QStringLiteral("variable");
 const QString VAbstractPattern::TagFinalMeasurements    = QStringLiteral("finalMeasurements");
 const QString VAbstractPattern::TagFinalMeasurement     = QStringLiteral("finalMeasurement");
+const QString VAbstractPattern::TagSeams                = QStringLiteral("seams");
+const QString VAbstractPattern::TagSeam                 = QStringLiteral("seam");
 const QString VAbstractPattern::TagDraftBlock           = QStringLiteral("draftBlock");
 const QString VAbstractPattern::TagGroups               = QStringLiteral("groups");
 const QString VAbstractPattern::TagGroup                = QStringLiteral("group");
@@ -183,6 +185,12 @@ const QString VAbstractPattern::AttrEnd                 = QStringLiteral("end");
 const QString VAbstractPattern::AttrIncludeAs           = QStringLiteral("includeAs");
 const QString VAbstractPattern::AttrWidth               = QStringLiteral("width");
 const QString VAbstractPattern::AttrRotation            = QStringLiteral("rotation");
+const QString VAbstractPattern::AttrFirstPiece          = QStringLiteral("firstPiece");
+const QString VAbstractPattern::AttrFirstStart          = QStringLiteral("firstStart");
+const QString VAbstractPattern::AttrFirstEnd            = QStringLiteral("firstEnd");
+const QString VAbstractPattern::AttrSecondPiece         = QStringLiteral("secondPiece");
+const QString VAbstractPattern::AttrSecondStart         = QStringLiteral("secondStart");
+const QString VAbstractPattern::AttrSecondEnd           = QStringLiteral("secondEnd");
 
 const QString VAbstractPattern::AttrAll                 = QStringLiteral("all");
 
@@ -2157,6 +2165,92 @@ void VAbstractPattern::setFinalMeasurements(const QVector<VFinalMeasurement> &me
 
     modified = true;
     emit patternChanged(false);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool VSeamSide::operator==(const VSeamSide& other) const
+{
+    return piece_id == other.piece_id && start_node == other.start_node && end_node == other.end_node;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool VSeam::operator==(const VSeam& other) const
+{
+    return first == other.first && second == other.second && reverse == other.reverse;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The seams sewing the pieces together, in the order they were made.
+///
+/// A seam can name a piece or point that is gone, after the piece was deleted or its path edited. Such seams are
+/// kept, so undoing the deletion brings them back, and whoever uses them has to skip them.
+QVector<VSeam> VAbstractPattern::getSeams() const
+{
+    QVector<VSeam> seams;
+    QDomElement element = documentElement().firstChildElement(TagSeams).firstChildElement(TagSeam);
+    while (!element.isNull())
+    {
+        VSeam seam;
+        seam.first.piece_id = GetParametrUInt(element, AttrFirstPiece, NULL_ID_STR);
+        seam.first.start_node = GetParametrUInt(element, AttrFirstStart, NULL_ID_STR);
+        seam.first.end_node = GetParametrUInt(element, AttrFirstEnd, NULL_ID_STR);
+        seam.second.piece_id = GetParametrUInt(element, AttrSecondPiece, NULL_ID_STR);
+        seam.second.start_node = GetParametrUInt(element, AttrSecondStart, NULL_ID_STR);
+        seam.second.end_node = GetParametrUInt(element, AttrSecondEnd, NULL_ID_STR);
+        seam.reverse = getParameterBool(element, AttrNodeReverse, falseStr);
+        seams.append(seam);
+
+        element = element.nextSiblingElement(TagSeam);
+    }
+    return seams;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Replaces all seams. Meant to be called by the SaveSeams undo command, which also keeps track of whether the
+/// pattern was changed.
+void VAbstractPattern::setSeams(const QVector<VSeam>& seams)
+{
+    QDomElement pattern = documentElement();
+    QDomElement element = pattern.firstChildElement(TagSeams);
+
+    if (seams.isEmpty())
+    {
+        if (!element.isNull())
+        {
+            pattern.removeChild(element);
+        }
+    }
+    else
+    {
+        if (element.isNull())
+        {
+            // The seams come before the draft blocks, as new draft blocks are added at the end.
+            element = createElement(TagSeams);
+            pattern.insertBefore(element, pattern.firstChildElement(TagDraftBlock));
+        }
+        else
+        {
+            RemoveAllChildren(element);
+        }
+
+        for (const VSeam& seam : seams)
+        {
+            QDomElement tag = createElement(TagSeam);
+            SetAttribute(tag, AttrFirstPiece, seam.first.piece_id);
+            SetAttribute(tag, AttrFirstStart, seam.first.start_node);
+            SetAttribute(tag, AttrFirstEnd, seam.first.end_node);
+            SetAttribute(tag, AttrSecondPiece, seam.second.piece_id);
+            SetAttribute(tag, AttrSecondStart, seam.second.start_node);
+            SetAttribute(tag, AttrSecondEnd, seam.second.end_node);
+            if (seam.reverse)
+            {
+                SetAttribute(tag, AttrNodeReverse, seam.reverse);
+            }
+            element.appendChild(tag);
+        }
+    }
+
+    emit seamsChanged();
 }
 
 //---------------------------------------------------------------------------------------------------------------------

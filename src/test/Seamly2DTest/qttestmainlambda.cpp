@@ -77,6 +77,7 @@
 #include "tst_vtoolmove.h"
 #include "tst_piecemesher.h"
 #include "tst_bodymodel.h"
+#include "tst_patternseams.h"
 
 #include "../vmisc/def.h"
 #include "../qmuparser/qmudef.h"
@@ -187,6 +188,7 @@ int main(int argc, char** argv)
     ASSERT_TEST(new TST_VToolMove());
     ASSERT_TEST(new TST_PieceMesher());
     ASSERT_TEST(new TST_BodyModel());
+    ASSERT_TEST(new TST_PatternSeams());
 
     return status;
 }

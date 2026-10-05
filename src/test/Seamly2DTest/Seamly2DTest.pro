@@ -53,7 +53,8 @@ SOURCES += \
     tst_vabstractpiece.cpp \
     tst_vtoolmove.cpp \
     tst_piecemesher.cpp \
-    tst_bodymodel.cpp
+    tst_bodymodel.cpp \
+    tst_patternseams.cpp
 
 *msvc*:SOURCES += stable.cpp
 
@@ -83,7 +84,8 @@ HEADERS += \
     tst_vabstractpiece.h \
     tst_vtoolmove.h \
     tst_piecemesher.h \
-    tst_bodymodel.h
+    tst_bodymodel.h \
+    tst_patternseams.h
 
 include(warnings.pri)
 

@@ -1,0 +1,241 @@
+//---------------------------------------------------------------------------------------------------------------------
+//  @file   tst_patternseams.cpp
+//  @author Julius
+//  @date   5 Oct, 2026
+//
+//  @copyright
+//  Copyright (C)  2026 Seamly, LLC
+//  https://github.com/fashionfreedom/seamly2d
+//
+//  @brief
+//  Seamly2D is free software: you can redistribute it and/or modify
+//  it under the terms of the GNU General Public License as published by
+//  the Free Software Foundation, either version 3 of the License, or
+//  (at your option) any later version.
+//
+//  Seamly2D is distributed in the hope that it will be useful,
+//  but WITHOUT ANY WARRANTY; without even the implied warranty of
+//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+//  GNU General Public License for more details.
+//
+//  You should have received a copy of the GNU General Public License
+//  along with Seamly2D. If not, see <http://www.gnu.org/licenses/>.
+//---------------------------------------------------------------------------------------------------------------------
+
+#include "tst_patternseams.h"
+
+#include <QDomElement>
+#include <QFile>
+#include <QSignalSpy>
+#include <QTemporaryDir>
+#include <QTextStream>
+#include <QUndoStack>
+#include <QtTest>
+
+#include "../ifc/exception/vexception.h"
+#include "../ifc/xml/vabstractpattern.h"
+#include "../ifc/xml/vpatternconverter.h"
+#include "../vtools/undocommands/save_seams.h"
+
+namespace
+{
+// Just enough of a pattern document to hold seams; the pattern's own logic isn't needed here.
+class SeamsPattern : public VAbstractPattern
+{
+public:
+    explicit SeamsPattern(const QString& version = VPatternConverter::PatternMaxVerStr)
+        : VAbstractPattern()
+    {
+        setContent(QStringLiteral("<?xml version='1.0' encoding='UTF-8'?>"
+                                  "<pattern><version>%1</version><unit>cm</unit><measurements/>"
+                                  "<finalMeasurements><finalMeasurement name=\"length\" formula=\"10\"/>"
+                                  "</finalMeasurements>"
+                                  "<draftBlock name=\"A\"><calculation/><modeling/><pieces/></draftBlock>"
+                                  "<draftBlock name=\"B\"><calculation/><modeling/><pieces/></draftBlock>"
+                                  "</pattern>").arg(version));
+    }
+
+    virtual void CreateEmptyFile() override
+    {}
+
+    virtual void IncrementReferens(quint32 id) const override
+    {
+        Q_UNUSED(id)
+    }
+
+    virtual void DecrementReferens(quint32 id) const override
+    {
+        Q_UNUSED(id)
+    }
+
+    virtual QStringList GetCurrentAlphabet() const override
+    {
+        return QStringList();
+    }
+
+    virtual QString GenerateLabel(const LabelType& type, const QString& reservedName) const override
+    {
+        Q_UNUSED(type)
+        Q_UNUSED(reservedName)
+        return QString();
+    }
+
+    virtual QString generateSuffix(const QString& type) const override
+    {
+        Q_UNUSED(type)
+        return QString();
+    }
+
+    virtual void UpdateToolData(const quint32& id, VContainer* data) override
+    {
+        Q_UNUSED(id)
+        Q_UNUSED(data)
+    }
+
+    virtual void LiteParseTree(const Document& parse) override
+    {
+        Q_UNUSED(parse)
+    }
+};
+
+//---------------------------------------------------------------------------------------------------------------------
+VSeam seam(quint32 first_piece, quint32 second_piece, bool reverse)
+{
+    VSeam made;
+    made.first.piece_id = first_piece;
+    made.first.start_node = first_piece + 1;
+    made.first.end_node = first_piece + 2;
+    made.second.piece_id = second_piece;
+    made.second.start_node = second_piece + 1;
+    made.second.end_node = second_piece + 2;
+    made.reverse = reverse;
+    return made;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QStringList childTags(const QDomElement& element)
+{
+    QStringList tags;
+    for (QDomElement child = element.firstChildElement(); !child.isNull(); child = child.nextSiblingElement())
+    {
+        tags.append(child.tagName());
+    }
+    return tags;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool writeFile(const QString& path, const QString& content)
+{
+    QFile file(path);
+    const bool opened = file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text);
+    if (opened)
+    {
+        QTextStream(&file) << content;
+    }
+    return opened;
+}
+} // anonymous namespace
+
+//---------------------------------------------------------------------------------------------------------------------
+TST_PatternSeams::TST_PatternSeams(QObject* parent)
+    : QObject(parent)
+{}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_PatternSeams::seamsAreReadBack() const
+{
+    SeamsPattern pattern;
+    const QVector<VSeam> seams = {seam(10, 20, false), seam(30, 30, true)};
+    pattern.setSeams(seams);
+
+    QCOMPARE(pattern.getSeams(), seams);
+
+    // Seams sewn the usual way don't spell it out.
+    const QDomElement first = pattern.documentElement().firstChildElement(VAbstractPattern::TagSeams)
+                                                       .firstChildElement(VAbstractPattern::TagSeam);
+    QVERIFY(!first.hasAttribute(VAbstractPattern::AttrNodeReverse));
+    QCOMPARE(first.nextSiblingElement().attribute(VAbstractPattern::AttrNodeReverse), QStringLiteral("true"));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The seams have to go between the final measurements and the draft blocks, or the file doesn't open again.
+void TST_PatternSeams::seamsFollowTheSchema() const
+{
+    SeamsPattern pattern;
+    pattern.setSeams({seam(10, 20, false), seam(30, 40, true)});
+
+    QCOMPARE(childTags(pattern.documentElement()),
+             QStringList({QStringLiteral("version"), QStringLiteral("unit"), QStringLiteral("measurements"),
+                          QStringLiteral("finalMeasurements"), QStringLiteral("seams"), QStringLiteral("draftBlock"),
+                          QStringLiteral("draftBlock")}));
+
+    QTemporaryDir folder;
+    QVERIFY(folder.isValid());
+    const QString path = folder.filePath(QStringLiteral("seams.sm2d"));
+    QVERIFY(writeFile(path, pattern.toString()));
+    try
+    {
+        VDomDocument::ValidateXML(VPatternConverter::CurrentSchema, path);
+    }
+    catch (const VException& error)
+    {
+        QFAIL(qUtf8Printable(error.ErrorMessage()));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_PatternSeams::noSeamsLeaveNoElement() const
+{
+    SeamsPattern pattern;
+    pattern.setSeams({seam(10, 20, false)});
+    pattern.setSeams(QVector<VSeam>());
+
+    QVERIFY(pattern.documentElement().firstChildElement(VAbstractPattern::TagSeams).isNull());
+    QVERIFY(pattern.getSeams().isEmpty());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_PatternSeams::undoRestoresSeams() const
+{
+    SeamsPattern pattern;
+    const QVector<VSeam> before = {seam(10, 20, false)};
+    const QVector<VSeam> after = {seam(10, 20, false), seam(30, 40, true)};
+    pattern.setSeams(before);
+
+    QSignalSpy changes(&pattern, &VAbstractPattern::seamsChanged);
+    QUndoStack stack;
+    stack.push(new SaveSeams(QStringLiteral("sew"), before, after, &pattern));
+    QCOMPARE(pattern.getSeams(), after);
+
+    stack.undo();
+    QCOMPARE(pattern.getSeams(), before);
+
+    stack.redo();
+    QCOMPARE(pattern.getSeams(), after);
+    QCOMPARE(changes.count(), 3);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Patterns saved before seams existed open as they are.
+void TST_PatternSeams::olderPatternsAreConverted() const
+{
+    QTemporaryDir folder;
+    QVERIFY(folder.isValid());
+    const QString path = folder.filePath(QStringLiteral("old.sm2d"));
+    QVERIFY(writeFile(path, SeamsPattern(QStringLiteral("0.7.5")).toString()));
+
+    try
+    {
+        VPatternConverter converter(path);
+        SeamsPattern converted;
+        converted.setXMLContent(converter.Convert());
+
+        QCOMPARE(converted.documentElement().firstChildElement(VDomDocument::TagVersion).text(),
+                 VPatternConverter::PatternMaxVerStr);
+        QVERIFY(converted.getSeams().isEmpty());
+    }
+    catch (const VException& error)
+    {
+        QFAIL(qUtf8Printable(error.ErrorMessage()));
+    }
+}
