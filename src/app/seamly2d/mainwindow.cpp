@@ -62,6 +62,7 @@
 #include "dialogs/calculator_dialog.h"
 #include "dialogs/decimalchart_dialog.h"
 #include "dialogs/export_progress_dialog.h"
+#include "garment3d/garment_view_widget.h"
 #include "../ifc/exception/vexceptionobjecterror.h"
 #include "../ifc/exception/vexceptionconversionerror.h"
 #include "../ifc/exception/vexceptionemptyparameter.h"
@@ -210,6 +211,7 @@ MainWindow::MainWindow(QWidget *parent)
     , toolProperties(nullptr)
     , groupsWidget(nullptr)
     , piecesWidget(nullptr)
+    , m_garment_view_widget(nullptr)
     , m_lock(nullptr)
     , zoomScaleSpinBox(nullptr)
     , m_penToolBar(nullptr)
@@ -2008,6 +2010,7 @@ void MainWindow::CleanLayout()
     ui->listWidget->clear();
     groupsWidget->clear();
     piecesWidget->clear();
+    m_garment_view_widget->clear();
     SetLayoutModeActions();
 }
 
@@ -4514,6 +4517,7 @@ void MainWindow::Clear()
     //disable group actions
     ui->groups_DockWidget->setEnabled(false);
     ui->pieces_DockWidget->setEnabled(false);
+    ui->garment3d_DockWidget->setEnabled(false);
 
     //disable history menu actions
     ui->history_Action->setEnabled(false);
@@ -4725,6 +4729,7 @@ void MainWindow::fullParseFile()
 
     setToolsEnabled(draftBlockComboBox->count() > 0);
     piecesWidget->updateList();
+    m_garment_view_widget->updatePieces();
 
     VMainGraphicsView::NewSceneRect(draftScene, qApp->getSceneView());
     VMainGraphicsView::NewSceneRect(pieceScene, qApp->getSceneView());
@@ -4886,6 +4891,8 @@ void MainWindow::setWidgetsEnabled(bool enable)
     actionDockWidgetGroups->setEnabled(enable && draftStage);
     actionDockWidgetPieces->setEnabled(enable && pieceStage);
     actionDockWidgetLayouts->setEnabled(enable && layoutStage);
+    ui->garment3d_DockWidget->setEnabled(enable);
+    ui->garment3d_DockWidget->toggleViewAction()->setEnabled(enable);
 
     //Now we don't want allow user call context menu
     draftScene->setToolsDisabled(!enable, doc->getActiveDraftBlockName());
@@ -5662,6 +5669,8 @@ void MainWindow::createMenus()
         isPiecesDockVisible = visible;
     });
 
+    ui->view_Menu->addAction(ui->garment3d_DockWidget->toggleViewAction());
+
     actionDockWidgetLayouts = ui->layoutPages_DockWidget->toggleViewAction();
     ui->view_Menu->addAction(actionDockWidgetLayouts);
     connect(ui->layoutPages_DockWidget, &QDockWidget::visibilityChanged, this, [this](bool visible)
@@ -5953,9 +5962,22 @@ void MainWindow::initializeDocksContain()
     connect(doc, &VPattern::showPiece, piecesWidget, &PiecesWidget::selectPiece);
     connect(piecesWidget, &PiecesWidget::Highlight, pieceScene, &VMainGraphicsScene::HighlightItem);
 
+    qCDebug(vMainWindow, "Initialize 3D view.");
+    m_garment_view_widget = new GarmentViewWidget(pattern, this);
+    ui->garment3d_DockWidget->setWidget(m_garment_view_widget);
+    connect(doc, &VPattern::FullUpdateFromFile, m_garment_view_widget, &GarmentViewWidget::updatePieces);
+    connect(doc, &VPattern::UpdateInLayoutList, m_garment_view_widget, &GarmentViewWidget::updatePieces);
+    connect(doc, &VPattern::showPiece, m_garment_view_widget, &GarmentViewWidget::selectPiece);
+    connect(m_garment_view_widget, &GarmentViewWidget::pieceSelected, pieceScene, &VMainGraphicsScene::HighlightItem);
+    connect(m_garment_view_widget, &GarmentViewWidget::pieceSelected, piecesWidget, &PiecesWidget::selectPiece);
+
+    // Opt-in: hidden until the user opens it from the View menu. ReadSettings() restores it after that.
+    ui->garment3d_DockWidget->hide();
+
     //disable dock widget actions until pattern loaded.
     ui->groups_DockWidget->setEnabled(false);
     ui->pieces_DockWidget->setEnabled(false);
+    ui->garment3d_DockWidget->setEnabled(false);
     ui->toolProperties_DockWidget->setEnabled(false);
     ui->layoutPages_DockWidget->setEnabled(false);
 

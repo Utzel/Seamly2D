@@ -83,6 +83,7 @@ class ShowInfoDialog;
 class ShortcutsDialog;
 class GroupsWidget;
 class PiecesWidget;
+class GarmentViewWidget;
 class DraftToolBox;
 class PieceToolBox;
 class LayoutToolBox;
@@ -337,6 +338,7 @@ private:
     VToolOptionsPropertyBrowser      *toolProperties;
     GroupsWidget                     *groupsWidget;
     PiecesWidget                     *piecesWidget;
+    GarmentViewWidget*                m_garment_view_widget;
     std::shared_ptr<VLockGuard<char>> m_lock;
 
     QDoubleSpinBox                   *zoomScaleSpinBox;

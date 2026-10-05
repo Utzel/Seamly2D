@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/garment3d">
+        <file>garment_scene.qml</file>
+    </qresource>
+</RCC>

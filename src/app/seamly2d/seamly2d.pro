@@ -14,6 +14,9 @@ include(../../../common.pri)
 # library in installer.
 QT       += core gui widgets xml svg printsupport network multimedia
 
+# The 3D View dock draws its scene with Qt Quick 3D.
+QT       += quick quickwidgets quick3d
+
 # We want create executable file
 TEMPLATE = app
 
@@ -211,6 +214,15 @@ win32 {
 # When the GNU linker sees a library, it discards all symbols that it doesn't need.
 # Dependent library go first.
 
+#VGarment static library (depend on VPatternDB, VMisc, VObj)
+unix|win32: LIBS += -L$$OUT_PWD/../../libs/vgarment/$${DESTDIR}/ -lvgarment
+
+INCLUDEPATH += $$PWD/../../libs/vgarment
+DEPENDPATH += $$PWD/../../libs/vgarment
+
+win32:!win32-g++: PRE_TARGETDEPS += $$OUT_PWD/../../libs/vgarment/$${DESTDIR}/vgarment.lib
+else:unix|win32-g++: PRE_TARGETDEPS += $$OUT_PWD/../../libs/vgarment/$${DESTDIR}/libvgarment.a
+
 #Tools static library (depend on VWidgets, VMisc, VPatternDB)
 unix|win32: LIBS += -L$$OUT_PWD/../../libs/tools/$${DESTDIR}/ -ltools
 
@@ -356,21 +368,22 @@ macx{
 
     !macSign {
         # run macdeployqt to include all qt libraries in packet
-        QMAKE_POST_LINK += $$[QT_INSTALL_BINS]/macdeployqt $${OUT_PWD}/$${DESTDIR}/$${TARGET}.app
+        QMAKE_POST_LINK += $$[QT_INSTALL_BINS]/macdeployqt $${OUT_PWD}/$${DESTDIR}/$${TARGET}.app -qmldir=$${GARMENT3D_QML_DIR}
     } else {
         # we need to manually sign with codesign --deep as pdftops otherwise will not get signed by macdeployqt
         # we need --force as seamlyme is already signed, but we need to resign it
-        QMAKE_POST_LINK += $$[QT_INSTALL_BINS]/macdeployqt $${OUT_PWD}/$${DESTDIR}/$${TARGET}.app &&
+        QMAKE_POST_LINK += $$[QT_INSTALL_BINS]/macdeployqt $${OUT_PWD}/$${DESTDIR}/$${TARGET}.app -qmldir=$${GARMENT3D_QML_DIR} &&
         QMAKE_POST_LINK += codesign --deep --timestamp --options runtime --force -s $${APPLE_SIGN_IDENTITY} $${OUT_PWD}/$${DESTDIR}/$${TARGET}.app &&
         QMAKE_POST_LINK += codesign -vvv --deep --strict $${OUT_PWD}/$${DESTDIR}/$${TARGET}.app
     }
 }
 
 # run windeployqt to include all qt libraries and vc_redist in $${DESTDIR}
+# --qmldir lets it find the QML modules the 3D View imports
 win32-msvc{
-    QMAKE_POST_LINK += windeployqt $$shell_path($$DESTDIR/$${TARGET}.exe)
+    QMAKE_POST_LINK += windeployqt --qmldir $$shell_path($$GARMENT3D_QML_DIR) $$shell_path($$DESTDIR/$${TARGET}.exe)
 }
 win32-arm64-msvc{
     qtPrepareTool(WINDEPLOYQT, windeployqt)
-    QMAKE_POST_LINK += $$WINDEPLOYQT --qtpaths $$shell_path($$[QT_INSTALL_BINS]/host-qtpaths.bat) $$shell_path($$DESTDIR/$${TARGET}.exe)
+    QMAKE_POST_LINK += $$WINDEPLOYQT --qtpaths $$shell_path($$[QT_INSTALL_BINS]/host-qtpaths.bat) --qmldir $$shell_path($$GARMENT3D_QML_DIR) $$shell_path($$DESTDIR/$${TARGET}.exe)
 }

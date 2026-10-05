@@ -464,6 +464,16 @@ GarmentMesh PieceMesher::meshPolygon(const QVector<QPointF>& outline) const
 /// Seam allowance is left out: it folds to the inside of the garment and doesn't change its shape.
 GarmentMesh PieceMesher::meshPiece(quint32 piece_id, const VPiece& piece, const VContainer* data) const
 {
+    GarmentMesh mesh = meshPolygon(pieceOutline(piece, data));
+    mesh.piece_id = piece_id;
+    return mesh;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The piece's seam line in cm, at the piece's position in the piece scene. This is what meshPiece() meshes,
+/// so callers can compare outlines to tell whether a piece needs meshing again.
+QVector<QPointF> PieceMesher::pieceOutline(const VPiece& piece, const VContainer* data)
+{
     const QVector<QPointF> seam_line = piece.mainPathPoints(data);
 
     QVector<QPointF> outline;
@@ -473,8 +483,5 @@ GarmentMesh PieceMesher::meshPiece(quint32 piece_id, const VPiece& piece, const 
         outline.append(QPointF(FromPixel(point.x() + piece.GetMx(), Unit::Cm),
                                FromPixel(point.y() + piece.GetMy(), Unit::Cm)));
     }
-
-    GarmentMesh mesh = meshPolygon(outline);
-    mesh.piece_id = piece_id;
-    return mesh;
+    return outline;
 }
