@@ -37,6 +37,7 @@
 #include "../vgarment/body_model.h"
 #include "../vgarment/garment_mesh.h"
 #include "../vgarment/piece_mesher.h"
+#include "../vgarment/piece_outline.h"
 
 class GarmentSceneModel;
 class QLabel;
@@ -79,8 +80,8 @@ private:
 
     struct CachedMesh
     {
-        QVector<QPointF> outline;
-        GarmentMesh      mesh;
+        PieceOutline outline;
+        GarmentMesh  mesh;
     };
 
     // What an avatar is fitted to; a new fit only starts when this changes.

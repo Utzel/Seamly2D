@@ -190,14 +190,14 @@ void GarmentViewWidget::rebuildScene()
         {
             try
             {
-                const QVector<QPointF> outline = PieceMesher::pieceOutline(piece, m_data);
+                const PieceOutline outline = PieceOutline::fromPiece(piece, m_data);
                 CachedMesh cached = m_mesh_cache.value(id);
-                if (cached.outline != outline)
+                if (cached.outline.points() != outline.points())
                 {
-                    cached.outline = outline;
-                    cached.mesh = m_mesher.meshPolygon(outline);
+                    cached.mesh = m_mesher.meshPolygon(outline.points());
                     cached.mesh.piece_id = id;
                 }
+                cached.outline = outline;
                 mesh_cache.insert(id, cached);
 
                 if (!cached.mesh.isEmpty())

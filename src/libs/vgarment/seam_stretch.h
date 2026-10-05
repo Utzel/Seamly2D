@@ -1,5 +1,5 @@
 //---------------------------------------------------------------------------------------------------------------------
-//  @file   piece_mesher.h
+//  @file   seam_stretch.h
 //  @author Julius
 //  @date   5 Oct, 2026
 //
@@ -22,40 +22,43 @@
 //  along with Seamly2D. If not, see <http://www.gnu.org/licenses/>.
 //---------------------------------------------------------------------------------------------------------------------
 
-#ifndef PIECE_MESHER_H
-#define PIECE_MESHER_H
+#ifndef SEAM_STRETCH_H
+#define SEAM_STRETCH_H
 
 #include <QPointF>
 #include <QVector>
 #include <QtGlobal>
 
-#include "garment_mesh.h"
-
-class VContainer;
-class VPiece;
-
-/// @brief Turns pattern pieces into triangle meshes with evenly sized triangles.
-///
-/// The seam line is resampled at the edge length, keeping its corners, and the inside is filled with a
-/// triangular lattice of the same spacing. Everything is Delaunay triangulated; seam line segments the
-/// triangulation leaves out are split until it keeps them all, so no triangle crosses the seam line.
-///
-/// The edge length plays the role of CLO's particle distance: coarse while editing, fine for the final drape.
-class PieceMesher
+/// @brief A place where two sewn stretches meet, as the distance along each in cm.
+struct SeamMatch
 {
-public:
-    explicit           PieceMesher(qreal edge_length = defaultEdgeLength());
-
-    static qreal       defaultEdgeLength();
-
-    qreal              edgeLength() const;
-    void               setEdgeLength(qreal edge_length);
-
-    GarmentMesh        meshPolygon(const QVector<QPointF>& outline) const;
-    GarmentMesh        meshPiece(quint32 piece_id, const VPiece& piece, const VContainer* data) const;
-
-private:
-    qreal              m_edge_length;
+    qreal first = 0;
+    qreal second = 0;
 };
 
-#endif // PIECE_MESHER_H
+/// @brief A stretch of seam line that is sewn to another: its points in cm, in the direction it is sewn, and how far
+/// along it its notches are.
+class SeamStretch
+{
+public:
+                            SeamStretch() = default;
+    explicit                SeamStretch(const QVector<QPointF>& points,
+                                        const QVector<qreal>& notches = QVector<qreal>());
+
+    const QVector<QPointF>& points() const;
+    const QVector<qreal>&   notches() const;
+
+    bool                    isEmpty() const;
+    qreal                   length() const;
+    QPointF                 pointAt(qreal distance) const;
+    SeamStretch             reversed() const;
+
+    static QVector<SeamMatch> matches(const SeamStretch& first, const SeamStretch& second);
+
+private:
+    QVector<QPointF>        m_points;
+    QVector<qreal>          m_notches;
+    QVector<qreal>          m_distances;
+};
+
+#endif // SEAM_STRETCH_H
