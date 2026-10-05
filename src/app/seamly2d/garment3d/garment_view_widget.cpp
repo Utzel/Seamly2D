@@ -36,10 +36,16 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QVariantMap>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
+#include <tuple>
 
 #include "../ifc/exception/vexception.h"
+#include "../vmisc/def.h"
+#include "../vmisc/vabstractapplication.h"
+#include "../vpatterndb/measurements_def.h"
+#include "../vpatterndb/variables/vinternalvariable.h"
 #include "../vpatterndb/vcontainer.h"
 #include "../vpatterndb/vpiece.h"
 #include "garment_scene_model.h"
@@ -48,7 +54,34 @@ namespace
 {
 // Edits come in bursts (dragging a point sends one per mouse move), so re-mesh once they pause.
 const int rebuild_delay_ms = 150;
+
+// Fitted measurements this far off, in cm, are mentioned in the avatar's note.
+const qreal note_tolerance = 1.0;
+
+// Birth dates further back than this are taken as not given; SeamlyMe's default is 1800-01-01.
+const qreal oldest_age = 110.0;
+
+// Age used when the measurements don't say, MakeHuman's young adult.
+const qreal default_age = 25.0;
 } // anonymous namespace
+
+//---------------------------------------------------------------------------------------------------------------------
+bool GarmentViewWidget::AvatarRequest::operator==(const AvatarRequest& other) const
+{
+    return qFuzzyCompare(1.0 + wanted.height, 1.0 + other.wanted.height)
+           && qFuzzyCompare(1.0 + wanted.bust, 1.0 + other.wanted.bust)
+           && qFuzzyCompare(1.0 + wanted.waist, 1.0 + other.wanted.waist)
+           && qFuzzyCompare(1.0 + wanted.hip, 1.0 + other.wanted.hip)
+           && qFuzzyCompare(1.0 + wanted.neck, 1.0 + other.wanted.neck)
+           && qFuzzyCompare(1.0 + gender, 1.0 + other.gender)
+           && qFuzzyCompare(1.0 + age, 1.0 + other.age);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool GarmentViewWidget::AvatarRequest::hasMeasurements() const
+{
+    return wanted.height > 0 || wanted.bust > 0 || wanted.waist > 0 || wanted.hip > 0 || wanted.neck > 0;
+}
 
 //---------------------------------------------------------------------------------------------------------------------
 GarmentViewWidget::GarmentViewWidget(VContainer* data, QWidget* parent)
@@ -61,6 +94,13 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, QWidget* parent)
     , m_mesher()
     , m_mesh_cache()
     , m_rebuild_pending(false)
+    , m_wearer_gender(0.5)
+    , m_wearer_age(default_age)
+    , m_body_model()
+    , m_fit_watcher(new QFutureWatcher<AvatarFit>(this))
+    , m_avatar_request()
+    , m_has_avatar_request(false)
+    , m_avatar_generation(0)
 {
     QVBoxLayout* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -74,6 +114,16 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, QWidget* parent)
     m_rebuild_timer->setInterval(rebuild_delay_ms);
     connect(m_rebuild_timer, &QTimer::timeout, this, &GarmentViewWidget::rebuildScene);
     connect(m_scene_model, &GarmentSceneModel::piecePicked, this, &GarmentViewWidget::scenePicked);
+    connect(m_fit_watcher, &QFutureWatcher<AvatarFit>::finished, this, &GarmentViewWidget::avatarFitted);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Who the avatar is: gender from 0 (female) to 1 (male), 0.5 when unknown, and age in years, 0 when unknown.
+/// Takes effect with the next updatePieces(), which follows anyway when measurements are (re)loaded.
+void GarmentViewWidget::setWearer(qreal gender, qreal age_years)
+{
+    m_wearer_gender = qBound(0.0, gender, 1.0);
+    m_wearer_age = (age_years > 0 && age_years < oldest_age) ? age_years : default_age;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -100,6 +150,8 @@ void GarmentViewWidget::clear()
     m_rebuild_timer->stop();
     m_rebuild_pending = false;
     m_mesh_cache.clear();
+    m_has_avatar_request = false;
+    ++m_avatar_generation;  // a fit still running belongs to what was cleared
     m_scene_model->clear();
 }
 
@@ -169,6 +221,129 @@ void GarmentViewWidget::rebuildScene()
 
     m_mesh_cache = mesh_cache;
     m_scene_model->setPieces(scene_pieces);
+
+    updateAvatar();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Starts fitting the avatar if the measurements or the wearer changed. A change during a fit is picked up when the
+// fit finishes. A pattern without measurements gets no avatar.
+void GarmentViewWidget::updateAvatar()
+{
+    const AvatarRequest request = wantedAvatar();
+    if (!m_has_avatar_request || !(request == m_avatar_request))
+    {
+        m_avatar_request = request;
+        m_has_avatar_request = true;
+
+        if (!request.hasMeasurements())
+        {
+            m_scene_model->clearAvatar();
+        }
+        else if (!m_fit_watcher->isRunning())
+        {
+            if (m_body_model.isNull())
+            {
+                m_body_model.reset(new BodyModel());
+            }
+
+            const BodyModel model = *m_body_model;
+            const quint64 generation = m_avatar_generation;
+            m_fit_watcher->setFuture(QtConcurrent::run([model, request, generation]()
+            {
+                AvatarFit result;
+                result.generation = generation;
+                result.request = request;
+                result.fit = BodyFitter(model).fit(request.wanted, request.gender, request.age);
+                result.positions = model.evaluate(result.fit.shape);
+                return result;
+            }));
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Shows a finished fit if it is still what is wanted; if the measurements changed meanwhile, fits again.
+void GarmentViewWidget::avatarFitted()
+{
+    const AvatarFit result = m_fit_watcher->result();
+    if (result.generation == m_avatar_generation)
+    {
+        if (!(result.request == m_avatar_request))
+        {
+            m_has_avatar_request = false;
+            updateAvatar();
+        }
+        else if (m_body_model->isValid() && !result.positions.isEmpty())
+        {
+            m_scene_model->setAvatar(result.positions, m_body_model->triangles(), m_body_model->skinVertexCount(),
+                                     avatarNote(result));
+        }
+    }
+    else if (m_has_avatar_request)
+    {
+        // Cleared while fitting, and something new was asked for since.
+        m_has_avatar_request = false;
+        updateAvatar();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The pattern's measurements in cm, the ones the avatar can be fitted to; measurements that aren't there stay 0.
+GarmentViewWidget::AvatarRequest GarmentViewWidget::wantedAvatar() const
+{
+    // Looked up by internal name: DataMeasurements() is keyed by the names shown to the user, which can be translated.
+    const QHash<QString, QSharedPointer<VInternalVariable>>* variables = m_data->DataVariables();
+    const Unit unit = qApp->patternUnit();
+    auto value_cm = [variables, unit](const QString& name)
+    {
+        const QSharedPointer<const VInternalVariable> variable = variables->value(name);
+        return (variable.isNull() || variable->GetType() != VarType::Measurement)
+               ? 0.0 : UnitConvertor(variable->GetValue(), unit, Unit::Cm);
+    };
+
+    AvatarRequest request;
+    request.wanted.height = value_cm(height_M);
+    request.wanted.bust = value_cm(bustCirc_M);
+    request.wanted.waist = value_cm(waistCirc_M);
+    request.wanted.hip = value_cm(hipCirc_M);
+    request.wanted.neck = value_cm(neckMidCirc_M);
+    request.gender = m_wearer_gender;
+    request.age = BodyShape::ageFromYears(m_wearer_age);
+    return request;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Says which measurements the avatar couldn't reach, in the pattern's unit, or nothing if it reached them all.
+QString GarmentViewWidget::avatarNote(const AvatarFit& result) const
+{
+    const Unit unit = qApp->patternUnit();
+    const QString unit_name = UnitsToStr(unit, true);
+    auto in_unit = [unit](qreal cm)
+    {
+        return QString::number(UnitConvertor(cm, Unit::Cm, unit), 'f', unit == Unit::Mm ? 0 : 1);
+    };
+
+    const BodyMeasurements& wanted = result.request.wanted;
+    const BodyMeasurements& got = result.fit.measured;
+    const QVector<std::tuple<QString, qreal, qreal>> checks = {
+        std::make_tuple(tr("height"), wanted.height, got.height),
+        std::make_tuple(tr("bust"), wanted.bust, got.bust),
+        std::make_tuple(tr("waist"), wanted.waist, got.waist),
+        std::make_tuple(tr("hip"), wanted.hip, got.hip),
+        std::make_tuple(tr("neck"), wanted.neck, got.neck)};
+
+    QStringList misses;
+    for (const auto& check : checks)
+    {
+        if (std::get<1>(check) > 0 && qAbs(std::get<2>(check) - std::get<1>(check)) > note_tolerance)
+        {
+            misses.append(tr("%1 %2 %3 instead of %4").arg(std::get<0>(check), in_unit(std::get<2>(check)),
+                                                           unit_name, in_unit(std::get<1>(check))));
+        }
+    }
+    return misses.isEmpty() ? QString()
+                            : tr("The avatar comes closest with %1.").arg(misses.join(QStringLiteral(", ")));
 }
 
 //---------------------------------------------------------------------------------------------------------------------

@@ -453,6 +453,7 @@ private:
     bool               loadMeasurements(const QString &fileName);
     bool               updateMeasurements(const QString &fileName, int size, int height);
     void               checkRequiredMeasurements(const MeasurementDoc *m);
+    void               updateGarmentWearer();
 
     void               reopenFilesAfterCrash(QStringList &args);
     void               DoExport(const VCommandLinePtr& expParams);

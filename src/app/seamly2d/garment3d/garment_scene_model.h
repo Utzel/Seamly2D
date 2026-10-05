@@ -28,18 +28,20 @@
 #include <QAbstractListModel>
 #include <QColor>
 #include <QHash>
+#include <QRectF>
 #include <QString>
 #include <QVector3D>
 #include <QVector>
 
 #include "../vgarment/garment_mesh.h"
 
+class AvatarGeometry;
 class PieceGeometry;
 
-/// @brief The pieces the 3D scene shows, one row each, for the scene's QML.
+/// @brief What the 3D scene shows, for the scene's QML: the pieces, one row each, and the avatar.
 ///
 /// Geometries are kept while the set of pieces stays the same, so editing a piece updates its mesh in place
-/// instead of rebuilding the whole scene.
+/// instead of rebuilding the whole scene. With an avatar in the scene, the pieces stand behind it as a board.
 class GarmentSceneModel : public QAbstractListModel
 {
     Q_OBJECT
@@ -47,6 +49,10 @@ class GarmentSceneModel : public QAbstractListModel
     Q_PROPERTY(quint32 selectedPiece READ selectedPiece NOTIFY selectedPieceChanged)
     Q_PROPERTY(QVector3D sceneCenter READ sceneCenter NOTIFY sceneBoundsChanged)
     Q_PROPERTY(qreal sceneRadius READ sceneRadius NOTIFY sceneBoundsChanged)
+    Q_PROPERTY(QVector3D boardOffset READ boardOffset NOTIFY sceneBoundsChanged)
+    Q_PROPERTY(bool hasAvatar READ hasAvatar NOTIFY avatarChanged)
+    Q_PROPERTY(QObject* avatarGeometry READ avatarGeometry NOTIFY avatarChanged)
+    Q_PROPERTY(QString avatarNote READ avatarNote NOTIFY avatarChanged)
 
 public:
     enum Roles
@@ -79,9 +85,17 @@ public:
     quint32                selectedPiece() const;
     void                   setSelectedPiece(quint32 id);
 
+    void                   setAvatar(const QVector<QVector3D>& positions, const QVector<quint32>& triangles,
+                                     int skin_vertex_count, const QString& note);
+    void                   clearAvatar();
+
     int                    pieceCount() const;
     QVector3D              sceneCenter() const;
     qreal                  sceneRadius() const;
+    QVector3D              boardOffset() const;
+    bool                   hasAvatar() const;
+    QObject*               avatarGeometry() const;
+    QString                avatarNote() const;
 
     Q_INVOKABLE void       pickPiece(int id);
 
@@ -89,6 +103,7 @@ signals:
     void                   pieceCountChanged();
     void                   selectedPieceChanged();
     void                   sceneBoundsChanged();
+    void                   avatarChanged();
     void                   framingRequested();
     void                   piecePicked(quint32 id);
 
@@ -106,10 +121,17 @@ private:
 
     QVector<Row>           m_rows;
     quint32                m_selected_piece;
+    QRectF                 m_piece_bounds;
     QVector3D              m_scene_center;
     qreal                  m_scene_radius;
+    QVector3D              m_board_offset;
+    AvatarGeometry*        m_avatar;
+    bool                   m_has_avatar;
+    QVector3D              m_avatar_minimum;
+    QVector3D              m_avatar_maximum;
+    QString                m_avatar_note;
 
-    void                   updateSceneBounds(const QVector<Piece>& pieces);
+    void                   updateSceneBounds();
 };
 
 #endif // GARMENT_SCENE_MODEL_H

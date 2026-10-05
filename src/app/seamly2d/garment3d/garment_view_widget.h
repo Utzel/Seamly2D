@@ -25,11 +25,16 @@
 #ifndef GARMENT_VIEW_WIDGET_H
 #define GARMENT_VIEW_WIDGET_H
 
+#include <QFutureWatcher>
 #include <QHash>
 #include <QPointF>
+#include <QScopedPointer>
+#include <QVector3D>
 #include <QVector>
 #include <QWidget>
 
+#include "../vgarment/body_fitter.h"
+#include "../vgarment/body_model.h"
 #include "../vgarment/garment_mesh.h"
 #include "../vgarment/piece_mesher.h"
 
@@ -39,10 +44,12 @@ class QQuickWidget;
 class QTimer;
 class VContainer;
 
-/// @brief Content of the 3D View dock: the pattern's pieces in a 3D scene that follows every edit.
+/// @brief Content of the 3D View dock: the pattern's pieces and an avatar fitted to the pattern's measurements, in a
+/// 3D scene that follows every edit.
 ///
 /// The Qt Quick scene, and with it the GPU context, is only created the first time the dock is shown, and the
-/// pieces are only meshed while it is visible, so the view costs nothing until it is used.
+/// pieces are only meshed while it is visible, so the view costs nothing until it is used. The avatar is fitted on a
+/// worker thread and only when the measurements change.
 class GarmentViewWidget : public QWidget
 {
     Q_OBJECT
@@ -54,6 +61,7 @@ signals:
     void               pieceSelected(quint32 id);
 
 public slots:
+    void               setWearer(qreal gender, qreal age_years);
     void               updatePieces();
     void               selectPiece(quint32 id);
     void               clear();
@@ -64,6 +72,7 @@ protected:
 private slots:
     void               rebuildScene();
     void               scenePicked(quint32 id);
+    void               avatarFitted();
 
 private:
     Q_DISABLE_COPY(GarmentViewWidget)
@@ -74,6 +83,25 @@ private:
         GarmentMesh      mesh;
     };
 
+    // What an avatar is fitted to; a new fit only starts when this changes.
+    struct AvatarRequest
+    {
+        BodyMeasurements wanted;
+        qreal            gender = 0.5;
+        qreal            age = 0.5;
+
+        bool             operator==(const AvatarRequest& other) const;
+        bool             hasMeasurements() const;
+    };
+
+    struct AvatarFit
+    {
+        quint64            generation = 0;
+        AvatarRequest      request;
+        BodyFit            fit;
+        QVector<QVector3D> positions;
+    };
+
     VContainer*                m_data;
     GarmentSceneModel*         m_scene_model;
     QQuickWidget*              m_quick_widget;
@@ -82,9 +110,19 @@ private:
     PieceMesher                m_mesher;
     QHash<quint32, CachedMesh> m_mesh_cache;
     bool                       m_rebuild_pending;
+    qreal                      m_wearer_gender;
+    qreal                      m_wearer_age;
+    QScopedPointer<BodyModel>  m_body_model;
+    QFutureWatcher<AvatarFit>* m_fit_watcher;
+    AvatarRequest              m_avatar_request;
+    bool                       m_has_avatar_request;
+    quint64                    m_avatar_generation;
 
     void               createScene();
     void               showError(const QString& error);
+    void               updateAvatar();
+    AvatarRequest      wantedAvatar() const;
+    QString            avatarNote(const AvatarFit& result) const;
 };
 
 #endif // GARMENT_VIEW_WIDGET_H

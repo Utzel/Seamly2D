@@ -91,53 +91,70 @@ Rectangle {
             brightness: 0.6
         }
 
-        Repeater3D {
-            model: root.sceneModel
+        // The avatar, fitted to the pattern's measurements, in a plain grey like a dress form.
+        Model {
+            visible: root.sceneModel.hasAvatar
+            geometry: root.sceneModel.avatarGeometry
 
-            // Each piece sits a little in front of the one before, so pieces that overlap in the piece scene
-            // don't flicker where they overlap.
-            delegate: Node {
-                id: piece_node
+            materials: PrincipledMaterial {
+                baseColor: "#b9b4ad"
+                roughness: 0.7
+                metalness: 0.0
+            }
+        }
 
-                required property int index
-                required property int pieceId
-                required property color pieceColor
-                required property Geometry pieceGeometry
-                required property Geometry pieceOutline
-                required property bool selected
+        // The pieces, flat on a board; with an avatar the board stands behind it.
+        Node {
+            position: root.sceneModel.boardOffset
 
-                z: index * 0.05
+            Repeater3D {
+                model: root.sceneModel
 
-                Model {
-                    readonly property int pieceId: piece_node.pieceId
+                // Each piece sits a little in front of the one before, so pieces that overlap in the piece scene
+                // don't flicker where they overlap.
+                delegate: Node {
+                    id: piece_node
 
-                    geometry: piece_node.pieceGeometry
-                    pickable: true
+                    required property int index
+                    required property int pieceId
+                    required property color pieceColor
+                    required property Geometry pieceGeometry
+                    required property Geometry pieceOutline
+                    required property bool selected
 
-                    // While a piece is selected the others step back, so the selection reads whatever the
-                    // colors are.
-                    materials: PrincipledMaterial {
-                        baseColor: piece_node.selected
-                                   ? Qt.tint(piece_node.pieceColor, Qt.rgba(root.highlightColor.r,
-                                                                            root.highlightColor.g,
-                                                                            root.highlightColor.b, 0.35))
-                                   : root.sceneModel.selectedPiece !== 0 ? Qt.darker(piece_node.pieceColor, 1.8)
-                                                                         : piece_node.pieceColor
-                        roughness: 0.85
-                        metalness: 0.0
-                        cullMode: Material.NoCulling
+                    z: index * 0.05
+
+                    Model {
+                        readonly property int pieceId: piece_node.pieceId
+
+                        geometry: piece_node.pieceGeometry
+                        pickable: true
+
+                        // While a piece is selected the others step back, so the selection reads whatever the
+                        // colors are.
+                        materials: PrincipledMaterial {
+                            baseColor: piece_node.selected
+                                       ? Qt.tint(piece_node.pieceColor, Qt.rgba(root.highlightColor.r,
+                                                                                root.highlightColor.g,
+                                                                                root.highlightColor.b, 0.35))
+                                       : root.sceneModel.selectedPiece !== 0 ? Qt.darker(piece_node.pieceColor, 1.8)
+                                                                             : piece_node.pieceColor
+                            roughness: 0.85
+                            metalness: 0.0
+                            cullMode: Material.NoCulling
+                        }
                     }
-                }
 
-                // The seam line, just in front of the fabric, so same colored pieces can be told apart.
-                Model {
-                    z: 0.02
-                    geometry: piece_node.pieceOutline
+                    // The seam line, just in front of the fabric, so same colored pieces can be told apart.
+                    Model {
+                        z: 0.02
+                        geometry: piece_node.pieceOutline
 
-                    materials: PrincipledMaterial {
-                        lighting: PrincipledMaterial.NoLighting
-                        baseColor: Qt.tint(piece_node.pieceColor, piece_node.pieceColor.hslLightness > 0.5
-                                                                  ? "#80000000" : "#80ffffff")
+                        materials: PrincipledMaterial {
+                            lighting: PrincipledMaterial.NoLighting
+                            baseColor: Qt.tint(piece_node.pieceColor, piece_node.pieceColor.hslLightness > 0.5
+                                                                      ? "#80000000" : "#80ffffff")
+                        }
                     }
                 }
             }
@@ -152,7 +169,8 @@ Rectangle {
         TapHandler {
             onTapped: (event_point) => {
                 const result = view.pick(event_point.position.x, event_point.position.y)
-                root.sceneModel.pickPiece(result.objectHit ? result.objectHit.pieceId : 0)
+                const hit = result.objectHit
+                root.sceneModel.pickPiece(hit && hit.pieceId !== undefined ? hit.pieceId : 0)
             }
             onDoubleTapped: root.frameAll()
         }
@@ -161,7 +179,7 @@ Rectangle {
     Text {
         anchors.centerIn: parent
         width: parent.width - 20
-        visible: root.sceneModel.pieceCount === 0
+        visible: root.sceneModel.pieceCount === 0 && !root.sceneModel.hasAvatar
         text: root.emptyText
         color: root.textColor
         wrapMode: Text.WordWrap
@@ -173,7 +191,7 @@ Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         anchors.margins: 6
-        visible: root.sceneModel.pieceCount > 0
+        visible: root.sceneModel.pieceCount > 0 || root.sceneModel.hasAvatar
         text: root.hintText
         color: root.textColor
         opacity: 0.6
@@ -182,8 +200,21 @@ Rectangle {
         horizontalAlignment: Text.AlignHCenter
     }
 
+    // What the avatar couldn't match, if anything.
+    Text {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: 6
+        visible: root.sceneModel.avatarNote !== ""
+        text: root.sceneModel.avatarNote
+        color: root.textColor
+        font.pointSize: 8
+        wrapMode: Text.WordWrap
+    }
+
     Component.onCompleted: {
-        if (root.sceneModel.pieceCount > 0) {
+        if (root.sceneModel.pieceCount > 0 || root.sceneModel.hasAvatar) {
             root.frameAll()
         }
     }

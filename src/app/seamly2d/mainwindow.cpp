@@ -722,6 +722,7 @@ bool MainWindow::loadMeasurements(const QString &fileName)
         qCInfo(vMainWindow, "Individual file %s was loaded.", qUtf8Printable(fileName));
     }
 
+    updateGarmentWearer();
     return true;
 }
 
@@ -776,7 +777,37 @@ bool MainWindow::updateMeasurements(const QString &fileName, int size, int heigh
         setSizeHeightForIndividualM();
     }
 
+    updateGarmentWearer();
     return true;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Tells the 3D View whose measurements the pattern uses, so its avatar gets their gender and age.
+void MainWindow::updateGarmentWearer()
+{
+    qreal gender = 0.5;
+    qreal age_years = 0;
+    if (!m_measurements.isNull() && !m_measurements->isNull())
+    {
+        switch (m_measurements->Gender())
+        {
+            case GenderType::Female:
+                gender = 0.0;
+                break;
+            case GenderType::Male:
+                gender = 1.0;
+                break;
+            default:
+                break;
+        }
+
+        const QDate birth_date = m_measurements->BirthDate();
+        if (birth_date.isValid())
+        {
+            age_years = birth_date.daysTo(QDate::currentDate()) / 365.25;
+        }
+    }
+    m_garment_view_widget->setWearer(gender, age_years);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2283,6 +2314,8 @@ void MainWindow::UnloadMeasurements()
         }
 
         m_measurements.clear();
+        updateGarmentWearer();
+        m_garment_view_widget->updatePieces();
 
         qApp->setPatternType(MeasurementsType::Unknown);
         doc->SetMPath(QString());

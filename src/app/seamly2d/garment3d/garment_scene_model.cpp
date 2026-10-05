@@ -28,8 +28,28 @@
 #include <QtMath>
 
 #include <algorithm>
+#include <limits>
 
+#include "avatar_geometry.h"
 #include "piece_geometry.h"
+
+namespace
+{
+// Gap in cm between the back of the avatar and the board of pieces behind it.
+const float board_gap = 40.0f;
+
+//---------------------------------------------------------------------------------------------------------------------
+QVector3D lowerCorner(const QVector3D& a, const QVector3D& b)
+{
+    return QVector3D(qMin(a.x(), b.x()), qMin(a.y(), b.y()), qMin(a.z(), b.z()));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QVector3D upperCorner(const QVector3D& a, const QVector3D& b)
+{
+    return QVector3D(qMax(a.x(), b.x()), qMax(a.y(), b.y()), qMax(a.z(), b.z()));
+}
+} // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
 GarmentSceneModel::GarmentSceneModel(QObject* parent)
@@ -38,6 +58,12 @@ GarmentSceneModel::GarmentSceneModel(QObject* parent)
     , m_selected_piece(0)
     , m_scene_center()
     , m_scene_radius(0)
+    , m_board_offset()
+    , m_avatar(nullptr)
+    , m_has_avatar(false)
+    , m_avatar_minimum()
+    , m_avatar_maximum()
+    , m_avatar_note()
 {}
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -150,7 +176,13 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
         setSelectedPiece(m_selected_piece);
     }
 
-    updateSceneBounds(pieces);
+    m_piece_bounds = QRectF();
+    for (const Piece& piece : pieces)
+    {
+        m_piece_bounds = m_piece_bounds.united(piece.mesh.bounds());
+    }
+    updateSceneBounds();
+
     if (was_empty && !m_rows.isEmpty())
     {
         emit framingRequested();
@@ -162,6 +194,7 @@ void GarmentSceneModel::clear()
 {
     setSelectedPiece(0);
     setPieces(QVector<Piece>());
+    clearAvatar();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -225,15 +258,111 @@ void GarmentSceneModel::pickPiece(int id)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-void GarmentSceneModel::updateSceneBounds(const QVector<Piece>& pieces)
+/// @brief Shows the avatar, a body given by its vertex positions in cm. The note says how far it is from the wanted
+/// measurements, or is empty.
+void GarmentSceneModel::setAvatar(const QVector<QVector3D>& positions, const QVector<quint32>& triangles,
+                                  int skin_vertex_count, const QString& note)
 {
-    QRectF bounds;
-    for (const Piece& piece : pieces)
+    const bool was_empty = m_rows.isEmpty() && !m_has_avatar;
+
+    if (m_avatar == nullptr)
     {
-        bounds = bounds.united(piece.mesh.bounds());
+        m_avatar = new AvatarGeometry();
+        m_avatar->setParent(this);
+    }
+    m_avatar->setBody(positions, triangles, skin_vertex_count);
+
+    const float largest = std::numeric_limits<float>::max();
+    m_avatar_minimum = QVector3D(largest, largest, largest);
+    m_avatar_maximum = -m_avatar_minimum;
+    for (int i = 0; i < skin_vertex_count; ++i)
+    {
+        const QVector3D& position = positions.at(i);
+        m_avatar_minimum = lowerCorner(m_avatar_minimum, position);
+        m_avatar_maximum = upperCorner(m_avatar_maximum, position);
     }
 
-    m_scene_center = QVector3D(static_cast<float>(bounds.center().x()), static_cast<float>(-bounds.center().y()), 0.0f);
-    m_scene_radius = qSqrt(bounds.width() * bounds.width() + bounds.height() * bounds.height()) / 2.0;
+    m_has_avatar = true;
+    m_avatar_note = note;
+    emit avatarChanged();
+
+    updateSceneBounds();
+    if (was_empty)
+    {
+        emit framingRequested();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentSceneModel::clearAvatar()
+{
+    if (m_has_avatar)
+    {
+        m_has_avatar = false;
+        m_avatar_note.clear();
+        emit avatarChanged();
+        updateSceneBounds();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Where the pieces' board is moved to: behind the avatar and centred on it, or nowhere without an avatar.
+QVector3D GarmentSceneModel::boardOffset() const
+{
+    return m_board_offset;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool GarmentSceneModel::hasAvatar() const
+{
+    return m_has_avatar;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QObject* GarmentSceneModel::avatarGeometry() const
+{
+    return m_avatar;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QString GarmentSceneModel::avatarNote() const
+{
+    return m_avatar_note;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Places the board of pieces and works out what the camera has to see. In 3D the pieces' y axis points up, so their
+// rectangle is flipped.
+void GarmentSceneModel::updateSceneBounds()
+{
+    const QVector3D board_center(static_cast<float>(m_piece_bounds.center().x()),
+                                 static_cast<float>(-m_piece_bounds.center().y()), 0.0f);
+    const QVector3D board_half(static_cast<float>(m_piece_bounds.width() / 2.0),
+                               static_cast<float>(m_piece_bounds.height() / 2.0), 0.0f);
+
+    QVector3D minimum = board_center - board_half;
+    QVector3D maximum = board_center + board_half;
+    m_board_offset = QVector3D();
+
+    if (m_has_avatar)
+    {
+        // The board stands a little behind the avatar, centred on it, its middle no lower than the avatar's.
+        const float middle = qMax(board_half.y(), (m_avatar_minimum.y() + m_avatar_maximum.y()) / 2.0f);
+        m_board_offset = QVector3D(-board_center.x(), middle - board_center.y(), m_avatar_minimum.z() - board_gap);
+
+        if (m_piece_bounds.isEmpty())
+        {
+            minimum = m_avatar_minimum;
+            maximum = m_avatar_maximum;
+        }
+        else
+        {
+            minimum = lowerCorner(minimum + m_board_offset, m_avatar_minimum);
+            maximum = upperCorner(maximum + m_board_offset, m_avatar_maximum);
+        }
+    }
+
+    m_scene_center = (minimum + maximum) / 2.0f;
+    m_scene_radius = static_cast<qreal>((maximum - minimum).length()) / 2.0;
     emit sceneBoundsChanged();
 }
