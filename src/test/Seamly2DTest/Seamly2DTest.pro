@@ -51,7 +51,8 @@ SOURCES += \
     tst_readval.cpp \
     tst_vtranslatevars.cpp \
     tst_vabstractpiece.cpp \
-    tst_vtoolmove.cpp
+    tst_vtoolmove.cpp \
+    tst_piecemesher.cpp
 
 *msvc*:SOURCES += stable.cpp
 
@@ -79,9 +80,19 @@ HEADERS += \
     tst_readval.h \
     tst_vtranslatevars.h \
     tst_vabstractpiece.h \
-    tst_vtoolmove.h
+    tst_vtoolmove.h \
+    tst_piecemesher.h
 
 include(warnings.pri)
+
+#VGarment static library (depend on VPatternDB, VMisc, VObj)
+unix|win32: LIBS += -L$$OUT_PWD/../../libs/vgarment/$${DESTDIR}/ -lvgarment
+
+INCLUDEPATH += $$PWD/../../libs/vgarment
+DEPENDPATH += $$PWD/../../libs/vgarment
+
+win32:!win32-g++: PRE_TARGETDEPS += $$OUT_PWD/../../libs/vgarment/$${DESTDIR}/vgarment.lib
+else:unix|win32-g++: PRE_TARGETDEPS += $$OUT_PWD/../../libs/vgarment/$${DESTDIR}/libvgarment.a
 
 #VTools static library (depend on VWidgets, VMisc, VPatternDB)
 unix|win32: LIBS += -L$$OUT_PWD/../../libs/vtools/$${DESTDIR}/ -lvtools
@@ -163,6 +174,15 @@ DEPENDPATH += $$PWD/../../libs/vlayout
 
 win32:!win32-g++: PRE_TARGETDEPS += $$OUT_PWD/../../libs/vlayout/$${DESTDIR}/vlayout.lib
 else:unix|win32-g++: PRE_TARGETDEPS += $$OUT_PWD/../../libs/vlayout/$${DESTDIR}/libvlayout.a
+
+# VObj static library (VGarment uses its Delaunay triangulation)
+unix|win32: LIBS += -L$$OUT_PWD/../../libs/vobj/$${DESTDIR} -lvobj
+
+INCLUDEPATH += $$PWD/../../libs/vobj
+DEPENDPATH += $$PWD/../../libs/vobj
+
+win32:!win32-g++: PRE_TARGETDEPS += $$OUT_PWD/../../libs/vobj/$${DESTDIR}/vobj.lib
+else:unix|win32-g++: PRE_TARGETDEPS += $$OUT_PWD/../../libs/vobj/$${DESTDIR}/libvobj.a
 
 # QMuParser library
 unix|win32: LIBS += -L$${OUT_PWD}/../../libs/qmuparser/$${DESTDIR} -lqmuparser

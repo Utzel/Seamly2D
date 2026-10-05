@@ -37,6 +37,9 @@ INCLUDEPATH += $${PWD}/vpropertyexplorer
 #VTest static library
 INCLUDEPATH += $${PWD}/vtest
 
+#VGarment static library
+INCLUDEPATH += $${PWD}/vgarment
+
 #xerces static library, vendored for msvc, mingw and mac locally
 win32-msvc:INCLUDEPATH += $${PWD}/xerces-c/msvc/include
 win32-arm64-msvc:INCLUDEPATH += $${PWD}/xerces-c/msvc-arm64/include

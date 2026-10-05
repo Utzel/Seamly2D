@@ -15,4 +15,5 @@ SUBDIRS = \
     vformat \
     fervor \
     vtest \
-    tools
+    tools \
+    vgarment
