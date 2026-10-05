@@ -272,7 +272,8 @@ OutlineHit PieceOutline::hit(const QPointF& point) const
 
 //---------------------------------------------------------------------------------------------------------------------
 /// @brief The seam line from one path point forward to another, with the notches in between. From a point to itself
-/// is once around. Unknown points give an empty stretch.
+/// is once around. Unknown points give an empty stretch. The stretch's vertices are the indices of its points in
+/// the outline.
 SeamStretch PieceOutline::stretch(quint32 start_node, quint32 end_node) const
 {
     const int start = nodePosition(start_node);
@@ -287,6 +288,7 @@ SeamStretch PieceOutline::stretch(quint32 start_node, quint32 end_node) const
     const int steps = start == end ? count : (m_nodes.at(end).index - first + count) % count;
 
     QVector<QPointF> points{m_points.at(first)};
+    QVector<quint32> indices{static_cast<quint32>(first)};
     QHash<int, qreal> distance_at{{first, 0.0}};
     qreal travelled = 0;
     for (int step = 0, i = first; step < steps; ++step, i = (i + 1) % count)
@@ -294,6 +296,7 @@ SeamStretch PieceOutline::stretch(quint32 start_node, quint32 end_node) const
         const int next = (i + 1) % count;
         travelled += QLineF(m_points.at(i), m_points.at(next)).length();
         points.append(m_points.at(next));
+        indices.append(static_cast<quint32>(next));
         if (!distance_at.contains(next))
         {
             distance_at.insert(next, travelled);
@@ -309,7 +312,7 @@ SeamStretch PieceOutline::stretch(quint32 start_node, quint32 end_node) const
             notches.append(distance_at.value(m_nodes.at(k).index));
         }
     }
-    return SeamStretch(points, notches);
+    return SeamStretch(points, notches, indices);
 }
 
 //---------------------------------------------------------------------------------------------------------------------

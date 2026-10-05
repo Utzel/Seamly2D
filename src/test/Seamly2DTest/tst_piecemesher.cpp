@@ -32,6 +32,8 @@
 #include <algorithm>
 
 #include "../vgarment/piece_mesher.h"
+#include "../vgarment/piece_outline.h"
+#include "../vgarment/seam_stretch.h"
 #include "../vgeometry/vpointf.h"
 #include "../vmisc/def.h"
 #include "../vmisc/vabstractapplication.h"
@@ -65,6 +67,24 @@ QVector<QPointF> circle(qreal radius, int segments)
         points.append(QPointF(radius * qCos(angle), radius * qSin(angle)));
     }
     return points;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A 30 x 20 cm rectangle with path points 1 to 4 at its corners and a notch, path point 5, 11 cm along its top.
+PieceOutline notchedRectangle()
+{
+    const QVector<QPointF> points = {QPointF(0, 0), QPointF(11, 0), QPointF(30, 0), QPointF(30, 20), QPointF(0, 20)};
+    QVector<OutlineNode> nodes;
+    const quint32 ids[] = {1, 5, 2, 3, 4};
+    for (int i = 0; i < points.size(); ++i)
+    {
+        OutlineNode node;
+        node.id = ids[i];
+        node.index = i;
+        node.notch = node.id == 5;
+        nodes.append(node);
+    }
+    return PieceOutline(points, nodes);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -227,7 +247,10 @@ void TST_PieceMesher::windingDoesNotMatter() const
 
     QCOMPARE(backward.area(), forward.area());
     QCOMPARE(backward.triangleCount(), forward.triangleCount());
-    QCOMPARE(polygonArea(boundaryPolygon(backward)), backward.area());
+
+    // The seam line keeps the outline's direction, the triangles all face the same way.
+    QCOMPARE(polygonArea(boundaryPolygon(forward)), forward.area());
+    QCOMPARE(polygonArea(boundaryPolygon(backward)), -backward.area());
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -280,4 +303,50 @@ void TST_PieceMesher::pieceIsMeshedInCentimetres() const
     QCOMPARE(mesh.piece_id, 42u);
     QCOMPARE(mesh.area(), 100.0);
     QCOMPARE(mesh.bounds(), QRectF(5, 3, 10, 10));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Seams are sewn from path point to path point, so every path point needs a vertex of its own, even one on a straight
+// edge that resampling would otherwise step over.
+void TST_PieceMesher::pathPointsBecomeVertices() const
+{
+    const PieceOutline outline = notchedRectangle();
+    const GarmentMesh mesh = PieceMesher().meshOutline(outline);
+
+    QCOMPARE(mesh.nodes.size(), outline.nodes().size());
+    for (int k = 0; k < mesh.nodes.size(); ++k)
+    {
+        const OutlineNode& node = mesh.nodes.at(k);
+        const OutlineNode& path_point = outline.nodes().at(k);
+        QCOMPARE(node.id, path_point.id);
+        QCOMPARE(node.notch, path_point.notch);
+
+        const QPointF vertex = mesh.rest_positions.at(static_cast<int>(mesh.boundary.at(node.index)));
+        QVERIFY2(QLineF(vertex, outline.points().at(path_point.index)).length() < 1e-9,
+                 qUtf8Printable(QStringLiteral("path point %1 has no vertex").arg(node.id)));
+        QVERIFY(k == 0 || node.index > mesh.nodes.at(k - 1).index);
+    }
+
+    const QString problem = triangleProblem(mesh, PieceMesher::defaultEdgeLength());
+    QVERIFY2(problem.isEmpty(), qUtf8Printable(problem));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_PieceMesher::meshStretchNamesVertices() const
+{
+    const GarmentMesh mesh = PieceMesher().meshOutline(notchedRectangle());
+    const quint32 offset = 100;
+    const SeamStretch top = mesh.stretch(1, 2, offset);
+
+    QVERIFY(qAbs(top.length() - 30.0) < 1e-9);
+    QCOMPARE(top.notches().size(), 1);
+    QVERIFY(qAbs(top.notches().first() - 11.0) < 1e-9);
+    QCOMPARE(top.vertices().size(), top.points().size());
+    QVERIFY(QLineF(top.points().first(), QPointF(0, 0)).length() < 1e-9);
+    QVERIFY(QLineF(top.points().last(), QPointF(30, 0)).length() < 1e-9);
+    for (int i = 0; i < top.vertices().size(); ++i)
+    {
+        const int vertex = static_cast<int>(top.vertices().at(i) - offset);
+        QVERIFY(QLineF(mesh.rest_positions.at(vertex), top.points().at(i)).length() < 1e-9);
+    }
 }

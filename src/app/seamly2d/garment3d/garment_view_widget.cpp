@@ -219,12 +219,12 @@ void GarmentViewWidget::rebuildScene()
             {
                 const PieceOutline outline = PieceOutline::fromPiece(piece, m_data);
                 CachedMesh cached = m_mesh_cache.value(id);
-                if (cached.outline.points() != outline.points())
+                if (cached.outline != outline)
                 {
-                    cached.mesh = m_mesher.meshPolygon(outline.points());
+                    cached.outline = outline;
+                    cached.mesh = m_mesher.meshOutline(outline);
                     cached.mesh.piece_id = id;
                 }
-                cached.outline = outline;
                 mesh_cache.insert(id, cached);
 
                 if (!cached.mesh.isEmpty())

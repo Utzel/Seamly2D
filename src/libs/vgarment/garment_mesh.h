@@ -30,23 +30,28 @@
 #include <QVector>
 #include <QtGlobal>
 
+#include "piece_outline.h"
+
 /// @brief Flat triangle mesh of one pattern piece.
 ///
 /// The positions are the piece as drafted: flat, unsewn and unstretched, in centimetres and in the
-/// coordinates of the piece scene. The 3D view lays them out as they are, the drape simulation will use them
+/// coordinates of the piece scene. The 3D view lays them out as they are, the drape simulation uses them
 /// as the rest shape its stretch and shear are measured against.
 struct GarmentMesh
 {
-    quint32           piece_id = 0;
-    QVector<QPointF>  rest_positions; ///< vertex positions in cm
-    QVector<quint32>  indices;        ///< triangles, three vertex indices each, all with positive signed area
-    QVector<quint32>  boundary;       ///< seam line vertices in order, wound the same way as the triangles
+    quint32              piece_id = 0;
+    QVector<QPointF>     rest_positions; ///< vertex positions in cm
+    QVector<quint32>     indices;        ///< triangles, three vertex indices each, all with positive signed area
+    QVector<quint32>     boundary;       ///< seam line vertices, in the order the piece's path runs
+    QVector<OutlineNode> nodes;          ///< the path points, each a vertex; index is its position in boundary
 
-    bool              isEmpty() const;
-    int               vertexCount() const;
-    int               triangleCount() const;
-    QRectF            bounds() const;
-    qreal             area() const;
+    bool                 isEmpty() const;
+    int                  vertexCount() const;
+    int                  triangleCount() const;
+    QRectF               bounds() const;
+    qreal                area() const;
+
+    SeamStretch          stretch(quint32 start_node, quint32 end_node, quint32 vertex_offset = 0) const;
 };
 
 #endif // GARMENT_MESH_H

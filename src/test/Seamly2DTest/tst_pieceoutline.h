@@ -43,6 +43,8 @@ private slots:
     void pointAtWalksTheStretch() const;
     void matchingLinesUpNotches() const;
     void unevenNotchesMatchOnlyTheEnds() const;
+    void stitchesSewBothSides() const;
+    void stitchesFollowNotches() const;
 
 private:
     Q_DISABLE_COPY(TST_PieceOutline)

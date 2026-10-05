@@ -42,6 +42,8 @@ private slots:
     void edgeLengthSetsResolution() const;
     void outlineWithoutAreaGivesEmptyMesh() const;
     void pieceIsMeshedInCentimetres() const;
+    void pathPointsBecomeVertices() const;
+    void meshStretchNamesVertices() const;
 
 private:
     Q_DISABLE_COPY(TST_PieceMesher)

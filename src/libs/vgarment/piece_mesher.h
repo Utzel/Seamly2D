@@ -30,15 +30,16 @@
 #include <QtGlobal>
 
 #include "garment_mesh.h"
+#include "piece_outline.h"
 
 class VContainer;
 class VPiece;
 
 /// @brief Turns pattern pieces into triangle meshes with evenly sized triangles.
 ///
-/// The seam line is resampled at the edge length, keeping its corners, and the inside is filled with a
-/// triangular lattice of the same spacing. Everything is Delaunay triangulated; seam line segments the
-/// triangulation leaves out are split until it keeps them all, so no triangle crosses the seam line.
+/// The seam line is resampled at the edge length, keeping its corners and the piece's path points, and the inside
+/// is filled with a triangular lattice of the same spacing. Everything is Delaunay triangulated; seam line segments
+/// the triangulation leaves out are split until it keeps them all, so no triangle crosses the seam line.
 ///
 /// The edge length plays the role of CLO's particle distance: coarse while editing, fine for the final drape.
 class PieceMesher
@@ -52,6 +53,7 @@ public:
     void               setEdgeLength(qreal edge_length);
 
     GarmentMesh        meshPolygon(const QVector<QPointF>& outline) const;
+    GarmentMesh        meshOutline(const PieceOutline& outline) const;
     GarmentMesh        meshPiece(quint32 piece_id, const VPiece& piece, const VContainer* data) const;
 
 private:

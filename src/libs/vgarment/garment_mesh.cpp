@@ -64,3 +64,26 @@ qreal GarmentMesh::area() const
     }
     return total;
 }
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The seam line from one path point forward to another, as PieceOutline::stretch(), naming the mesh vertex of
+/// each point. The offset is added to the vertex numbers, for meshes that are put together with others.
+SeamStretch GarmentMesh::stretch(quint32 start_node, quint32 end_node, quint32 vertex_offset) const
+{
+    QVector<QPointF> seam_line;
+    seam_line.reserve(boundary.size());
+    for (const quint32 index : boundary)
+    {
+        seam_line.append(rest_positions.at(static_cast<int>(index)));
+    }
+
+    const SeamStretch along_seam_line = PieceOutline(seam_line, nodes).stretch(start_node, end_node);
+
+    QVector<quint32> vertices;
+    vertices.reserve(along_seam_line.vertices().size());
+    for (const quint32 position : along_seam_line.vertices())
+    {
+        vertices.append(boundary.at(static_cast<int>(position)) + vertex_offset);
+    }
+    return SeamStretch(along_seam_line.points(), along_seam_line.notches(), vertices);
+}

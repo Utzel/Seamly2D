@@ -28,6 +28,8 @@
 #include <QScopedPointer>
 #include <QtTest>
 
+#include <algorithm>
+
 #include "../vgarment/piece_outline.h"
 #include "../vgarment/seam_stretch.h"
 #include "../vgeometry/vpointf.h"
@@ -216,4 +218,52 @@ void TST_PieceOutline::unevenNotchesMatchOnlyTheEnds() const
     QCOMPARE(matches.at(1).second, 20.0);
 
     QVERIFY(SeamStretch::matches(first, SeamStretch()).isEmpty());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A 10 cm side with vertices 0 to 2 sewn to a 12 cm side with vertices 10 to 13: each vertex is sewn onto the point
+// of the other side it meets, and where vertex meets vertex there is only one stitch.
+void TST_PieceOutline::stitchesSewBothSides() const
+{
+    const SeamStretch first({QPointF(0, 0), QPointF(5, 0), QPointF(10, 0)}, {}, {0, 1, 2});
+    const SeamStretch second({QPointF(0, 10), QPointF(4, 10), QPointF(8, 10), QPointF(12, 10)}, {}, {10, 11, 12, 13});
+
+    const QVector<Stitch> stitches = SeamStretch::stitches(first, second);
+    QCOMPARE(stitches.size(), 5);
+
+    auto has_stitch = [&stitches](quint32 vertex, quint32 edge_start, quint32 edge_end, qreal along)
+    {
+        return std::any_of(stitches.cbegin(), stitches.cend(), [=](const Stitch& stitch)
+        {
+            return stitch.vertex == vertex && stitch.edge_start == edge_start && stitch.edge_end == edge_end
+                   && qAbs(stitch.along - along) < 1e-9;
+        });
+    };
+    QVERIFY(has_stitch(0, 10, 10, 0));
+    QVERIFY(has_stitch(1, 11, 12, 0.5));
+    QVERIFY(has_stitch(2, 13, 13, 0));
+    QVERIFY(has_stitch(11, 0, 1, 4.0 / 6.0));
+    QVERIFY(has_stitch(12, 1, 2, 2.0 / 6.0));
+
+    QVERIFY(SeamStretch::stitches(first, SeamStretch({QPointF(0, 0), QPointF(1, 0)})).isEmpty());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Between lined up notches the sides are eased onto each other piece by piece.
+void TST_PieceOutline::stitchesFollowNotches() const
+{
+    const SeamStretch first({QPointF(0, 0), QPointF(5, 0), QPointF(10, 0)}, {2}, {0, 1, 2});
+    const SeamStretch second({QPointF(0, 10), QPointF(4, 10), QPointF(8, 10), QPointF(12, 10)}, {9}, {10, 11, 12, 13});
+
+    const QVector<Stitch> stitches = SeamStretch::stitches(first, second);
+
+    // Vertex 1 is 5 cm along: 3 of the 8 cm from the notch to the end, so 3/8 of the 3 cm past the other notch.
+    const auto middle = std::find_if(stitches.cbegin(), stitches.cend(), [](const Stitch& stitch)
+    {
+        return stitch.vertex == 1;
+    });
+    QVERIFY(middle != stitches.cend());
+    QCOMPARE(middle->edge_start, 12u);
+    QCOMPARE(middle->edge_end, 13u);
+    QVERIFY(qAbs(middle->along - (9.0 + 3.0 * 3.0 / 8.0 - 8.0) / 4.0) < 1e-9);
 }

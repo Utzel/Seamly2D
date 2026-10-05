@@ -33,7 +33,6 @@
 #include <algorithm>
 
 #include "../vobj/delaunay.h"
-#include "piece_outline.h"
 
 namespace
 {
@@ -51,6 +50,13 @@ const int max_split_rounds = 12;
 
 // Points closer than this, in cm, count as the same point.
 const qreal same_point_tolerance = 1e-6;
+
+// A closed seam line, and which of its points each path point of the piece is, or -1 for a path point that was lost.
+struct SeamLine
+{
+    QVector<QPointF> points;
+    QVector<int>     node_points;
+};
 
 //---------------------------------------------------------------------------------------------------------------------
 qreal signedArea(const QVector<QPointF>& polygon)
@@ -72,32 +78,42 @@ qreal doubledTriangleArea(const QPointF& a, const QPointF& b, const QPointF& c)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Drops repeated points and the closing point, and winds the outline so its signed area is positive.
-// Returns an empty outline if nothing with an area is left.
-QVector<QPointF> cleanOutline(const QVector<QPointF>& outline)
+// Drops repeated points and the closing point; path points on a dropped point move to the point it repeats.
+// Returns a seam line without points if nothing with an area is left.
+SeamLine cleanOutline(const PieceOutline& outline)
 {
-    QVector<QPointF> cleaned;
-    cleaned.reserve(outline.size());
-    for (const QPointF& point : outline)
+    const QVector<QPointF>& points = outline.points();
+
+    SeamLine cleaned;
+    QVector<int> new_index(points.size(), 0);
+    for (int i = 0; i < points.size(); ++i)
     {
-        if (cleaned.isEmpty() || QLineF(cleaned.last(), point).length() > same_point_tolerance)
+        if (cleaned.points.isEmpty() || QLineF(cleaned.points.last(), points.at(i)).length() > same_point_tolerance)
         {
-            cleaned.append(point);
+            cleaned.points.append(points.at(i));
         }
+        new_index[i] = static_cast<int>(cleaned.points.size()) - 1;
     }
-    while (cleaned.size() > 1 && QLineF(cleaned.last(), cleaned.first()).length() <= same_point_tolerance)
+    while (cleaned.points.size() > 1 && QLineF(cleaned.points.last(), cleaned.points.first()).length()
+                                        <= same_point_tolerance)
     {
-        cleaned.removeLast();
+        const int removed = static_cast<int>(cleaned.points.size()) - 1;
+        cleaned.points.removeLast();
+        std::replace(new_index.begin(), new_index.end(), removed, 0);
     }
 
-    const qreal area = cleaned.size() >= 3 ? signedArea(cleaned) : 0;
+    const qreal area = cleaned.points.size() >= 3 ? signedArea(cleaned.points) : 0;
     if (qAbs(area) <= same_point_tolerance)
     {
-        cleaned.clear();
+        cleaned.points.clear();
     }
-    else if (area < 0)
+    else
     {
-        std::reverse(cleaned.begin(), cleaned.end());
+        for (const OutlineNode& node : outline.nodes())
+        {
+            cleaned.node_points.append(node.index >= 0 && node.index < new_index.size() ? new_index.at(node.index)
+                                                                                        : -1);
+        }
     }
     return cleaned;
 }
@@ -133,13 +149,14 @@ void appendResampledRun(const QVector<QPointF>& run, qreal edge_length, QVector<
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Resamples the outline so its segments are about the edge length long. Corners are kept, the curves between them
-// are spaced out evenly.
-QVector<QPointF> resampleOutline(const QVector<QPointF>& outline, qreal edge_length)
+// Resamples the seam line so its segments are about the edge length long. Corners and path points are kept, the
+// curves between them are spaced out evenly.
+SeamLine resampleOutline(const SeamLine& seam_line, qreal edge_length)
 {
+    const QVector<QPointF>& outline = seam_line.points;
     const int count = static_cast<int>(outline.size());
 
-    QVector<int> corners;
+    QVector<int> kept;
     for (int i = 0; i < count; ++i)
     {
         const QPointF& previous = outline.at((i + count - 1) % count);
@@ -149,28 +166,36 @@ QVector<QPointF> resampleOutline(const QVector<QPointF>& outline, qreal edge_len
         {
             turn -= 360.0;
         }
-        if (qAbs(turn) > corner_angle)
+        if (qAbs(turn) > corner_angle || seam_line.node_points.contains(i))
         {
-            corners.append(i);
+            kept.append(i);
         }
     }
-    if (corners.isEmpty())
+    if (kept.isEmpty())
     {
-        corners.append(0);
+        kept.append(0);
     }
 
-    QVector<QPointF> resampled;
-    for (int c = 0; c < corners.size(); ++c)
+    SeamLine resampled;
+    QVector<int> kept_at(count, -1);
+    for (int k = 0; k < kept.size(); ++k)
     {
-        const int end = corners.at((c + 1) % corners.size());
-        int i = corners.at(c);
+        const int end = kept.at((k + 1) % kept.size());
+        int i = kept.at(k);
+        kept_at[i] = static_cast<int>(resampled.points.size());
+
         QVector<QPointF> run{outline.at(i)};
         do
         {
             i = (i + 1) % count;
             run.append(outline.at(i));
         } while (i != end);
-        appendResampledRun(run, edge_length, resampled);
+        appendResampledRun(run, edge_length, resampled.points);
+    }
+
+    for (const int point : seam_line.node_points)
+    {
+        resampled.node_points.append(point >= 0 ? kept_at.at(point) : -1);
     }
     return resampled;
 }
@@ -322,30 +347,38 @@ QVector<int> missingSegments(const QVector<quint32>& triangles, const QVector<QP
 //---------------------------------------------------------------------------------------------------------------------
 // Splits the given seam line segments in half. The halves' diametral circles lie inside the whole segment's, so the
 // lattice points stay clear of them.
-QVector<QPointF> splitSegments(const QVector<QPointF>& seam_line, const QVector<int>& segments)
+SeamLine splitSegments(const SeamLine& seam_line, const QVector<int>& segments)
 {
-    QVector<QPointF> split;
-    split.reserve(seam_line.size() + segments.size());
+    SeamLine split;
+    split.points.reserve(seam_line.points.size() + segments.size());
+    QVector<int> new_index(seam_line.points.size(), 0);
     int next_segment = 0;
-    for (int i = 0; i < seam_line.size(); ++i)
+    for (int i = 0; i < seam_line.points.size(); ++i)
     {
-        split.append(seam_line.at(i));
+        new_index[i] = static_cast<int>(split.points.size());
+        split.points.append(seam_line.points.at(i));
         if (next_segment < segments.size() && segments.at(next_segment) == i)
         {
-            split.append((seam_line.at(i) + seam_line.at((i + 1) % seam_line.size())) / 2.0);
+            const QPointF& next = seam_line.points.at((i + 1) % seam_line.points.size());
+            split.points.append((seam_line.points.at(i) + next) / 2.0);
             ++next_segment;
         }
+    }
+
+    for (const int point : seam_line.node_points)
+    {
+        split.node_points.append(point >= 0 ? new_index.at(point) : -1);
     }
     return split;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Keeps the triangles inside the seam line, winds them like the seam line and drops points no triangle uses.
-GarmentMesh buildMesh(const QVector<QPointF>& seam_line, const QVector<QPointF>& interior,
+// Keeps the triangles inside the seam line, winds them all the same way and drops points no triangle uses.
+GarmentMesh buildMesh(const SeamLine& seam_line, const QVector<OutlineNode>& nodes, const QVector<QPointF>& interior,
                       const QVector<quint32>& triangles)
 {
-    const QVector<QPointF> points = seam_line + interior;
-    const QPolygonF polygon(seam_line);
+    const QVector<QPointF> points = seam_line.points + interior;
+    const QPolygonF polygon(seam_line.points);
 
     QVector<quint32> kept;
     kept.reserve(triangles.size());
@@ -376,14 +409,16 @@ GarmentMesh buildMesh(const QVector<QPointF>& seam_line, const QVector<QPointF>&
     }
 
     GarmentMesh mesh;
+    QVector<int> boundary_position(seam_line.points.size(), -1);
     for (int i = 0; i < points.size(); ++i)
     {
         if (new_index.at(i) >= 0)
         {
             new_index[i] = static_cast<int>(mesh.rest_positions.size());
             mesh.rest_positions.append(points.at(i));
-            if (i < seam_line.size())
+            if (i < seam_line.points.size())
             {
+                boundary_position[i] = static_cast<int>(mesh.boundary.size());
                 mesh.boundary.append(static_cast<quint32>(new_index.at(i)));
             }
         }
@@ -393,6 +428,17 @@ GarmentMesh buildMesh(const QVector<QPointF>& seam_line, const QVector<QPointF>&
     for (const quint32 index : kept)
     {
         mesh.indices.append(static_cast<quint32>(new_index.at(static_cast<int>(index))));
+    }
+
+    for (int k = 0; k < nodes.size() && k < seam_line.node_points.size(); ++k)
+    {
+        const int point = seam_line.node_points.at(k);
+        if (point >= 0 && boundary_position.at(point) >= 0)
+        {
+            OutlineNode node = nodes.at(k);
+            node.index = boundary_position.at(point);
+            mesh.nodes.append(node);
+        }
     }
     return mesh;
 }
@@ -432,25 +478,33 @@ void PieceMesher::setEdgeLength(qreal edge_length)
 /// an area, or one that touches itself, gives an empty mesh.
 GarmentMesh PieceMesher::meshPolygon(const QVector<QPointF>& outline) const
 {
-    GarmentMesh mesh;
-    const QVector<QPointF> cleaned = cleanOutline(outline);
-    if (!cleaned.isEmpty())
-    {
-        QVector<QPointF> seam_line = resampleOutline(cleaned, m_edge_length);
-        const QVector<QPointF> interior = latticePoints(seam_line, m_edge_length);
+    return meshOutline(PieceOutline(outline, QVector<OutlineNode>()));
+}
 
-        QVector<quint32> triangles = delaunayTriangles(seam_line + interior);
-        QVector<int> missing = missingSegments(triangles, seam_line);
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Meshes the area inside a piece's outline, as meshPolygon(), with a vertex on each of its path points so
+/// seams can be sewn from point to point.
+GarmentMesh PieceMesher::meshOutline(const PieceOutline& outline) const
+{
+    GarmentMesh mesh;
+    const SeamLine cleaned = cleanOutline(outline);
+    if (!cleaned.points.isEmpty())
+    {
+        SeamLine seam_line = resampleOutline(cleaned, m_edge_length);
+        const QVector<QPointF> interior = latticePoints(seam_line.points, m_edge_length);
+
+        QVector<quint32> triangles = delaunayTriangles(seam_line.points + interior);
+        QVector<int> missing = missingSegments(triangles, seam_line.points);
         for (int round = 0; round < max_split_rounds && !missing.isEmpty(); ++round)
         {
             seam_line = splitSegments(seam_line, missing);
-            triangles = delaunayTriangles(seam_line + interior);
-            missing = missingSegments(triangles, seam_line);
+            triangles = delaunayTriangles(seam_line.points + interior);
+            missing = missingSegments(triangles, seam_line.points);
         }
 
         if (!triangles.isEmpty())
         {
-            mesh = buildMesh(seam_line, interior, triangles);
+            mesh = buildMesh(seam_line, outline.nodes(), interior, triangles);
         }
     }
     return mesh;
@@ -462,7 +516,7 @@ GarmentMesh PieceMesher::meshPolygon(const QVector<QPointF>& outline) const
 /// Seam allowance is left out: it folds to the inside of the garment and doesn't change its shape.
 GarmentMesh PieceMesher::meshPiece(quint32 piece_id, const VPiece& piece, const VContainer* data) const
 {
-    GarmentMesh mesh = meshPolygon(PieceOutline::fromPiece(piece, data).points());
+    GarmentMesh mesh = meshOutline(PieceOutline::fromPiece(piece, data));
     mesh.piece_id = piece_id;
     return mesh;
 }

@@ -36,29 +36,45 @@ struct SeamMatch
     qreal second = 0;
 };
 
+/// @brief A vertex sewn onto the other side of a seam, at a point between two of that side's vertices.
+///
+/// Both ends of the edge are the same vertex where the stitch meets a vertex.
+struct Stitch
+{
+    quint32 vertex = 0;
+    quint32 edge_start = 0;
+    quint32 edge_end = 0;
+    qreal   along = 0;  ///< where on the edge, from 0 at its start to 1 at its end
+};
+
 /// @brief A stretch of seam line that is sewn to another: its points in cm, in the direction it is sewn, and how far
-/// along it its notches are.
+/// along it its notches are. Taken from a mesh, it also knows which vertex each point is.
 class SeamStretch
 {
 public:
-                            SeamStretch() = default;
-    explicit                SeamStretch(const QVector<QPointF>& points,
-                                        const QVector<qreal>& notches = QVector<qreal>());
+                              SeamStretch() = default;
+    explicit                  SeamStretch(const QVector<QPointF>& points,
+                                          const QVector<qreal>& notches = QVector<qreal>(),
+                                          const QVector<quint32>& vertices = QVector<quint32>());
 
-    const QVector<QPointF>& points() const;
-    const QVector<qreal>&   notches() const;
+    const QVector<QPointF>&   points() const;
+    const QVector<qreal>&     notches() const;
+    const QVector<quint32>&   vertices() const;
+    const QVector<qreal>&     distances() const;
 
-    bool                    isEmpty() const;
-    qreal                   length() const;
-    QPointF                 pointAt(qreal distance) const;
-    SeamStretch             reversed() const;
+    bool                      isEmpty() const;
+    qreal                     length() const;
+    QPointF                   pointAt(qreal distance) const;
+    SeamStretch               reversed() const;
 
     static QVector<SeamMatch> matches(const SeamStretch& first, const SeamStretch& second);
+    static QVector<Stitch>    stitches(const SeamStretch& first, const SeamStretch& second);
 
 private:
-    QVector<QPointF>        m_points;
-    QVector<qreal>          m_notches;
-    QVector<qreal>          m_distances;
+    QVector<QPointF>          m_points;
+    QVector<qreal>            m_notches;
+    QVector<quint32>          m_vertices;
+    QVector<qreal>            m_distances;
 };
 
 #endif // SEAM_STRETCH_H
