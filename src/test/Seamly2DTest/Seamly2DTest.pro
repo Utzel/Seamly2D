@@ -52,7 +52,8 @@ SOURCES += \
     tst_vtranslatevars.cpp \
     tst_vabstractpiece.cpp \
     tst_vtoolmove.cpp \
-    tst_piecemesher.cpp
+    tst_piecemesher.cpp \
+    tst_bodymodel.cpp
 
 *msvc*:SOURCES += stable.cpp
 
@@ -81,7 +82,8 @@ HEADERS += \
     tst_vtranslatevars.h \
     tst_vabstractpiece.h \
     tst_vtoolmove.h \
-    tst_piecemesher.h
+    tst_piecemesher.h \
+    tst_bodymodel.h
 
 include(warnings.pri)
 

@@ -76,6 +76,7 @@
 #include "tst_vtranslatevars.h"
 #include "tst_vtoolmove.h"
 #include "tst_piecemesher.h"
+#include "tst_bodymodel.h"
 
 #include "../vmisc/def.h"
 #include "../qmuparser/qmudef.h"
@@ -185,6 +186,7 @@ int main(int argc, char** argv)
     ASSERT_TEST(new TST_VTranslateVars());
     ASSERT_TEST(new TST_VToolMove());
     ASSERT_TEST(new TST_PieceMesher());
+    ASSERT_TEST(new TST_BodyModel());
 
     return status;
 }

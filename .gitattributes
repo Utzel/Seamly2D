@@ -64,6 +64,9 @@
 *.snk      binary
 *.pfx      binary
 *.pdf      binary
+
+#data
+*.dat      binary
 #--------- end encoding for additional files 
 
 #--------- Explicitly declare text files you want to always be normalized and converted to native line endings on checkout.
