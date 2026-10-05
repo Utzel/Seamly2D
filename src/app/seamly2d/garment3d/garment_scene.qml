@@ -121,10 +121,13 @@ Rectangle {
         }
 
         // The avatar, fitted to the pattern's measurements, in a plain grey like a dress form. While sewing it fades,
-        // so the board behind it can be seen.
+        // so the board behind it can be seen; while arranging it can be clicked to put pieces on.
         Model {
+            readonly property bool isAvatar: true
+
             visible: root.sceneModel.hasAvatar
             opacity: root.seamEditor.sewing ? 0.25 : 1.0
+            pickable: root.sceneModel.arranging
             geometry: root.sceneModel.avatarGeometry
 
             materials: PrincipledMaterial {
@@ -141,8 +144,9 @@ Rectangle {
             Repeater3D {
                 model: root.sceneModel
 
-                // Each piece sits a little in front of the one before, so pieces that overlap in the piece scene
-                // don't flicker where they overlap.
+                // Each piece on the board sits a little in front of the one before, so pieces that overlap in the
+                // piece scene don't flicker where they overlap. Placed pieces come in scene coordinates, so they
+                // undo the board's move.
                 delegate: Node {
                     id: piece_node
 
@@ -152,8 +156,9 @@ Rectangle {
                     required property Geometry pieceGeometry
                     required property Geometry pieceOutline
                     required property bool selected
+                    required property bool placed
 
-                    z: index * 0.05
+                    position: placed ? root.sceneModel.boardOffset.times(-1) : Qt.vector3d(0, 0, index * 0.05)
 
                     Model {
                         readonly property int pieceId: piece_node.pieceId
@@ -232,11 +237,24 @@ Rectangle {
         origin: orbit_origin
         camera: camera
 
-        // Seams get the click first; what they leave selects a piece.
+        // While arranging, a click on the avatar places the selected piece there. Otherwise seams get the click
+        // first, and what they leave selects a piece.
         TapHandler {
             onTapped: (event_point) => {
                 const x = event_point.position.x
                 const y = event_point.position.y
+                if (root.sceneModel.arranging) {
+                    const result = view.pick(x, y)
+                    const target = result.objectHit
+                    if (target && target.isAvatar === true) {
+                        root.sceneModel.placeAt(result.scenePosition.x, result.scenePosition.y,
+                                                result.scenePosition.z)
+                    } else {
+                        root.sceneModel.pickPiece(target && target.pieceId !== undefined ? target.pieceId : 0)
+                    }
+                    return
+                }
+
                 const point = root.boardPoint(x, y)
                 const used = point !== undefined
                              && root.seamEditor.click(point.x, point.y, root.boardTolerance(x, y, point))
@@ -286,9 +304,11 @@ Rectangle {
         anchors.bottom: parent.bottom
         anchors.margins: 6
         visible: root.sceneModel.pieceCount > 0 || root.sceneModel.hasAvatar
-        text: root.seamEditor.hint !== "" ? root.seamEditor.hint : root.hintText
+        readonly property string task: root.sceneModel.hint !== "" ? root.sceneModel.hint : root.seamEditor.hint
+
+        text: task !== "" ? task : root.hintText
         color: root.textColor
-        opacity: root.seamEditor.hint !== "" ? 1.0 : 0.6
+        opacity: task !== "" ? 1.0 : 0.6
         font.pointSize: 8
         wrapMode: Text.WordWrap
         horizontalAlignment: Text.AlignHCenter

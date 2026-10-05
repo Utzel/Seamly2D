@@ -41,7 +41,8 @@ class PieceGeometry;
 /// @brief What the 3D scene shows, for the scene's QML: the pieces, one row each, and the avatar.
 ///
 /// Geometries are kept while the set of pieces stays the same, so editing a piece updates its mesh in place
-/// instead of rebuilding the whole scene. With an avatar in the scene, the pieces stand behind it as a board.
+/// instead of rebuilding the whole scene. Pieces placed on the avatar are drawn where they are put; the others lie
+/// on a board, which stands behind the avatar when there is one.
 class GarmentSceneModel : public QAbstractListModel
 {
     Q_OBJECT
@@ -53,6 +54,8 @@ class GarmentSceneModel : public QAbstractListModel
     Q_PROPERTY(bool hasAvatar READ hasAvatar NOTIFY avatarChanged)
     Q_PROPERTY(QObject* avatarGeometry READ avatarGeometry NOTIFY avatarChanged)
     Q_PROPERTY(QString avatarNote READ avatarNote NOTIFY avatarChanged)
+    Q_PROPERTY(bool arranging READ isArranging NOTIFY arrangingChanged)
+    Q_PROPERTY(QString hint READ hint NOTIFY hintChanged)
 
 public:
     enum Roles
@@ -62,15 +65,17 @@ public:
         PieceColorRole,
         PieceGeometryRole,
         PieceOutlineRole,
-        SelectedRole
+        SelectedRole,
+        PlacedRole
     };
 
     struct Piece
     {
-        quint32     id = 0;
-        QString     name;
-        QColor      color;
-        GarmentMesh mesh;
+        quint32            id = 0;
+        QString            name;
+        QColor             color;
+        GarmentMesh        mesh;
+        QVector<QVector3D> positions;  ///< where the piece is put, in scene coordinates; none for the board
     };
 
     explicit               GarmentSceneModel(QObject* parent = nullptr);
@@ -80,6 +85,8 @@ public:
     virtual QHash<int, QByteArray> roleNames() const override;
 
     void                   setPieces(const QVector<Piece>& pieces);
+    void                   setPiecePositions(quint32 id, const QVector<QVector3D>& positions);
+    bool                   isPlaced(quint32 id) const;
     void                   clear();
 
     quint32                selectedPiece() const;
@@ -97,7 +104,13 @@ public:
     QObject*               avatarGeometry() const;
     QString                avatarNote() const;
 
+    bool                   isArranging() const;
+    void                   setArranging(bool arranging);
+    QString                hint() const;
+    void                   setHint(const QString& hint);
+
     Q_INVOKABLE void       pickPiece(int id);
+    Q_INVOKABLE void       placeAt(qreal x, qreal y, qreal z);
 
 signals:
     void                   pieceCountChanged();
@@ -106,6 +119,9 @@ signals:
     void                   avatarChanged();
     void                   framingRequested();
     void                   piecePicked(quint32 id);
+    void                   arrangingChanged();
+    void                   hintChanged();
+    void                   placeRequested(const QVector3D& point);
 
 private:
     Q_DISABLE_COPY(GarmentSceneModel)
@@ -115,6 +131,8 @@ private:
         quint32        id = 0;
         QString        name;
         QColor         color;
+        GarmentMesh    mesh;
+        bool           placed = false;
         PieceGeometry* geometry = nullptr;
         PieceGeometry* outline = nullptr;
     };
@@ -130,6 +148,8 @@ private:
     QVector3D              m_avatar_minimum;
     QVector3D              m_avatar_maximum;
     QString                m_avatar_note;
+    bool                   m_arranging;
+    QString                m_hint;
 
     void                   updateSceneBounds();
 };

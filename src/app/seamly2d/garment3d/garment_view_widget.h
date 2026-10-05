@@ -33,12 +33,15 @@
 #include <QVector>
 #include <QWidget>
 
+#include "../vgarment/body_collider.h"
 #include "../vgarment/body_fitter.h"
 #include "../vgarment/body_model.h"
+#include "../vgarment/body_wrap.h"
 #include "../vgarment/garment_mesh.h"
 #include "../vgarment/piece_mesher.h"
 #include "../vgarment/piece_outline.h"
 
+class DrapeRunner;
 class GarmentSceneModel;
 class QAction;
 class QLabel;
@@ -47,6 +50,7 @@ class QTimer;
 class SeamEditor;
 class VAbstractPattern;
 class VContainer;
+struct VPieceArrangement;
 struct VSeam;
 
 /// @brief Content of the 3D View dock: the pattern's pieces and an avatar fitted to the pattern's measurements, in a
@@ -54,14 +58,16 @@ struct VSeam;
 ///
 /// The Qt Quick scene, and with it the GPU context, is only created the first time the dock is shown, and the
 /// pieces are only meshed while it is visible, so the view costs nothing until it is used. The avatar is fitted on a
-/// worker thread and only when the measurements change. Seams are sewn on the board of pieces and go through the
-/// undo stack like any other change to the pattern.
+/// worker thread and only when the measurements change. Seams are sewn on the board of pieces and pieces arranged on
+/// the avatar, both through the undo stack like any other change to the pattern. The drape is simulated on a thread
+/// of its own.
 class GarmentViewWidget : public QWidget
 {
     Q_OBJECT
 
 public:
                        GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QWidget* parent = nullptr);
+    virtual           ~GarmentViewWidget();
 
 signals:
     void               pieceSelected(quint32 id);
@@ -74,15 +80,24 @@ public slots:
 
 protected:
     virtual void       showEvent(QShowEvent* event) override;
+    virtual void       hideEvent(QHideEvent* event) override;
 
 private slots:
     void               rebuildScene();
     void               scenePicked(quint32 id);
     void               avatarFitted();
     void               updateSeams();
+    void               updateArrangements();
     void               flipSeam();
-    void               removeSeam();
-    void               updateSeamActions();
+    void               removeSelected();
+    void               cancel();
+    void               setArranging(bool arranging);
+    void               placePiece(const QVector3D& point);
+    void               setSimulating(bool simulating);
+    void               resetDrape();
+    void               drapeFrame(int generation, const QVector<QVector3D>& positions);
+    void               drapeSettled(int generation);
+    void               updateActions();
 
 private:
     Q_DISABLE_COPY(GarmentViewWidget)
@@ -112,6 +127,14 @@ private:
         QVector<QVector3D> positions;
     };
 
+    // Where a piece's vertices are among all the vertices of the drape being simulated.
+    struct DrapePiece
+    {
+        quint32 id = 0;
+        int     offset = 0;
+        int     count = 0;
+    };
+
     VContainer*                m_data;
     VAbstractPattern*          m_doc;
     GarmentSceneModel*         m_scene_model;
@@ -120,6 +143,9 @@ private:
     QAction*                   m_flip_action;
     QAction*                   m_remove_action;
     QAction*                   m_cancel_action;
+    QAction*                   m_arrange_action;
+    QAction*                   m_simulate_action;
+    QAction*                   m_reset_action;
     QQuickWidget*              m_quick_widget;
     QLabel*                    m_message_label;
     QTimer*                    m_rebuild_timer;
@@ -133,12 +159,23 @@ private:
     AvatarRequest              m_avatar_request;
     bool                       m_has_avatar_request;
     quint64                    m_avatar_generation;
+    QScopedPointer<BodyWrap>   m_wrap;
+    BodyCollider               m_collider;
+    QHash<quint32, PieceArrangement>   m_arrangements;
+    QHash<quint32, QVector<QVector3D>> m_draped;
+    QVector<DrapePiece>        m_drape_pieces;
+    DrapeRunner*               m_runner;
 
     void               createScene();
     void               createToolBar();
     void               showError(const QString& error);
     void               sewSeam(const VSeam& seam);
     void               saveSeams(const QString& text, const QVector<VSeam>& seams);
+    void               saveArrangements(const QString& text, const QVector<VPieceArrangement>& arrangements);
+    void               readArrangements();
+    QVector<QVector3D> piecePositions(quint32 id, const GarmentMesh& mesh) const;
+    void               startSimulation();
+    void               updateHint();
     void               updateAvatar();
     AvatarRequest      wantedAvatar() const;
     QString            avatarNote(const AvatarFit& result) const;

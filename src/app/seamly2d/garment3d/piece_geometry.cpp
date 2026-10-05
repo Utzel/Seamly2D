@@ -35,6 +35,44 @@ namespace
 {
 // Position, normal and texture coordinate, as floats.
 const int floats_per_vertex = 3 + 3 + 2;
+
+//---------------------------------------------------------------------------------------------------------------------
+// The given positions, or with none the piece lying flat on the board, facing the camera.
+QVector<QVector3D> positionsOrFlat(const GarmentMesh& mesh, const QVector<QVector3D>& positions)
+{
+    if (positions.size() == mesh.vertexCount())
+    {
+        return positions;
+    }
+
+    QVector<QVector3D> flat;
+    flat.reserve(mesh.vertexCount());
+    for (const QPointF& point : mesh.rest_positions)
+    {
+        flat.append(QVector3D(static_cast<float>(point.x()), static_cast<float>(-point.y()), 0.0f));
+    }
+    return flat;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void bounds(const QVector<QVector3D>& positions, QVector3D* minimum, QVector3D* maximum)
+{
+    const float largest = std::numeric_limits<float>::max();
+    *minimum = QVector3D(largest, largest, largest);
+    *maximum = -*minimum;
+    for (const QVector3D& position : positions)
+    {
+        *minimum = QVector3D(qMin(minimum->x(), position.x()), qMin(minimum->y(), position.y()),
+                             qMin(minimum->z(), position.z()));
+        *maximum = QVector3D(qMax(maximum->x(), position.x()), qMax(maximum->y(), position.y()),
+                             qMax(maximum->z(), position.z()));
+    }
+    if (positions.isEmpty())
+    {
+        *minimum = QVector3D();
+        *maximum = QVector3D();
+    }
+}
 } // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -43,48 +81,57 @@ PieceGeometry::PieceGeometry(QQuick3DObject* parent)
 {}
 
 //---------------------------------------------------------------------------------------------------------------------
-/// @brief Replaces the geometry with the mesh. Texture coordinates are the flat piece's positions in cm, so a fabric
-/// texture can later be scaled to its real repeat size.
-void PieceGeometry::setMesh(const GarmentMesh& mesh)
+/// @brief Replaces the geometry with the mesh, at the given positions in cm, or flat on the board without them.
+/// Texture coordinates are the flat piece's positions in cm, so a fabric texture can later be scaled to its real
+/// repeat size.
+void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions)
 {
-    const int vertex_bytes = floats_per_vertex * static_cast<int>(sizeof(float));
+    const QVector<QVector3D> placed = positionsOrFlat(mesh, positions);
 
-    QByteArray vertex_data(mesh.vertexCount() * vertex_bytes, Qt::Uninitialized);
-    float* vertex = reinterpret_cast<float*>(vertex_data.data());
-
-    const float largest = std::numeric_limits<float>::max();
-    QVector3D minimum(largest, largest, 0.0f);
-    QVector3D maximum(-largest, -largest, 0.0f);
-
-    for (const QPointF& position : mesh.rest_positions)
-    {
-        const float x = static_cast<float>(position.x());
-        const float y = static_cast<float>(-position.y());
-
-        *vertex++ = x;
-        *vertex++ = y;
-        *vertex++ = 0.0f;
-        *vertex++ = 0.0f;
-        *vertex++ = 0.0f;
-        *vertex++ = 1.0f;
-        *vertex++ = static_cast<float>(position.x());
-        *vertex++ = static_cast<float>(position.y());
-
-        minimum.setX(qMin(minimum.x(), x));
-        minimum.setY(qMin(minimum.y(), y));
-        maximum.setX(qMax(maximum.x(), x));
-        maximum.setY(qMax(maximum.y(), y));
-    }
-
-    // Flipping y turns every triangle around; swapping two corners turns them back to face the camera.
-    QByteArray index_data(mesh.indices.size() * static_cast<int>(sizeof(quint32)), Qt::Uninitialized);
-    quint32* index = reinterpret_cast<quint32*>(index_data.data());
+    // The piece scene's y axis points down, the 3D scene's up, which turns every triangle around; swapping two
+    // corners turns them back to face outwards. The normals follow that turned-back order.
+    QVector<quint32> corners;
+    corners.reserve(mesh.indices.size());
+    QVector<QVector3D> normals(placed.size());
     for (int i = 0; i + 2 < mesh.indices.size(); i += 3)
     {
-        *index++ = mesh.indices.at(i);
-        *index++ = mesh.indices.at(i + 2);
-        *index++ = mesh.indices.at(i + 1);
+        const quint32 a = mesh.indices.at(i);
+        const quint32 b = mesh.indices.at(i + 2);
+        const quint32 c = mesh.indices.at(i + 1);
+        corners << a << b << c;
+
+        const QVector3D& pa = placed.at(static_cast<int>(a));
+        const QVector3D face = QVector3D::crossProduct(placed.at(static_cast<int>(b)) - pa,
+                                                       placed.at(static_cast<int>(c)) - pa);
+        normals[static_cast<int>(a)] += face;
+        normals[static_cast<int>(b)] += face;
+        normals[static_cast<int>(c)] += face;
     }
+
+    const int vertex_bytes = floats_per_vertex * static_cast<int>(sizeof(float));
+    QByteArray vertex_data(mesh.vertexCount() * vertex_bytes, Qt::Uninitialized);
+    float* vertex = reinterpret_cast<float*>(vertex_data.data());
+    for (int i = 0; i < mesh.vertexCount(); ++i)
+    {
+        const QVector3D& position = placed.at(i);
+        const QVector3D normal = normals.at(i).isNull() ? QVector3D(0, 0, 1) : normals.at(i).normalized();
+        const QPointF& rest = mesh.rest_positions.at(i);
+        *vertex++ = position.x();
+        *vertex++ = position.y();
+        *vertex++ = position.z();
+        *vertex++ = normal.x();
+        *vertex++ = normal.y();
+        *vertex++ = normal.z();
+        *vertex++ = static_cast<float>(rest.x());
+        *vertex++ = static_cast<float>(rest.y());
+    }
+
+    const QByteArray index_data(reinterpret_cast<const char*>(corners.constData()),
+                                static_cast<int>(corners.size() * static_cast<int>(sizeof(quint32))));
+
+    QVector3D minimum;
+    QVector3D maximum;
+    bounds(placed, &minimum, &maximum);
 
     clear();
     setStride(vertex_bytes);
@@ -100,34 +147,25 @@ void PieceGeometry::setMesh(const GarmentMesh& mesh)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-/// @brief Replaces the geometry with the mesh's seam line, as line segments, so overlapping pieces of the same color
-/// can still be told apart.
-void PieceGeometry::setOutline(const GarmentMesh& mesh)
+/// @brief Replaces the geometry with the mesh's seam line, as line segments, at the given positions or flat on the
+/// board, so overlapping pieces of the same color can still be told apart.
+void PieceGeometry::setOutline(const GarmentMesh& mesh, const QVector<QVector3D>& positions)
 {
+    const QVector<QVector3D> placed = positionsOrFlat(mesh, positions);
     const int vertex_bytes = 3 * static_cast<int>(sizeof(float));
     const int point_count = static_cast<int>(mesh.boundary.size());
 
+    QVector<QVector3D> seam_line;
+    seam_line.reserve(point_count);
     QByteArray vertex_data(point_count * vertex_bytes, Qt::Uninitialized);
     float* vertex = reinterpret_cast<float*>(vertex_data.data());
-
-    const float largest = std::numeric_limits<float>::max();
-    QVector3D minimum(largest, largest, 0.0f);
-    QVector3D maximum(-largest, -largest, 0.0f);
-
     for (const quint32 index : mesh.boundary)
     {
-        const QPointF& position = mesh.rest_positions.at(static_cast<int>(index));
-        const float x = static_cast<float>(position.x());
-        const float y = static_cast<float>(-position.y());
-
-        *vertex++ = x;
-        *vertex++ = y;
-        *vertex++ = 0.0f;
-
-        minimum.setX(qMin(minimum.x(), x));
-        minimum.setY(qMin(minimum.y(), y));
-        maximum.setX(qMax(maximum.x(), x));
-        maximum.setY(qMax(maximum.y(), y));
+        const QVector3D& position = placed.at(static_cast<int>(index));
+        seam_line.append(position);
+        *vertex++ = position.x();
+        *vertex++ = position.y();
+        *vertex++ = position.z();
     }
 
     QByteArray index_data(point_count * 2 * static_cast<int>(sizeof(quint32)), Qt::Uninitialized);
@@ -137,6 +175,10 @@ void PieceGeometry::setOutline(const GarmentMesh& mesh)
         *index++ = static_cast<quint32>(i);
         *index++ = static_cast<quint32>((i + 1) % point_count);
     }
+
+    QVector3D minimum;
+    QVector3D maximum;
+    bounds(seam_line, &minimum, &maximum);
 
     clear();
     setStride(vertex_bytes);

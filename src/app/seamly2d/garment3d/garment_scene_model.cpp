@@ -64,6 +64,8 @@ GarmentSceneModel::GarmentSceneModel(QObject* parent)
     , m_avatar_minimum()
     , m_avatar_maximum()
     , m_avatar_note()
+    , m_arranging(false)
+    , m_hint()
 {}
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -99,6 +101,9 @@ QVariant GarmentSceneModel::data(const QModelIndex& index, int role) const
             case SelectedRole:
                 value = row.id == m_selected_piece;
                 break;
+            case PlacedRole:
+                value = row.placed;
+                break;
             default:
                 break;
         }
@@ -114,7 +119,8 @@ QHash<int, QByteArray> GarmentSceneModel::roleNames() const
             {PieceColorRole, QByteArrayLiteral("pieceColor")},
             {PieceGeometryRole, QByteArrayLiteral("pieceGeometry")},
             {PieceOutlineRole, QByteArrayLiteral("pieceOutline")},
-            {SelectedRole, QByteArrayLiteral("selected")}};
+            {SelectedRole, QByteArrayLiteral("selected")},
+            {PlacedRole, QByteArrayLiteral("placed")}};
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -137,12 +143,15 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             Row& row = m_rows[i];
             row.name = pieces.at(i).name;
             row.color = pieces.at(i).color;
-            row.geometry->setMesh(pieces.at(i).mesh);
-            row.outline->setOutline(pieces.at(i).mesh);
+            row.mesh = pieces.at(i).mesh;
+            row.placed = !pieces.at(i).positions.isEmpty();
+            row.geometry->setMesh(row.mesh, pieces.at(i).positions);
+            row.outline->setOutline(row.mesh, pieces.at(i).positions);
         }
         if (!m_rows.isEmpty())
         {
-            emit dataChanged(index(0), index(static_cast<int>(m_rows.size()) - 1), {PieceNameRole, PieceColorRole});
+            emit dataChanged(index(0), index(static_cast<int>(m_rows.size()) - 1),
+                             {PieceNameRole, PieceColorRole, PlacedRole});
         }
     }
     else
@@ -161,12 +170,14 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.id = piece.id;
             row.name = piece.name;
             row.color = piece.color;
+            row.mesh = piece.mesh;
+            row.placed = !piece.positions.isEmpty();
             row.geometry = new PieceGeometry();
             row.geometry->setParent(this);
-            row.geometry->setMesh(piece.mesh);
+            row.geometry->setMesh(piece.mesh, piece.positions);
             row.outline = new PieceGeometry();
             row.outline->setParent(this);
-            row.outline->setOutline(piece.mesh);
+            row.outline->setOutline(piece.mesh, piece.positions);
             m_rows.append(row);
         }
         endResetModel();
@@ -176,10 +187,14 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
         setSelectedPiece(m_selected_piece);
     }
 
+    // The board only holds the pieces that aren't placed on the avatar.
     m_piece_bounds = QRectF();
     for (const Piece& piece : pieces)
     {
-        m_piece_bounds = m_piece_bounds.united(piece.mesh.bounds());
+        if (piece.positions.isEmpty())
+        {
+            m_piece_bounds = m_piece_bounds.united(piece.mesh.bounds());
+        }
     }
     updateSceneBounds();
 
@@ -187,6 +202,30 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
     {
         emit framingRequested();
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Moves a placed piece, as the drape simulation goes on. The mesh stays the same.
+void GarmentSceneModel::setPiecePositions(quint32 id, const QVector<QVector3D>& positions)
+{
+    for (Row& row : m_rows)
+    {
+        if (row.id == id && row.placed && positions.size() == row.mesh.vertexCount())
+        {
+            row.geometry->setMesh(row.mesh, positions);
+            row.outline->setOutline(row.mesh, positions);
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Whether the piece is shown placed on the avatar rather than on the board.
+bool GarmentSceneModel::isPlaced(quint32 id) const
+{
+    return std::any_of(m_rows.cbegin(), m_rows.cend(), [id](const Row& row)
+    {
+        return row.id == id && row.placed;
+    });
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -255,6 +294,47 @@ void GarmentSceneModel::pickPiece(int id)
     const quint32 piece_id = id > 0 ? static_cast<quint32>(id) : 0;
     setSelectedPiece(piece_id);
     emit piecePicked(piece_id);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML when the avatar is clicked while arranging, with the point hit in scene coordinates.
+void GarmentSceneModel::placeAt(qreal x, qreal y, qreal z)
+{
+    emit placeRequested(QVector3D(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief While arranging, clicks on the avatar place the selected piece.
+bool GarmentSceneModel::isArranging() const
+{
+    return m_arranging;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentSceneModel::setArranging(bool arranging)
+{
+    if (arranging != m_arranging)
+    {
+        m_arranging = arranging;
+        emit arrangingChanged();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief What to do next while arranging or simulating; empty otherwise.
+QString GarmentSceneModel::hint() const
+{
+    return m_hint;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentSceneModel::setHint(const QString& hint)
+{
+    if (hint != m_hint)
+    {
+        m_hint = hint;
+        emit hintChanged();
+    }
 }
 
 //---------------------------------------------------------------------------------------------------------------------

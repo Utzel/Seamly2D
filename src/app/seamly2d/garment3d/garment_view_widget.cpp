@@ -44,6 +44,7 @@
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
+#include <iterator>
 #include <tuple>
 
 #include "../ifc/exception/vexception.h"
@@ -54,7 +55,10 @@
 #include "../vpatterndb/variables/vinternalvariable.h"
 #include "../vpatterndb/vcontainer.h"
 #include "../vpatterndb/vpiece.h"
+#include "../vgarment/cloth_solver.h"
+#include "../vtools/undocommands/save_arrangements.h"
 #include "../vtools/undocommands/save_seams.h"
+#include "drape_runner.h"
 #include "garment_scene_model.h"
 #include "seam_editor.h"
 
@@ -102,6 +106,9 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_flip_action(nullptr)
     , m_remove_action(nullptr)
     , m_cancel_action(nullptr)
+    , m_arrange_action(nullptr)
+    , m_simulate_action(nullptr)
+    , m_reset_action(nullptr)
     , m_quick_widget(nullptr)
     , m_message_label(new QLabel(this))
     , m_rebuild_timer(new QTimer(this))
@@ -115,6 +122,12 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_avatar_request()
     , m_has_avatar_request(false)
     , m_avatar_generation(0)
+    , m_wrap()
+    , m_collider()
+    , m_arrangements()
+    , m_draped()
+    , m_drape_pieces()
+    , m_runner(new DrapeRunner(this))
 {
     QVBoxLayout* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -136,8 +149,21 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     connect(m_fit_watcher, &QFutureWatcher<AvatarFit>::finished, this, &GarmentViewWidget::avatarFitted);
     connect(m_doc, &VAbstractPattern::seamsChanged, this, &GarmentViewWidget::updateSeams);
     connect(m_seam_editor, &SeamEditor::seamSewn, this, &GarmentViewWidget::sewSeam);
-    connect(m_seam_editor, &SeamEditor::sewingChanged, this, &GarmentViewWidget::updateSeamActions);
-    connect(m_seam_editor, &SeamEditor::selectedSeamChanged, this, &GarmentViewWidget::updateSeamActions);
+    connect(m_seam_editor, &SeamEditor::sewingChanged, this, &GarmentViewWidget::updateActions);
+    connect(m_seam_editor, &SeamEditor::selectedSeamChanged, this, &GarmentViewWidget::updateActions);
+    connect(m_doc, &VAbstractPattern::arrangementsChanged, this, &GarmentViewWidget::updateArrangements);
+    connect(m_scene_model, &GarmentSceneModel::placeRequested, this, &GarmentViewWidget::placePiece);
+    connect(m_scene_model, &GarmentSceneModel::selectedPieceChanged, this, &GarmentViewWidget::updateActions);
+    connect(m_scene_model, &GarmentSceneModel::avatarChanged, this, &GarmentViewWidget::updateActions);
+    connect(m_runner, &DrapeRunner::frameReady, this, &GarmentViewWidget::drapeFrame);
+    connect(m_runner, &DrapeRunner::settled, this, &GarmentViewWidget::drapeSettled);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The drape's thread has to be done before the solver's view of the scene goes away.
+GarmentViewWidget::~GarmentViewWidget()
+{
+    m_runner->stop();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -170,6 +196,13 @@ void GarmentViewWidget::selectPiece(quint32 id)
 //---------------------------------------------------------------------------------------------------------------------
 void GarmentViewWidget::clear()
 {
+    m_simulate_action->setChecked(false);
+    m_arrange_action->setChecked(false);
+    m_runner->stop();
+    m_draped.clear();
+    m_arrangements.clear();
+    m_wrap.reset();
+    m_collider = BodyCollider();
     m_rebuild_timer->stop();
     m_rebuild_pending = false;
     m_mesh_cache.clear();
@@ -197,11 +230,23 @@ void GarmentViewWidget::showEvent(QShowEvent* event)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// Nobody watches a hidden drape, so it stops.
+void GarmentViewWidget::hideEvent(QHideEvent* event)
+{
+    QWidget::hideEvent(event);
+    m_simulate_action->setChecked(false);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief Meshes the pieces included in the layout and hands them to the scene. Pieces whose seam line didn't change
-/// keep their mesh.
+/// keep their mesh; pieces arranged on the avatar are put there, or where the drape took them. A drape running
+/// starts over with the changed pattern.
 void GarmentViewWidget::rebuildScene()
 {
     m_rebuild_pending = false;
+    const bool simulating = m_runner->isRunning();
+    m_runner->stop();
+    readArrangements();
 
     const QHash<quint32, VPiece>* pieces = m_data->DataPieces();
     QList<quint32> ids = pieces->keys();
@@ -224,6 +269,7 @@ void GarmentViewWidget::rebuildScene()
                     cached.outline = outline;
                     cached.mesh = m_mesher.meshOutline(outline);
                     cached.mesh.piece_id = id;
+                    m_draped.remove(id);
                 }
                 mesh_cache.insert(id, cached);
 
@@ -236,12 +282,17 @@ void GarmentViewWidget::rebuildScene()
                     scene_piece.name = piece.GetName();
                     scene_piece.color = color.isValid() ? color : QColor(Qt::white);
                     scene_piece.mesh = cached.mesh;
+                    scene_piece.positions = piecePositions(id, cached.mesh);
                     scene_pieces.append(scene_piece);
 
-                    SeamEditor::Piece seam_piece;
-                    seam_piece.id = id;
-                    seam_piece.outline = cached.outline;
-                    seam_pieces.append(seam_piece);
+                    // Seams are sewn on the board, so only the pieces lying there take part.
+                    if (scene_piece.positions.isEmpty())
+                    {
+                        SeamEditor::Piece seam_piece;
+                        seam_piece.id = id;
+                        seam_piece.outline = cached.outline;
+                        seam_pieces.append(seam_piece);
+                    }
                 }
             }
             catch (const VException&)
@@ -252,11 +303,22 @@ void GarmentViewWidget::rebuildScene()
     }
 
     m_mesh_cache = mesh_cache;
+    for (auto draped = m_draped.begin(); draped != m_draped.end();)
+    {
+        draped = m_mesh_cache.contains(draped.key()) ? std::next(draped) : m_draped.erase(draped);
+    }
+
     m_scene_model->setPieces(scene_pieces);
     m_seam_editor->setSeams(m_doc->getSeams());
     m_seam_editor->setPieces(seam_pieces);
 
     updateAvatar();
+
+    if (simulating)
+    {
+        startSimulation();
+    }
+    updateActions();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -273,6 +335,15 @@ void GarmentViewWidget::updateAvatar()
         if (!request.hasMeasurements())
         {
             m_scene_model->clearAvatar();
+            if (!m_wrap.isNull())
+            {
+                // Without an avatar, arranged pieces go back on the board.
+                m_simulate_action->setChecked(false);
+                m_draped.clear();
+                m_wrap.reset();
+                m_collider = BodyCollider();
+                rebuildScene();
+            }
         }
         else if (!m_fit_watcher->isRunning())
         {
@@ -312,6 +383,14 @@ void GarmentViewWidget::avatarFitted()
         {
             m_scene_model->setAvatar(result.positions, m_body_model->triangles(), m_body_model->skinVertexCount(),
                                      avatarNote(result));
+
+            // A new body takes the drape with it; arranged pieces are put on it afresh.
+            m_simulate_action->setChecked(false);
+            m_draped.clear();
+            m_wrap.reset(new BodyWrap(*m_body_model, result.positions));
+            m_collider = BodyCollider(result.positions.mid(0, m_body_model->skinVertexCount()),
+                                      m_body_model->triangles());
+            rebuildScene();
         }
     }
     else if (m_has_avatar_request)
@@ -397,6 +476,56 @@ void GarmentViewWidget::updateSeams()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// The pattern's arrangements changed, by placing pieces here or by undo and redo.
+void GarmentViewWidget::updateArrangements()
+{
+    rebuildScene();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Takes in the pattern's arrangements. A piece moved to another spot starts its drape over.
+void GarmentViewWidget::readArrangements()
+{
+    QHash<quint32, PieceArrangement> arrangements;
+    for (const VPieceArrangement& stored : m_doc->getArrangements())
+    {
+        PieceArrangement arrangement;
+        arrangement.part = BodyWrap::partFromName(stored.part);
+        arrangement.angle = stored.angle;
+        arrangement.height = stored.height;
+        arrangements.insert(stored.piece_id, arrangement);
+    }
+
+    for (auto draped = m_draped.begin(); draped != m_draped.end();)
+    {
+        const PieceArrangement before = m_arrangements.value(draped.key());
+        const PieceArrangement after = arrangements.value(draped.key());
+        const bool same = arrangements.contains(draped.key()) && before.part == after.part
+                          && qFuzzyCompare(1.0 + before.angle, 1.0 + after.angle)
+                          && qFuzzyCompare(1.0 + before.height, 1.0 + after.height);
+        draped = same ? std::next(draped) : m_draped.erase(draped);
+    }
+    m_arrangements = arrangements;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Where a piece is shown: where the drape took it, else where it is arranged on the avatar, else nowhere in
+// particular, which puts it on the board.
+QVector<QVector3D> GarmentViewWidget::piecePositions(quint32 id, const GarmentMesh& mesh) const
+{
+    QVector<QVector3D> positions;
+    if (!m_wrap.isNull() && m_arrangements.contains(id))
+    {
+        positions = m_draped.value(id);
+        if (positions.size() != mesh.vertexCount())
+        {
+            positions = m_wrap->place(mesh, m_arrangements.value(id));
+        }
+    }
+    return positions;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Adds the seam sewn on the board and selects it, so a twisted one can be flipped right away.
 void GarmentViewWidget::sewSeam(const VSeam& seam)
 {
@@ -419,35 +548,245 @@ void GarmentViewWidget::flipSeam()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-void GarmentViewWidget::removeSeam()
+// Takes out the selected seam, or while arranging puts the selected piece back on the board.
+void GarmentViewWidget::removeSelected()
 {
     const int index = m_seam_editor->selectedSeam();
     QVector<VSeam> seams = m_doc->getSeams();
+    const quint32 piece = m_scene_model->selectedPiece();
     if (index >= 0 && index < seams.size())
     {
         seams.removeAt(index);
         m_seam_editor->setSelectedSeam(-1);
         saveSeams(tr("remove seam"), seams);
     }
+    else if (m_scene_model->isArranging() && m_scene_model->isPlaced(piece))
+    {
+        QVector<VPieceArrangement> arrangements = m_doc->getArrangements();
+        arrangements.erase(std::remove_if(arrangements.begin(), arrangements.end(),
+                                          [piece](const VPieceArrangement& arrangement)
+        {
+            return arrangement.piece_id == piece;
+        }), arrangements.end());
+        saveArrangements(tr("take piece off the avatar"), arrangements);
+    }
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-void GarmentViewWidget::updateSeamActions()
+// Esc steps back: out of arranging, or out of what sewing or a selected seam was doing.
+void GarmentViewWidget::cancel()
 {
-    const QSignalBlocker blocker(m_sew_action);
-    m_sew_action->setChecked(m_seam_editor->isSewing());
+    if (m_scene_model->isArranging())
+    {
+        m_arrange_action->setChecked(false);
+    }
+    else
+    {
+        m_seam_editor->cancel();
+    }
+}
 
-    const bool selected = m_seam_editor->selectedSeam() >= 0;
-    m_flip_action->setEnabled(selected);
-    m_remove_action->setEnabled(selected);
+//---------------------------------------------------------------------------------------------------------------------
+// While arranging, a click on a piece picks it and a click on the avatar puts it there. Sewing and arranging take
+// turns.
+void GarmentViewWidget::setArranging(bool arranging)
+{
+    if (arranging)
+    {
+        m_sew_action->setChecked(false);
+    }
+    m_scene_model->setArranging(arranging);
+    updateActions();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The avatar was clicked while arranging: the selected piece goes there.
+void GarmentViewWidget::placePiece(const QVector3D& point)
+{
+    const quint32 piece = m_scene_model->selectedPiece();
+    if (piece != 0 && !m_wrap.isNull())
+    {
+        const PieceArrangement wanted = m_wrap->arrangementAt(point);
+        VPieceArrangement arrangement;
+        arrangement.piece_id = piece;
+        arrangement.part = BodyWrap::partName(wanted.part);
+        arrangement.angle = wanted.angle;
+        arrangement.height = wanted.height;
+
+        QVector<VPieceArrangement> arrangements = m_doc->getArrangements();
+        auto existing = std::find_if(arrangements.begin(), arrangements.end(),
+                                     [piece](const VPieceArrangement& other)
+        {
+            return other.piece_id == piece;
+        });
+        if (existing != arrangements.end())
+        {
+            *existing = arrangement;
+        }
+        else
+        {
+            arrangements.append(arrangement);
+        }
+        saveArrangements(tr("place piece"), arrangements);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::setSimulating(bool simulating)
+{
+    if (simulating)
+    {
+        startSimulation();
+    }
+    else
+    {
+        m_runner->stop();
+    }
+    updateActions();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Puts the pieces from the arrangement into a solver, the seams between them as stitches and the avatar as what
+// they drape over, and sets it going. Pieces already draped go on from where they are.
+void GarmentViewWidget::startSimulation()
+{
+    m_runner->stop();
+    m_drape_pieces.clear();
+
+    QSharedPointer<ClothSolver> solver(new ClothSolver());
+    QHash<quint32, quint32> offsets;
+    QList<quint32> ids = m_mesh_cache.keys();
+    std::sort(ids.begin(), ids.end());
+    for (const quint32 id : ids)
+    {
+        const GarmentMesh& mesh = m_mesh_cache.value(id).mesh;
+        const QVector<QVector3D> positions = piecePositions(id, mesh);
+        if (!mesh.isEmpty() && !positions.isEmpty())
+        {
+            DrapePiece drape_piece;
+            drape_piece.id = id;
+            drape_piece.offset = static_cast<int>(solver->addMesh(mesh, positions));
+            drape_piece.count = mesh.vertexCount();
+            m_drape_pieces.append(drape_piece);
+            offsets.insert(id, static_cast<quint32>(drape_piece.offset));
+        }
+    }
+
+    if (m_drape_pieces.isEmpty())
+    {
+        const QSignalBlocker blocker(m_simulate_action);
+        m_simulate_action->setChecked(false);
+        m_scene_model->setHint(tr("Put pieces on the avatar first: Arrange, click a piece, then the avatar."));
+        return;
+    }
+
+    for (const VSeam& seam : m_doc->getSeams())
+    {
+        if (offsets.contains(seam.first.piece_id) && offsets.contains(seam.second.piece_id))
+        {
+            const GarmentMesh& first_mesh = m_mesh_cache.value(seam.first.piece_id).mesh;
+            const GarmentMesh& second_mesh = m_mesh_cache.value(seam.second.piece_id).mesh;
+            const SeamStretch first = first_mesh.stretch(seam.first.start_node, seam.first.end_node,
+                                                         offsets.value(seam.first.piece_id));
+            SeamStretch second = second_mesh.stretch(seam.second.start_node, seam.second.end_node,
+                                                     offsets.value(seam.second.piece_id));
+            if (seam.reverse)
+            {
+                second = second.reversed();
+            }
+            solver->addStitches(SeamStretch::stitches(first, second));
+        }
+    }
+
+    solver->setCollider(m_collider);
+    m_runner->start(solver);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Back to the pieces as arranged, before any draping.
+void GarmentViewWidget::resetDrape()
+{
+    m_simulate_action->setChecked(false);
+    m_draped.clear();
+    rebuildScene();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::drapeFrame(int generation, const QVector<QVector3D>& positions)
+{
+    if (generation == m_runner->generation())
+    {
+        for (const DrapePiece& drape_piece : m_drape_pieces)
+        {
+            if (drape_piece.offset + drape_piece.count <= positions.size())
+            {
+                const QVector<QVector3D> piece_positions = positions.mid(drape_piece.offset, drape_piece.count);
+                m_draped.insert(drape_piece.id, piece_positions);
+                m_scene_model->setPiecePositions(drape_piece.id, piece_positions);
+            }
+        }
+        m_runner->frameShown();
+        m_reset_action->setEnabled(true);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The cloth came to rest, so the simulation stopped by itself.
+void GarmentViewWidget::drapeSettled(int generation)
+{
+    if (generation == m_runner->generation())
+    {
+        m_simulate_action->setChecked(false);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::updateActions()
+{
+    const QSignalBlocker sew_blocker(m_sew_action);
+    m_sew_action->setChecked(m_seam_editor->isSewing());
+    if (m_seam_editor->isSewing() && m_scene_model->isArranging())
+    {
+        m_arrange_action->setChecked(false);
+    }
+
+    const bool seam_selected = m_seam_editor->selectedSeam() >= 0;
+    const bool placed_selected = m_scene_model->isArranging()
+                                 && m_scene_model->isPlaced(m_scene_model->selectedPiece());
+    m_flip_action->setEnabled(seam_selected);
+    m_remove_action->setEnabled(seam_selected || placed_selected);
+
+    const bool has_avatar = m_scene_model->hasAvatar();
+    m_arrange_action->setEnabled(has_avatar);
+    m_simulate_action->setEnabled(has_avatar);
+    m_reset_action->setEnabled(!m_draped.isEmpty());
 
     // With nothing to step back from, Esc is left to the main window.
-    m_cancel_action->setEnabled(m_seam_editor->isSewing() || selected);
+    m_cancel_action->setEnabled(m_seam_editor->isSewing() || seam_selected || m_scene_model->isArranging());
 
-    if (m_seam_editor->isSewing() && m_quick_widget != nullptr)
+    if ((m_seam_editor->isSewing() || m_scene_model->isArranging()) && m_quick_widget != nullptr)
     {
         m_quick_widget->setFocus();
     }
+    updateHint();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// What to do next while arranging or draping, for the scene to show.
+void GarmentViewWidget::updateHint()
+{
+    QString hint;
+    if (m_runner->isRunning())
+    {
+        hint = tr("Draping. Simulate stops it, Reset puts the pieces back where they were arranged.");
+    }
+    else if (m_scene_model->isArranging())
+    {
+        hint = m_scene_model->selectedPiece() == 0
+               ? tr("Click a piece, then the spot on the avatar where it goes. Esc stops arranging.")
+               : tr("Click the spot on the avatar where the piece goes. Remove puts a placed piece back on the board.");
+    }
+    m_scene_model->setHint(hint);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -512,25 +851,48 @@ void GarmentViewWidget::createToolBar()
     connect(m_flip_action, &QAction::triggered, this, &GarmentViewWidget::flipSeam);
 
     m_remove_action = tool_bar->addAction(tr("Remove"));
-    m_remove_action->setToolTip(tr("Take the selected seam out"));
+    m_remove_action->setToolTip(tr("Take the selected seam out, or while arranging put the selected piece back on "
+                                   "the board"));
     m_remove_action->setShortcut(QKeySequence::Delete);
     m_remove_action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-    connect(m_remove_action, &QAction::triggered, this, &GarmentViewWidget::removeSeam);
+    connect(m_remove_action, &QAction::triggered, this, &GarmentViewWidget::removeSelected);
+
+    tool_bar->addSeparator();
+
+    m_arrange_action = tool_bar->addAction(tr("Arrange"));
+    m_arrange_action->setCheckable(true);
+    m_arrange_action->setToolTip(tr("Put pieces on the avatar: click a piece, then the spot where it goes"));
+    connect(m_arrange_action, &QAction::toggled, this, &GarmentViewWidget::setArranging);
+
+    m_simulate_action = tool_bar->addAction(tr("Simulate"));
+    m_simulate_action->setCheckable(true);
+    m_simulate_action->setToolTip(tr("Drape the pieces on the avatar, sewn together by their seams"));
+    connect(m_simulate_action, &QAction::toggled, this, &GarmentViewWidget::setSimulating);
+
+    m_reset_action = tool_bar->addAction(tr("Reset"));
+    m_reset_action->setToolTip(tr("Put the draped pieces back where they were arranged"));
+    connect(m_reset_action, &QAction::triggered, this, &GarmentViewWidget::resetDrape);
 
     m_cancel_action = new QAction(this);
     m_cancel_action->setShortcut(Qt::Key_Escape);
     m_cancel_action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-    connect(m_cancel_action, &QAction::triggered, m_seam_editor, &SeamEditor::cancel);
+    connect(m_cancel_action, &QAction::triggered, this, &GarmentViewWidget::cancel);
     addAction(m_cancel_action);
 
     layout()->addWidget(tool_bar);
-    updateSeamActions();
+    updateActions();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 void GarmentViewWidget::saveSeams(const QString& text, const QVector<VSeam>& seams)
 {
     qApp->getUndoStack()->push(new SaveSeams(text, m_doc->getSeams(), seams, m_doc));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::saveArrangements(const QString& text, const QVector<VPieceArrangement>& arrangements)
+{
+    qApp->getUndoStack()->push(new SaveArrangements(text, m_doc->getArrangements(), arrangements, m_doc));
 }
 
 //---------------------------------------------------------------------------------------------------------------------

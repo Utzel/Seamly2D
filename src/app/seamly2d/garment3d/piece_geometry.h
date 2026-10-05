@@ -25,14 +25,17 @@
 #ifndef PIECE_GEOMETRY_H
 #define PIECE_GEOMETRY_H
 
+#include <QVector3D>
+#include <QVector>
 #include <QtQuick3D/QQuick3DGeometry>
 
 struct GarmentMesh;
 
 /// @brief Hands one piece's mesh, or its seam line, to Qt Quick 3D.
 ///
-/// The piece lies flat in the z = 0 plane, facing the camera. Units stay cm. The piece scene's y axis points down
-/// and the 3D scene's points up, so y is flipped on the way.
+/// Without positions the piece lies flat in the z = 0 plane, facing the camera; with them it is where they put it,
+/// on the avatar or draped. Units stay cm. The piece scene's y axis points down and the 3D scene's points up, so y
+/// is flipped on the way.
 class PieceGeometry : public QQuick3DGeometry
 {
     Q_OBJECT
@@ -40,8 +43,9 @@ class PieceGeometry : public QQuick3DGeometry
 public:
     explicit           PieceGeometry(QQuick3DObject* parent = nullptr);
 
-    void               setMesh(const GarmentMesh& mesh);
-    void               setOutline(const GarmentMesh& mesh);
+    void               setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions = QVector<QVector3D>());
+    void               setOutline(const GarmentMesh& mesh,
+                                  const QVector<QVector3D>& positions = QVector<QVector3D>());
 
 private:
     Q_DISABLE_COPY(PieceGeometry)
