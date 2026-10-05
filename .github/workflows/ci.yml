@@ -45,7 +45,7 @@ jobs:
         with:
           version: ${{ env.QT_VERSION }}
           cache: true
-          modules: qtmultimedia
+          modules: qtmultimedia qtquick3d qtshadertools
 
       - name: install build dependencies
         run: |
@@ -96,7 +96,7 @@ jobs:
         with:
           version: ${{ env.QT_VERSION }}
           cache: true
-          modules: qtmultimedia
+          modules: qtmultimedia qtquick3d qtshadertools
 
       - name: update version
         run: |
@@ -105,6 +105,7 @@ jobs:
       - name: build Seamly2D appimage
         env:
           OUTPUT: Seamly2D-x86_64.AppImage  # linuxdeploy-x86_64.AppImage uses this env var as name for AppImage
+          QML_SOURCES_PATHS: src/app/seamly2d/garment3d  # linuxdeploy-plugin-qt deploys the QML modules imported here
         run: |
           qmake -config release CONFIG+=noTests
           make -j$(nproc)
@@ -141,7 +142,7 @@ jobs:
         with:
           version: ${{ env.QT_VERSION }}
           cache: true
-          modules: qtmultimedia
+          modules: qtmultimedia qtquick3d qtshadertools
 
       - name: update version
         run: |
@@ -222,7 +223,7 @@ jobs:
           version: ${{ env.QT_VERSION }}
           arch: ${{ matrix.qt-arch }}
           cache: true
-          modules: qtmultimedia
+          modules: qtmultimedia qtquick3d qtshadertools
           aqtsource: git+https://github.com/miurahr/aqtinstall.git  # TODO: Remove once aqtinstall 3.4.0 is released, see https://github.com/miurahr/aqtinstall/issues/1007
 
       - name: Update version
