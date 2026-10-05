@@ -26,9 +26,12 @@
 
 #include <QHash>
 #include <QLineF>
+#include <QtConcurrent/QtConcurrentMap>
 #include <QtMath>
 
 #include <algorithm>
+#include <limits>
+#include <numeric>
 
 namespace
 {
@@ -38,8 +41,13 @@ const double max_move = 2.0;
 // Below this, in cm, a tangential move is taken as resting, so friction can hold the cloth still.
 const double friction_rest = 0.01;
 
-// Vertices this close to the body, beyond the cloth's thickness, in cm, are watched for contact during a step.
-const double contact_margin = 1.0;
+// Body triangles this much further away than the cloth's thickness, in cm, are watched for contact. They are only
+// looked up again once a vertex has used up half of that margin moving, which saves most lookups.
+const double contact_margin = 2.0;
+
+// Colours with at least this many vertices are solved on several threads; for fewer, handing out the work costs
+// more than it saves.
+const int parallel_colour = 1024;
 
 // Determinants smaller than this leave a vertex where it is, its forces don't say where to go.
 const double singular = 1e-12;
@@ -180,6 +188,20 @@ const ClothSettings& ClothSolver::settings() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief Changes gravity from the next step on, in cm/s²; without it pieces can be sewn together before they fall.
+void ClothSolver::setGravity(const QVector3D& gravity)
+{
+    m_settings.gravity = gravity;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Changes the friction against the body from the next step on; without it pieces slide into place freely.
+void ClothSolver::setFriction(qreal friction)
+{
+    m_settings.friction = friction;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief Adds a piece of cloth: its flat mesh, which gives its rest shape, and where its vertices start out in cm.
 /// Returns the number of its first vertex; stitches and pins count vertices over all pieces.
 quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions)
@@ -263,6 +285,7 @@ void ClothSolver::addStitches(const QVector<Stitch>& stitches)
 void ClothSolver::setCollider(const BodyCollider& collider)
 {
     m_collider = collider;
+    m_contacts.clear();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -312,6 +335,20 @@ QVector<QVector3D> ClothSolver::velocities() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief How far apart, in cm, the sides of the stitch that is furthest from closed still are.
+qreal ClothSolver::widestStitch() const
+{
+    double widest = 0;
+    for (const StitchTerm& stitch : m_stitches)
+    {
+        const Vec3 target = load(m_position, stitch.edge_start) * (1.0 - stitch.along)
+                            + load(m_position, stitch.edge_end) * stitch.along;
+        widest = qMax(widest, (load(m_position, stitch.vertex) - target).length());
+    }
+    return widest;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief Moves the cloth on by a step of the given length in seconds; a 60th of a second works well.
 void ClothSolver::step(qreal time_step)
 {
@@ -353,16 +390,27 @@ void ClothSolver::step(qreal time_step)
 
     findContacts();
 
+    // Vertices of one colour share no spring or stitch, so they can move at the same time. Each writes only its own
+    // position, which mustn't be shared with another list then.
+    m_position.detach();
+    auto solve = [this, h](const int& vertex)
+    {
+        if (!m_pinned.at(vertex))
+        {
+            solveVertex(vertex, h);
+        }
+    };
     for (int iteration = 0; iteration < m_settings.iterations; ++iteration)
     {
-        for (const QVector<int>& color : m_colors)
+        for (QVector<int>& color : m_colors)
         {
-            for (const int vertex : color)
+            if (color.size() >= parallel_colour)
             {
-                if (!m_pinned.at(vertex))
-                {
-                    solveVertex(vertex, h);
-                }
+                QtConcurrent::blockingMap(color, solve);
+            }
+            else
+            {
+                std::for_each(color.cbegin(), color.cend(), solve);
             }
         }
     }
@@ -441,6 +489,7 @@ void ClothSolver::prepare()
         m_colors[color].append(i);
     }
 
+    m_contacts.clear();
     m_prepared = true;
 }
 
@@ -448,24 +497,50 @@ void ClothSolver::prepare()
 // Finds the body triangles each vertex may touch during the step: those near the way it is heading.
 void ClothSolver::findContacts()
 {
-    m_contacts = QVector<QVector<int>>(vertexCount());
+    if (m_contacts.size() != vertexCount())
+    {
+        m_contacts = QVector<QVector<int>>(vertexCount());
+        m_contact_origin = QVector<double>(3 * vertexCount(), std::numeric_limits<double>::max());
+    }
+    m_contact_triangle = QVector<int>(vertexCount(), -1);
     if (m_collider.isEmpty())
     {
         return;
     }
 
-    for (int i = 0; i < vertexCount(); ++i)
+    QVector<int> vertices(vertexCount());
+    std::iota(vertices.begin(), vertices.end(), 0);
+    m_contacts.detach();
+    m_contact_origin.detach();
+    m_contact_triangle.detach();
+    QtConcurrent::blockingMap(vertices, [this](const int& vertex)
     {
-        if (!m_pinned.at(i))
+        if (!m_pinned.at(vertex))
         {
-            const Vec3 start = load(m_previous, i);
-            const Vec3 heading = load(m_inertial, i) - start;
-            const float radius = static_cast<float>(m_settings.thickness + contact_margin + heading.length());
-            const QVector3D from(static_cast<float>(start.x), static_cast<float>(start.y),
-                                 static_cast<float>(start.z));
-            m_contacts[i] = m_collider.trianglesWithin(from, radius);
+            // The triangles found last time still do while the vertex stays within half the margin of where they
+            // were looked up, its way through this step included.
+            const Vec3 start = load(m_previous, vertex);
+            const double heading = (load(m_inertial, vertex) - start).length();
+            const double drift = (start - load(m_contact_origin, vertex)).length();
+            if (drift + heading > contact_margin / 2.0)
+            {
+                const float radius = static_cast<float>(m_settings.thickness + contact_margin + heading);
+                const QVector3D from(static_cast<float>(start.x), static_cast<float>(start.y),
+                                     static_cast<float>(start.z));
+                m_contacts[vertex] = m_collider.trianglesWithin(from, radius);
+                store(m_contact_origin, vertex, start);
+            }
+
+            // The triangle nearest to where the vertex is first guessed to go is the one it may touch this step.
+            const Vec3 guess = load(m_position, vertex);
+            const QVector3D at(static_cast<float>(guess.x), static_cast<float>(guess.y), static_cast<float>(guess.z));
+            BodyContact contact;
+            if (m_collider.closest(at, m_contacts.at(vertex), &contact))
+            {
+                m_contact_triangle[vertex] = contact.triangle;
+            }
         }
-    }
+    });
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -518,25 +593,33 @@ void ClothSolver::solveVertex(int vertex, double time_step)
         hessian.addIdentity(m_settings.stitch_stiffness * role.weight * role.weight);
     }
 
-    const QVector<int>& candidates = m_contacts.at(vertex);
-    BodyContact contact;
+    const int triangle = m_contact_triangle.value(vertex, -1);
     const QVector3D point(static_cast<float>(position.x), static_cast<float>(position.y),
                           static_cast<float>(position.z));
-    if (!candidates.isEmpty() && m_collider.closest(point, candidates, &contact)
-        && contact.distance < m_settings.thickness)
+    const BodyContact contact = triangle >= 0 ? m_collider.contactWith(point, triangle) : BodyContact();
+    // The body and the floor push the cloth out to its thickness. Friction holds back sliding along them, up to what
+    // the push allows.
+    auto push_out = [this, &force, &hessian, &moved](const Vec3& normal, double depth)
     {
-        const Vec3 normal{contact.normal.x(), contact.normal.y(), contact.normal.z()};
-        const double depth = m_settings.thickness - contact.distance;
         const double k = m_settings.contact_stiffness;
         force += normal * (k * depth);
         hessian.addOuter(normal, k);
 
-        // Friction holds back sliding along the body, up to what the contact force allows.
         const Vec3 sliding = moved - normal * normal.dot(moved);
         const double friction = qMin(m_settings.friction * k * depth / qMax(sliding.length(), friction_rest), k);
         force -= sliding * friction;
         hessian.addIdentity(friction);
         hessian.addOuter(normal, -friction);
+    };
+    if (triangle >= 0 && contact.distance < m_settings.thickness)
+    {
+        push_out(Vec3{contact.normal.x(), contact.normal.y(), contact.normal.z()},
+                 m_settings.thickness - contact.distance);
+    }
+    const double above_floor = position.y - m_settings.floor_height;
+    if (m_settings.floor && above_floor < m_settings.thickness)
+    {
+        push_out(Vec3{0.0, 1.0, 0.0}, m_settings.thickness - above_floor);
     }
 
     Vec3 step;
@@ -547,6 +630,20 @@ void ClothSolver::solveVertex(int vertex, double time_step)
         {
             step = step * (max_move / length);
         }
-        store(m_position, vertex, position + step);
+
+        // The body was only searched so far around where the vertex started the step; it mustn't go beyond, or it
+        // could pass through the body unseen (the conservative bound of Chen et al.).
+        Vec3 moved_to = position + step;
+        if (!m_collider.isEmpty())
+        {
+            const Vec3 start = load(m_previous, vertex);
+            const double reach = contact_margin + (load(m_inertial, vertex) - start).length();
+            const double travelled = (moved_to - start).length();
+            if (travelled > reach)
+            {
+                moved_to = start + (moved_to - start) * (reach / travelled);
+            }
+        }
+        store(m_position, vertex, moved_to);
     }
 }

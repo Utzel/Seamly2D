@@ -290,15 +290,29 @@ bool BodyCollider::closest(const QVector3D& point, const QVector<int>& candidate
 
     if (nearest >= 0)
     {
-        const QVector3D offset = point - nearest_point;
-        const float length = offset.length();
-        const bool inside = QVector3D::dotProduct(offset, m_normals.at(nearest)) < 0;
-
-        contact->point = nearest_point;
-        contact->distance = inside ? -length : length;
-        contact->normal = length > 1e-5f ? (inside ? -offset : offset) / length : m_normals.at(nearest);
+        *contact = contactWith(point, nearest);
     }
     return nearest >= 0;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Where the point is closest to one triangle, measured from that triangle's side of the body.
+BodyContact BodyCollider::contactWith(const QVector3D& point, int triangle) const
+{
+    const QVector3D on_triangle = closestOnTriangle(point,
+                                                    m_positions.at(static_cast<int>(m_triangles.at(3 * triangle))),
+                                                    m_positions.at(static_cast<int>(m_triangles.at(3 * triangle + 1))),
+                                                    m_positions.at(static_cast<int>(m_triangles.at(3 * triangle + 2))));
+    const QVector3D offset = point - on_triangle;
+    const float length = offset.length();
+    const bool inside = QVector3D::dotProduct(offset, m_normals.at(triangle)) < 0;
+
+    BodyContact contact;
+    contact.point = on_triangle;
+    contact.distance = inside ? -length : length;
+    contact.normal = length > 1e-5f ? (inside ? -offset : offset) / length : m_normals.at(triangle);
+    contact.triangle = triangle;
+    return contact;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

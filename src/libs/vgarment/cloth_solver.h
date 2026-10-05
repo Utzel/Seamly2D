@@ -39,12 +39,14 @@ struct ClothSettings
     qreal     density = 0.015;            ///< fabric weight in g per square cm; a light cotton
     qreal     stretch_stiffness = 2.0e4;  ///< of each mesh edge, in g/s²
     qreal     bend_stiffness = 30.0;      ///< across each mesh edge, in g/s²
-    qreal     stitch_stiffness = 3.0e3;   ///< of each stitch, in g/s²
+    qreal     stitch_stiffness = 5.0e4;   ///< of each stitch, in g/s²; seams hold like the cloth
     qreal     contact_stiffness = 1.0e5;  ///< of the body's surface, in g/s²
     qreal     damping = 0.02;             ///< of stretching and bending, in s
     qreal     air_damping = 1.0;          ///< share of the speed lost per second
     qreal     friction = 0.4;             ///< against the body
     qreal     thickness = 0.3;            ///< how far the cloth keeps from the body, in cm
+    bool      floor = true;               ///< whether the cloth lands on a floor
+    qreal     floor_height = 0.0;         ///< in cm
     QVector3D gravity = QVector3D(0.0f, -981.0f, 0.0f);
     int       iterations = 12;            ///< sweeps over all vertices per step
 };
@@ -57,13 +59,16 @@ struct ClothSettings
 /// explicit methods don't.
 ///
 /// The cloth resists stretching along its mesh edges and bending across them. Stitches pull the sides of seams
-/// together, the body pushes the cloth out and holds it by friction.
+/// together, the body pushes the cloth out and holds it by friction. As in the paper, each vertex picks the body
+/// triangle it may touch once per step and keeps it through the sweeps. Large colours are solved in parallel.
 class ClothSolver
 {
 public:
     explicit           ClothSolver(const ClothSettings& settings = ClothSettings());
 
     const ClothSettings& settings() const;
+    void               setGravity(const QVector3D& gravity);
+    void               setFriction(qreal friction);
 
     quint32            addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions);
     void               addStitches(const QVector<Stitch>& stitches);
@@ -73,6 +78,7 @@ public:
     int                vertexCount() const;
     QVector<QVector3D> positions() const;
     QVector<QVector3D> velocities() const;
+    qreal              widestStitch() const;
 
     void               step(qreal time_step);
 
@@ -118,6 +124,8 @@ private:
     QVector<QVector<StitchRole>> m_vertex_stitches;
     QVector<QVector<int>>        m_colors;
     QVector<QVector<int>>        m_contacts;
+    QVector<double>              m_contact_origin;
+    QVector<int>                 m_contact_triangle;
 
     void               prepare();
     void               findContacts();

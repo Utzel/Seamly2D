@@ -10,7 +10,7 @@
 message("Entering vgarment.pro")
 include(../../../common.pri)
 
-QT += widgets printsupport
+QT += widgets printsupport concurrent
 
 # Name of library
 TARGET = vgarment

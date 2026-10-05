@@ -35,6 +35,7 @@ struct BodyContact
     QVector3D point;         ///< the closest point on the surface
     QVector3D normal;        ///< pointing out of the body
     float     distance = 0;  ///< from the surface, negative inside the body
+    int       triangle = -1; ///< the triangle the point lies on
 };
 
 /// @brief A body the cloth can't go through: a still triangle mesh facing outwards, as the avatar's skin.
@@ -51,6 +52,7 @@ public:
     QVector<int>       trianglesNear(const QVector3D& point, float radius) const;
     QVector<int>       trianglesWithin(const QVector3D& point, float radius) const;
     bool               closest(const QVector3D& point, const QVector<int>& candidates, BodyContact* contact) const;
+    BodyContact        contactWith(const QVector3D& point, int triangle) const;
 
 private:
     QVector<QVector3D> m_positions;

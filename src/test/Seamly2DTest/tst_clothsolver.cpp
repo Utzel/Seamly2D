@@ -168,6 +168,7 @@ void TST_ClothSolver::freeFallFollowsGravity() const
 {
     ClothSettings settings;
     settings.air_damping = 0;
+    settings.floor = false;
     ClothSolver solver(settings);
     const GarmentMesh mesh = PieceMesher().meshOutline(rectangle(0, 0, 10, 10, 1));
     solver.addMesh(mesh, lyingFlat(mesh, 100));
@@ -227,6 +228,7 @@ void TST_ClothSolver::stitchesCloseTheGap() const
 {
     ClothSettings settings;
     settings.gravity = QVector3D();
+    settings.floor = false;
     ClothSolver solver(settings);
 
     const PieceMesher mesher;
@@ -284,7 +286,9 @@ void TST_ClothSolver::colliderMeasuresDistance() const
 void TST_ClothSolver::clothRestsOnSphere() const
 {
     const float radius = 10;
-    ClothSolver solver;
+    ClothSettings settings;
+    settings.floor = false;
+    ClothSolver solver(settings);
     solver.setCollider(sphere(radius));
 
     const GarmentMesh mesh = PieceMesher().meshOutline(rectangle(-15, -15, 30, 30, 1));
