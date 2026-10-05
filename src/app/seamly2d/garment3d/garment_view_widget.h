@@ -40,23 +40,28 @@
 #include "../vgarment/piece_outline.h"
 
 class GarmentSceneModel;
+class QAction;
 class QLabel;
 class QQuickWidget;
 class QTimer;
+class SeamEditor;
+class VAbstractPattern;
 class VContainer;
+struct VSeam;
 
 /// @brief Content of the 3D View dock: the pattern's pieces and an avatar fitted to the pattern's measurements, in a
-/// 3D scene that follows every edit.
+/// 3D scene that follows every edit, and the seams that sew the pieces together.
 ///
 /// The Qt Quick scene, and with it the GPU context, is only created the first time the dock is shown, and the
 /// pieces are only meshed while it is visible, so the view costs nothing until it is used. The avatar is fitted on a
-/// worker thread and only when the measurements change.
+/// worker thread and only when the measurements change. Seams are sewn on the board of pieces and go through the
+/// undo stack like any other change to the pattern.
 class GarmentViewWidget : public QWidget
 {
     Q_OBJECT
 
 public:
-    explicit           GarmentViewWidget(VContainer* data, QWidget* parent = nullptr);
+                       GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QWidget* parent = nullptr);
 
 signals:
     void               pieceSelected(quint32 id);
@@ -74,6 +79,10 @@ private slots:
     void               rebuildScene();
     void               scenePicked(quint32 id);
     void               avatarFitted();
+    void               updateSeams();
+    void               flipSeam();
+    void               removeSeam();
+    void               updateSeamActions();
 
 private:
     Q_DISABLE_COPY(GarmentViewWidget)
@@ -104,7 +113,13 @@ private:
     };
 
     VContainer*                m_data;
+    VAbstractPattern*          m_doc;
     GarmentSceneModel*         m_scene_model;
+    SeamEditor*                m_seam_editor;
+    QAction*                   m_sew_action;
+    QAction*                   m_flip_action;
+    QAction*                   m_remove_action;
+    QAction*                   m_cancel_action;
     QQuickWidget*              m_quick_widget;
     QLabel*                    m_message_label;
     QTimer*                    m_rebuild_timer;
@@ -120,7 +135,10 @@ private:
     quint64                    m_avatar_generation;
 
     void               createScene();
+    void               createToolBar();
     void               showError(const QString& error);
+    void               sewSeam(const VSeam& seam);
+    void               saveSeams(const QString& text, const QVector<VSeam>& seams);
     void               updateAvatar();
     AvatarRequest      wantedAvatar() const;
     QString            avatarNote(const AvatarFit& result) const;

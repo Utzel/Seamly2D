@@ -24,15 +24,20 @@
 
 #include "garment_view_widget.h"
 
+#include <QAction>
 #include <QColor>
+#include <QKeySequence>
 #include <QLabel>
 #include <QList>
 #include <QPalette>
 #include <QQmlError>
 #include <QQuickWidget>
 #include <QQuickWindow>
+#include <QSignalBlocker>
 #include <QStringList>
 #include <QTimer>
+#include <QToolBar>
+#include <QUndoStack>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QVariantMap>
@@ -42,13 +47,16 @@
 #include <tuple>
 
 #include "../ifc/exception/vexception.h"
+#include "../ifc/xml/vabstractpattern.h"
 #include "../vmisc/def.h"
 #include "../vmisc/vabstractapplication.h"
 #include "../vpatterndb/measurements_def.h"
 #include "../vpatterndb/variables/vinternalvariable.h"
 #include "../vpatterndb/vcontainer.h"
 #include "../vpatterndb/vpiece.h"
+#include "../vtools/undocommands/save_seams.h"
 #include "garment_scene_model.h"
+#include "seam_editor.h"
 
 namespace
 {
@@ -84,10 +92,16 @@ bool GarmentViewWidget::AvatarRequest::hasMeasurements() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-GarmentViewWidget::GarmentViewWidget(VContainer* data, QWidget* parent)
+GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QWidget* parent)
     : QWidget(parent)
     , m_data(data)
+    , m_doc(doc)
     , m_scene_model(new GarmentSceneModel(this))
+    , m_seam_editor(new SeamEditor(this))
+    , m_sew_action(nullptr)
+    , m_flip_action(nullptr)
+    , m_remove_action(nullptr)
+    , m_cancel_action(nullptr)
     , m_quick_widget(nullptr)
     , m_message_label(new QLabel(this))
     , m_rebuild_timer(new QTimer(this))
@@ -104,17 +118,26 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, QWidget* parent)
 {
     QVBoxLayout* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    createToolBar();
 
     m_message_label->setWordWrap(true);
     m_message_label->setAlignment(Qt::AlignCenter);
     m_message_label->hide();
     layout->addWidget(m_message_label);
 
+    m_seam_editor->setHighlightColor(palette().color(QPalette::Highlight));
+
     m_rebuild_timer->setSingleShot(true);
     m_rebuild_timer->setInterval(rebuild_delay_ms);
     connect(m_rebuild_timer, &QTimer::timeout, this, &GarmentViewWidget::rebuildScene);
     connect(m_scene_model, &GarmentSceneModel::piecePicked, this, &GarmentViewWidget::scenePicked);
     connect(m_fit_watcher, &QFutureWatcher<AvatarFit>::finished, this, &GarmentViewWidget::avatarFitted);
+    connect(m_doc, &VAbstractPattern::seamsChanged, this, &GarmentViewWidget::updateSeams);
+    connect(m_seam_editor, &SeamEditor::seamSewn, this, &GarmentViewWidget::sewSeam);
+    connect(m_seam_editor, &SeamEditor::sewingChanged, this, &GarmentViewWidget::updateSeamActions);
+    connect(m_seam_editor, &SeamEditor::selectedSeamChanged, this, &GarmentViewWidget::updateSeamActions);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -153,6 +176,9 @@ void GarmentViewWidget::clear()
     m_has_avatar_request = false;
     ++m_avatar_generation;  // a fit still running belongs to what was cleared
     m_scene_model->clear();
+    m_seam_editor->setSewing(false);
+    m_seam_editor->setSeams(QVector<VSeam>());
+    m_seam_editor->setPieces(QVector<SeamEditor::Piece>());
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -182,6 +208,7 @@ void GarmentViewWidget::rebuildScene()
     std::sort(ids.begin(), ids.end());
 
     QVector<GarmentSceneModel::Piece> scene_pieces;
+    QVector<SeamEditor::Piece> seam_pieces;
     QHash<quint32, CachedMesh> mesh_cache;
     for (const quint32 id : ids)
     {
@@ -210,6 +237,11 @@ void GarmentViewWidget::rebuildScene()
                     scene_piece.color = color.isValid() ? color : QColor(Qt::white);
                     scene_piece.mesh = cached.mesh;
                     scene_pieces.append(scene_piece);
+
+                    SeamEditor::Piece seam_piece;
+                    seam_piece.id = id;
+                    seam_piece.outline = cached.outline;
+                    seam_pieces.append(seam_piece);
                 }
             }
             catch (const VException&)
@@ -221,6 +253,8 @@ void GarmentViewWidget::rebuildScene()
 
     m_mesh_cache = mesh_cache;
     m_scene_model->setPieces(scene_pieces);
+    m_seam_editor->setSeams(m_doc->getSeams());
+    m_seam_editor->setPieces(seam_pieces);
 
     updateAvatar();
 }
@@ -356,6 +390,67 @@ void GarmentViewWidget::scenePicked(quint32 id)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// The pattern's seams changed, by sewing here or by undo and redo.
+void GarmentViewWidget::updateSeams()
+{
+    m_seam_editor->setSeams(m_doc->getSeams());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Adds the seam sewn on the board and selects it, so a twisted one can be flipped right away.
+void GarmentViewWidget::sewSeam(const VSeam& seam)
+{
+    QVector<VSeam> seams = m_doc->getSeams();
+    seams.append(seam);
+    saveSeams(tr("sew pieces"), seams);
+    m_seam_editor->setSelectedSeam(static_cast<int>(seams.size()) - 1);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::flipSeam()
+{
+    const int index = m_seam_editor->selectedSeam();
+    QVector<VSeam> seams = m_doc->getSeams();
+    if (index >= 0 && index < seams.size())
+    {
+        seams[index].reverse = !seams.at(index).reverse;
+        saveSeams(tr("flip seam"), seams);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::removeSeam()
+{
+    const int index = m_seam_editor->selectedSeam();
+    QVector<VSeam> seams = m_doc->getSeams();
+    if (index >= 0 && index < seams.size())
+    {
+        seams.removeAt(index);
+        m_seam_editor->setSelectedSeam(-1);
+        saveSeams(tr("remove seam"), seams);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::updateSeamActions()
+{
+    const QSignalBlocker blocker(m_sew_action);
+    m_sew_action->setChecked(m_seam_editor->isSewing());
+
+    const bool selected = m_seam_editor->selectedSeam() >= 0;
+    m_flip_action->setEnabled(selected);
+    m_remove_action->setEnabled(selected);
+
+    // With nothing to step back from, Esc is left to the main window.
+    m_cancel_action->setEnabled(m_seam_editor->isSewing() || selected);
+
+    if (m_seam_editor->isSewing() && m_quick_widget != nullptr)
+    {
+        m_quick_widget->setFocus();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void GarmentViewWidget::createScene()
 {
     // Created without a parent and added to the layout last: the first Qt Quick widget in a window makes Qt
@@ -385,6 +480,7 @@ void GarmentViewWidget::createScene()
     const QPalette colors = palette();
     QVariantMap properties;
     properties.insert(QStringLiteral("sceneModel"), QVariant::fromValue(m_scene_model));
+    properties.insert(QStringLiteral("seamEditor"), QVariant::fromValue(m_seam_editor));
     properties.insert(QStringLiteral("emptyText"), tr("Pieces included in the layout show up here."));
     properties.insert(QStringLiteral("hintText"),
                       tr("Drag to turn, Ctrl+drag to move, scroll to zoom, double-click to fit"));
@@ -395,6 +491,46 @@ void GarmentViewWidget::createScene()
     m_quick_widget->setSource(QUrl(QStringLiteral("qrc:/garment3d/garment_scene.qml")));
 
     layout()->addWidget(m_quick_widget);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Sewing, flipping and removing seams. Delete and Esc only act while the view has the focus, so they don't get in
+// the way of the piece scene's.
+void GarmentViewWidget::createToolBar()
+{
+    QToolBar* tool_bar = new QToolBar(this);
+    tool_bar->setToolButtonStyle(Qt::ToolButtonTextOnly);
+
+    m_sew_action = tool_bar->addAction(tr("Sew"));
+    m_sew_action->setCheckable(true);
+    m_sew_action->setToolTip(tr("Sew pieces together: click an edge near the end where the seam starts, then the "
+                                "edge it is sewn to near the end that meets it"));
+    connect(m_sew_action, &QAction::toggled, m_seam_editor, &SeamEditor::setSewing);
+
+    m_flip_action = tool_bar->addAction(tr("Flip"));
+    m_flip_action->setToolTip(tr("Turn the selected seam around, when its lines cross"));
+    connect(m_flip_action, &QAction::triggered, this, &GarmentViewWidget::flipSeam);
+
+    m_remove_action = tool_bar->addAction(tr("Remove"));
+    m_remove_action->setToolTip(tr("Take the selected seam out"));
+    m_remove_action->setShortcut(QKeySequence::Delete);
+    m_remove_action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    connect(m_remove_action, &QAction::triggered, this, &GarmentViewWidget::removeSeam);
+
+    m_cancel_action = new QAction(this);
+    m_cancel_action->setShortcut(Qt::Key_Escape);
+    m_cancel_action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    connect(m_cancel_action, &QAction::triggered, m_seam_editor, &SeamEditor::cancel);
+    addAction(m_cancel_action);
+
+    layout()->addWidget(tool_bar);
+    updateSeamActions();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::saveSeams(const QString& text, const QVector<VSeam>& seams)
+{
+    qApp->getUndoStack()->push(new SaveSeams(text, m_doc->getSeams(), seams, m_doc));
 }
 
 //---------------------------------------------------------------------------------------------------------------------

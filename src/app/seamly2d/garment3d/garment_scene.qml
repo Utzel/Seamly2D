@@ -22,8 +22,8 @@
 //  along with Seamly2D. If not, see <http://www.gnu.org/licenses/>.
 //---------------------------------------------------------------------------------------------------------------------
 
-// The 3D View dock's scene. All logic lives in C++ (GarmentViewWidget, GarmentSceneModel); this file only draws the
-// pieces it is given, moves the camera and reports clicks. Units are cm, y points up.
+// The 3D View dock's scene. All logic lives in C++ (GarmentViewWidget, GarmentSceneModel, SeamEditor); this file only
+// draws what it is given, moves the camera and reports where the mouse is. Units are cm, y points up.
 
 import QtQuick
 import QtQuick3D
@@ -33,6 +33,7 @@ Rectangle {
     id: root
 
     required property var sceneModel
+    required property var seamEditor
     required property string emptyText
     required property string hintText
     required property color backgroundColor
@@ -40,6 +41,32 @@ Rectangle {
     required property color highlightColor
 
     color: backgroundColor
+
+    // How close, in pixels, the mouse has to come to a seam line to sew it or to pick a seam.
+    readonly property real pickDistance: 8
+
+    // Where the ray through a point of the view meets the board of pieces, in the board's coordinates, or undefined
+    // if it misses the board.
+    function boardPoint(x, y) {
+        const near = view.mapTo3DScene(Qt.vector3d(x, y, 0))
+        const far = view.mapTo3DScene(Qt.vector3d(x, y, 100))
+        const board = root.sceneModel.boardOffset
+        const depth = far.z - near.z
+        if (Math.abs(depth) < 1e-9) {
+            return undefined
+        }
+        const t = (board.z - near.z) / depth
+        if (t < 0) {
+            return undefined
+        }
+        return Qt.vector2d(near.x + t * (far.x - near.x) - board.x, near.y + t * (far.y - near.y) - board.y)
+    }
+
+    // How far pickDistance pixels reach on the board next to a point of the view, in cm.
+    function boardTolerance(x, y, point) {
+        const beside = root.boardPoint(x + root.pickDistance, y)
+        return beside === undefined ? 1 : beside.minus(point).length()
+    }
 
     // Looks at all pieces straight on, from just far enough away to see them all.
     function frameAll() {
@@ -64,6 +91,8 @@ Rectangle {
     View3D {
         id: view
         anchors.fill: parent
+        // Rendering would find the camera by itself, mapTo3DScene() needs to be told.
+        camera: camera
 
         environment: SceneEnvironment {
             backgroundMode: SceneEnvironment.Transparent
@@ -91,9 +120,11 @@ Rectangle {
             brightness: 0.6
         }
 
-        // The avatar, fitted to the pattern's measurements, in a plain grey like a dress form.
+        // The avatar, fitted to the pattern's measurements, in a plain grey like a dress form. While sewing it fades,
+        // so the board behind it can be seen.
         Model {
             visible: root.sceneModel.hasAvatar
+            opacity: root.seamEditor.sewing ? 0.25 : 1.0
             geometry: root.sceneModel.avatarGeometry
 
             materials: PrincipledMaterial {
@@ -158,6 +189,41 @@ Rectangle {
                     }
                 }
             }
+
+            // The seams, in front of all pieces so they always show, and in front of them what is being sewn.
+            Node {
+                z: root.sceneModel.pieceCount * 0.05 + 0.05
+
+                PrincipledMaterial {
+                    id: seam_material
+                    lighting: PrincipledMaterial.NoLighting
+                    vertexColorsEnabled: true
+                    cullMode: Material.NoCulling
+                }
+
+                Model {
+                    geometry: root.seamEditor.seamBands
+                    materials: seam_material
+                }
+
+                Model {
+                    z: 0.01
+                    geometry: root.seamEditor.seamLines
+                    materials: seam_material
+                }
+
+                Model {
+                    z: 0.02
+                    geometry: root.seamEditor.previewBands
+                    materials: seam_material
+                }
+
+                Model {
+                    z: 0.03
+                    geometry: root.seamEditor.previewLines
+                    materials: seam_material
+                }
+            }
         }
     }
 
@@ -166,13 +232,41 @@ Rectangle {
         origin: orbit_origin
         camera: camera
 
+        // Seams get the click first; what they leave selects a piece.
         TapHandler {
             onTapped: (event_point) => {
-                const result = view.pick(event_point.position.x, event_point.position.y)
-                const hit = result.objectHit
-                root.sceneModel.pickPiece(hit && hit.pieceId !== undefined ? hit.pieceId : 0)
+                const x = event_point.position.x
+                const y = event_point.position.y
+                const point = root.boardPoint(x, y)
+                const used = point !== undefined
+                             && root.seamEditor.click(point.x, point.y, root.boardTolerance(x, y, point))
+                if (!used) {
+                    const hit = view.pick(x, y).objectHit
+                    root.sceneModel.pickPiece(hit && hit.pieceId !== undefined ? hit.pieceId : 0)
+                }
             }
             onDoubleTapped: root.frameAll()
+        }
+
+        HoverHandler {
+            id: hover_handler
+            cursorShape: root.seamEditor.sewing ? Qt.CrossCursor : Qt.ArrowCursor
+
+            onPointChanged: {
+                const x = hover_handler.point.position.x
+                const y = hover_handler.point.position.y
+                const point = root.boardPoint(x, y)
+                if (point === undefined) {
+                    root.seamEditor.leave()
+                } else {
+                    root.seamEditor.hover(point.x, point.y, root.boardTolerance(x, y, point))
+                }
+            }
+            onHoveredChanged: {
+                if (!hover_handler.hovered) {
+                    root.seamEditor.leave()
+                }
+            }
         }
     }
 
@@ -192,9 +286,9 @@ Rectangle {
         anchors.bottom: parent.bottom
         anchors.margins: 6
         visible: root.sceneModel.pieceCount > 0 || root.sceneModel.hasAvatar
-        text: root.hintText
+        text: root.seamEditor.hint !== "" ? root.seamEditor.hint : root.hintText
         color: root.textColor
-        opacity: 0.6
+        opacity: root.seamEditor.hint !== "" ? 1.0 : 0.6
         font.pointSize: 8
         wrapMode: Text.WordWrap
         horizontalAlignment: Text.AlignHCenter

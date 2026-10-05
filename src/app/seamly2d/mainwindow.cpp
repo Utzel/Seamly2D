@@ -5996,7 +5996,7 @@ void MainWindow::initializeDocksContain()
     connect(piecesWidget, &PiecesWidget::Highlight, pieceScene, &VMainGraphicsScene::HighlightItem);
 
     qCDebug(vMainWindow, "Initialize 3D view.");
-    m_garment_view_widget = new GarmentViewWidget(pattern, this);
+    m_garment_view_widget = new GarmentViewWidget(pattern, doc, this);
     ui->garment3d_DockWidget->setWidget(m_garment_view_widget);
     connect(doc, &VPattern::FullUpdateFromFile, m_garment_view_widget, &GarmentViewWidget::updatePieces);
     connect(doc, &VPattern::UpdateInLayoutList, m_garment_view_widget, &GarmentViewWidget::updatePieces);
