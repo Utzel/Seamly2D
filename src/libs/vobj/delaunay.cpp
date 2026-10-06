@@ -34,6 +34,7 @@ QT_WARNING_DISABLE_GCC("-Wcast-qual")
 #if PREDICATE == EXACT_PREDICATE
 extern void exactinit();
 extern real incircle(real* pa, real* pb, real* pc, real* pd);
+extern real orient2d(real* pa, real* pb, real* pc);
 #endif
 
 #define ON_RIGHT	1
@@ -248,8 +249,13 @@ static int cmp_points( const void *_pt0, const void *_pt1 )
 */
 static int classify_point_seg( point2d_t *s, point2d_t *e, point2d_t *pt )
 {
-    point2d_t		se, spt;
     real		res;
+
+#if PREDICATE == EXACT_PREDICATE
+    // The plain cross product puts nearly collinear points on the wrong side, which breaks the triangulation.
+    res = orient2d(&(s->x), &(e->x), &(pt->x));
+#else
+    point2d_t		se, spt;
 
     se.x	= e->x - s->x;
     se.y	= e->y - s->y;
@@ -258,6 +264,7 @@ static int classify_point_seg( point2d_t *s, point2d_t *e, point2d_t *pt )
     spt.y	= pt->y - s->y;
 
     res	= (( se.x * spt.y ) - ( se.y * spt.x ));
+#endif
     if( res < REAL_ZERO )
         return ON_RIGHT;
     else if( res > REAL_ZERO )

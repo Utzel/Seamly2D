@@ -276,6 +276,33 @@ void TST_PieceMesher::outlineWithoutAreaGivesEmptyMesh() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// Drafted points are rarely exact: this skirt front's centre front leans by a few hundred-thousandths of a cm. Points
+// nearly in line must not upset the triangulation, which would leave a slit or triangles folded over each other.
+void TST_PieceMesher::nearlyStraightEdgesAreMeshed() const
+{
+    const QVector<QPointF> outline = {QPointF(10, 0), QPointF(28, 0),
+                                      QPointF(28.000024104965735, 54.999944567887098),
+                                      QPointF(4.4506192874086044e-05, 55.000008663743643),
+                                      QPointF(1.9999881692269856, 20.000039179898923)};
+    QVector<OutlineNode> nodes;
+    for (int i = 0; i < outline.size(); ++i)
+    {
+        OutlineNode node;
+        node.id = static_cast<quint32>(i + 1);
+        node.index = i;
+        nodes.append(node);
+    }
+    const GarmentMesh mesh = PieceMesher().meshOutline(PieceOutline(outline, nodes));
+
+    QVERIFY2(qAbs(mesh.area() - polygonArea(outline)) < 1e-6,
+             qUtf8Printable(QStringLiteral("the triangles cover %1 square cm of %2").arg(mesh.area())
+                                .arg(polygonArea(outline))));
+
+    const QString problem = triangleProblem(mesh, PieceMesher::defaultEdgeLength());
+    QVERIFY2(problem.isEmpty(), qUtf8Printable(problem));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Pattern points are stored in pixels; the mesh has to be in cm and sit where the piece sits in the piece scene.
 void TST_PieceMesher::pieceIsMeshedInCentimetres() const
 {

@@ -1084,4 +1084,126 @@ qreal incircle(qreal *pa, qreal *pb, qreal *pc, qreal *pd)
     return incircleadapt(pa, pb, pc, pd, permanent);
 }
 
+qreal orient2dadapt(qreal *pa, qreal *pb, qreal *pc, qreal detsum)
+{
+    INEXACT qreal acx, acy, bcx, bcy;
+    qreal acxtail, acytail, bcxtail, bcytail;
+    INEXACT qreal detleft, detright;
+    qreal detlefttail, detrighttail;
+    qreal det, errbound;
+    qreal B[4], C1[8], C2[12], D[16];
+    INEXACT qreal B3;
+    int C1length, C2length, Dlength;
+    qreal u[4];
+    INEXACT qreal u3;
+    INEXACT qreal s1, t1;
+    qreal s0, t0;
+
+    INEXACT qreal bvirt;
+    qreal avirt, bround, around;
+    INEXACT qreal c;
+    INEXACT qreal abig;
+    qreal ahi, alo, bhi, blo;
+    qreal err1, err2, err3;
+    INEXACT qreal _i, _j;
+    qreal _0;
+
+    acx = (qreal) (pa[0] - pc[0]);
+    bcx = (qreal) (pb[0] - pc[0]);
+    acy = (qreal) (pa[1] - pc[1]);
+    bcy = (qreal) (pb[1] - pc[1]);
+
+    Two_Product(acx, bcy, detleft, detlefttail);
+    Two_Product(acy, bcx, detright, detrighttail);
+
+    Two_Two_Diff(detleft, detlefttail, detright, detrighttail, B3, B[2], B[1], B[0]);
+    B[3] = B3;
+
+    det = estimate(4, B);
+    errbound = ccwerrboundB * detsum;
+    if ((det >= errbound) || (-det >= errbound))
+    {
+        return det;
+    }
+
+    Two_Diff_Tail(pa[0], pc[0], acx, acxtail);
+    Two_Diff_Tail(pb[0], pc[0], bcx, bcxtail);
+    Two_Diff_Tail(pa[1], pc[1], acy, acytail);
+    Two_Diff_Tail(pb[1], pc[1], bcy, bcytail);
+
+    if ((acxtail == 0.0) && (acytail == 0.0) && (bcxtail == 0.0) && (bcytail == 0.0))
+    {
+        return det;
+    }
+
+    errbound = ccwerrboundC * detsum + resulterrbound * Absolute(det);
+    det += (acx * bcytail + bcy * acxtail) - (acy * bcxtail + bcx * acytail);
+    if ((det >= errbound) || (-det >= errbound))
+    {
+        return det;
+    }
+
+    Two_Product(acxtail, bcy, s1, s0);
+    Two_Product(acytail, bcx, t1, t0);
+    Two_Two_Diff(s1, s0, t1, t0, u3, u[2], u[1], u[0]);
+    u[3] = u3;
+    C1length = fast_expansion_sum_zeroelim(4, B, 4, u, C1);
+
+    Two_Product(acx, bcytail, s1, s0);
+    Two_Product(acy, bcxtail, t1, t0);
+    Two_Two_Diff(s1, s0, t1, t0, u3, u[2], u[1], u[0]);
+    u[3] = u3;
+    C2length = fast_expansion_sum_zeroelim(C1length, C1, 4, u, C2);
+
+    Two_Product(acxtail, bcytail, s1, s0);
+    Two_Product(acytail, bcxtail, t1, t0);
+    Two_Two_Diff(s1, s0, t1, t0, u3, u[2], u[1], u[0]);
+    u[3] = u3;
+    Dlength = fast_expansion_sum_zeroelim(C2length, C2, 4, u, D);
+
+    return D[Dlength - 1];
+}
+
+// orient2d(): adaptive exact 2D orientation test, from the same public domain predicates as incircle().
+// Returns a positive value if the points pa, pb and pc occur in counterclockwise order, a negative value if they occur
+// in clockwise order, and zero if they are collinear: roughly twice the signed area of their triangle.
+qreal orient2d(qreal *pa, qreal *pb, qreal *pc)
+{
+    qreal detleft, detright, det;
+    qreal detsum, errbound;
+
+    detleft = (pa[0] - pc[0]) * (pb[1] - pc[1]);
+    detright = (pa[1] - pc[1]) * (pb[0] - pc[0]);
+    det = detleft - detright;
+
+    if (detleft > 0.0)
+    {
+        if (detright <= 0.0)
+        {
+            return det;
+        }
+        detsum = detleft + detright;
+    }
+    else if (detleft < 0.0)
+    {
+        if (detright >= 0.0)
+        {
+            return det;
+        }
+        detsum = -detleft - detright;
+    }
+    else
+    {
+        return det;
+    }
+
+    errbound = ccwerrboundA * detsum;
+    if ((det >= errbound) || (-det >= errbound))
+    {
+        return det;
+    }
+
+    return orient2dadapt(pa, pb, pc, detsum);
+}
+
 QT_WARNING_POP

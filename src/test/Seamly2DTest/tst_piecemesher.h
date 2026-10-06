@@ -41,6 +41,7 @@ private slots:
     void windingDoesNotMatter() const;
     void edgeLengthSetsResolution() const;
     void outlineWithoutAreaGivesEmptyMesh() const;
+    void nearlyStraightEdgesAreMeshed() const;
     void pieceIsMeshedInCentimetres() const;
     void pathPointsBecomeVertices() const;
     void meshStretchNamesVertices() const;
