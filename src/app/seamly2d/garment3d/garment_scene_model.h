@@ -120,6 +120,9 @@ public:
 
     Q_INVOKABLE void       pickPiece(int id);
     Q_INVOKABLE void       placeAt(qreal x, qreal y, qreal z);
+    Q_INVOKABLE bool       grabPiece(int id, qreal x, qreal y, qreal z);
+    Q_INVOKABLE void       dragTo(qreal x, qreal y, qreal z);
+    Q_INVOKABLE void       dropPiece();
 
 signals:
     void                   pieceCountChanged();
@@ -132,6 +135,9 @@ signals:
     void                   hintChanged();
     void                   strainShownChanged();
     void                   placeRequested(const QVector3D& point);
+    void                   grabRequested(quint32 id, const QVector3D& point);
+    void                   dragRequested(const QVector3D& point);
+    void                   dropRequested();
 
 private:
     Q_DISABLE_COPY(GarmentSceneModel)

@@ -51,6 +51,7 @@ private slots:
     void fitKeepsTheLegsProportions() const;
     void fitStaysInRange() const;
     void wrapFindsBodyParts() const;
+    void wrapPlacesOnAGivenPart() const;
     void wrappedPiecesStartOutsideTheBody() const;
     void sleevesStartAroundTheArm() const;
 

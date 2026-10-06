@@ -100,6 +100,9 @@ private slots:
     void               cancel();
     void               setArranging(bool arranging);
     void               placePiece(const QVector3D& point);
+    void               grabPiece(quint32 id, const QVector3D& point);
+    void               dragPiece(const QVector3D& point);
+    void               dropPiece();
     void               setSimulating(bool simulating);
     void               resetDrape();
     void               drapeFrame(int generation, const QVector<QVector3D>& positions);
@@ -151,6 +154,17 @@ private:
         QVector<QVector3D> positions;
     };
 
+    // A placed piece being dragged around the part of the body it is on.
+    struct PieceDrag
+    {
+        quint32          piece = 0;         ///< the pattern piece; 0 while none is dragged
+        bool             mirrored = false;  ///< held by its copy on the other side of the body
+        PieceArrangement grabbed;           ///< where on the piece's part the mouse took hold of it
+        PieceArrangement start;             ///< where the piece was arranged then
+        PieceArrangement current;
+        QHash<quint32, QVector<QVector3D>> draped;  ///< the drape of the piece and its copy, back if called off
+    };
+
     // Where a piece's vertices are among all the vertices of the drape being simulated.
     struct DrapePiece
     {
@@ -194,6 +208,7 @@ private:
     QVector<DrapePiece>        m_drape_pieces;
     QVector<GarmentPiece>      m_garment_pieces;
     DrapeRunner*               m_runner;
+    PieceDrag                  m_drag;
 
     void               createScene();
     void               createToolBar();
@@ -201,6 +216,10 @@ private:
     void               sewSeam(const VSeam& seam);
     void               saveSeams(const QString& text, const QVector<VSeam>& seams);
     void               saveArrangements(const QString& text, const QVector<VPieceArrangement>& arrangements);
+    void               storeArrangement(quint32 piece, const PieceArrangement& wanted, const QString& text);
+    void               showArrangement(quint32 piece, const PieceArrangement& arrangement);
+    void               callOffDrag();
+    void               showPlaced(quint32 piece);
     void               readArrangements();
     qreal              grainAngle(const VPiece& piece) const;
     bool               carryDrape(quint32 id, const GarmentMesh& before, const GarmentMesh& after);

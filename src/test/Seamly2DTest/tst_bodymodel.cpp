@@ -511,6 +511,38 @@ void TST_BodyModel::wrapFindsBodyParts() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// On the part a point is nearest to, a piece goes where it would go put at that point. On another part it goes as far
+// around that part as the point is: beside the hip, on the outside of the left leg, at the point's height.
+void TST_BodyModel::wrapPlacesOnAGivenPart() const
+{
+    const BodyModel model;
+    const QVector<QVector3D> positions = model.evaluate(female());
+    const BodyWrap wrap(model, positions);
+    const QVector3D pelvis = model.joint(positions, QStringLiteral("pelvis"));
+    const QVector3D chest = model.joint(positions, QStringLiteral("spine-3"));
+    const QVector3D knee = model.joint(positions, QStringLiteral("l-knee"));
+    const QVector3D shoulder = model.joint(positions, QStringLiteral("l-shoulder"));
+    const QVector3D elbow = model.joint(positions, QStringLiteral("l-elbow"));
+
+    for (const QVector3D& point : {QVector3D(pelvis.x(), chest.y(), pelvis.z() + 15), knee + QVector3D(0, 10, 7),
+                                   shoulder + (elbow - shoulder) * 0.6f + QVector3D(0, 6, 0)})
+    {
+        const PieceArrangement at = wrap.arrangementAt(point);
+        const PieceArrangement on = wrap.arrangementOn(at.part, point);
+        QVERIFY(on.part == at.part);
+        QVERIFY(qFuzzyCompare(1.0 + on.angle, 1.0 + at.angle));
+        QVERIFY(qFuzzyCompare(1.0 + on.height, 1.0 + at.height));
+    }
+
+    const QVector3D beside_hip(pelvis.x() + 25, pelvis.y(), pelvis.z());
+    QVERIFY(wrap.arrangementAt(beside_hip).part == BodyPart::Body);
+    const PieceArrangement on_leg = wrap.arrangementOn(BodyPart::LeftLeg, beside_hip);
+    QVERIFY(on_leg.part == BodyPart::LeftLeg);
+    QVERIFY2(qAbs(on_leg.angle - 90.0) < 10.0, qUtf8Printable(QString::number(on_leg.angle)));
+    QCOMPARE(on_leg.height, static_cast<qreal>(pelvis.y()));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Pieces placed on the body or a leg start outside the skin, bent but not stretched.
 void TST_BodyModel::wrappedPiecesStartOutsideTheBody() const
 {

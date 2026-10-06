@@ -48,6 +48,7 @@
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
+#include <cmath>
 #include <iterator>
 #include <tuple>
 #include <utility>
@@ -178,6 +179,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_turned_pairs()
     , m_drape_pieces()
     , m_runner(new DrapeRunner(this))
+    , m_drag()
 {
     QVBoxLayout* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -204,6 +206,9 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     connect(m_doc, &VAbstractPattern::arrangementsChanged, this, &GarmentViewWidget::updateArrangements);
     connect(m_doc, &VAbstractPattern::fabricsChanged, this, &GarmentViewWidget::updateFabrics);
     connect(m_scene_model, &GarmentSceneModel::placeRequested, this, &GarmentViewWidget::placePiece);
+    connect(m_scene_model, &GarmentSceneModel::grabRequested, this, &GarmentViewWidget::grabPiece);
+    connect(m_scene_model, &GarmentSceneModel::dragRequested, this, &GarmentViewWidget::dragPiece);
+    connect(m_scene_model, &GarmentSceneModel::dropRequested, this, &GarmentViewWidget::dropPiece);
     connect(m_scene_model, &GarmentSceneModel::selectedPieceChanged, this, &GarmentViewWidget::updateActions);
     connect(m_scene_model, &GarmentSceneModel::avatarChanged, this, &GarmentViewWidget::updateActions);
     connect(m_runner, &DrapeRunner::frameReady, this, &GarmentViewWidget::drapeFrame);
@@ -842,10 +847,14 @@ void GarmentViewWidget::removeSelected()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Esc steps back: out of arranging, or out of what sewing or a selected seam was doing.
+// Esc steps back: out of dragging a piece, out of arranging, or out of what sewing or a selected seam was doing.
 void GarmentViewWidget::cancel()
 {
-    if (m_scene_model->isArranging())
+    if (m_drag.piece != 0)
+    {
+        callOffDrag();
+    }
+    else if (m_scene_model->isArranging())
     {
         m_arrange_action->setChecked(false);
     }
@@ -875,29 +884,140 @@ void GarmentViewWidget::placePiece(const QVector3D& point)
     const quint32 piece = m_scene_model->selectedPiece();
     if (piece != 0 && !m_wrap.isNull())
     {
-        const PieceArrangement wanted = m_wrap->arrangementAt(point);
-        VPieceArrangement arrangement;
-        arrangement.piece_id = piece;
-        arrangement.part = BodyWrap::partName(wanted.part);
-        arrangement.angle = wanted.angle;
-        arrangement.height = wanted.height;
+        storeArrangement(piece, m_wrap->arrangementAt(point), tr("place piece"));
+    }
+}
 
-        QVector<VPieceArrangement> arrangements = m_doc->getArrangements();
-        auto existing = std::find_if(arrangements.begin(), arrangements.end(),
-                                     [piece](const VPieceArrangement& other)
+//---------------------------------------------------------------------------------------------------------------------
+// A placed piece was pressed on while arranging: until it is let go, it slides around the part of the body it is on
+// with the mouse, keeping where the mouse took hold of it. A drape going on stops.
+void GarmentViewWidget::grabPiece(quint32 id, const QVector3D& point)
+{
+    const quint32 piece = patternPiece(id);
+    if (m_wrap.isNull() || !m_arrangements.contains(piece))
+    {
+        return;
+    }
+    m_simulate_action->setChecked(false);
+
+    m_drag = PieceDrag();
+    m_drag.piece = piece;
+    m_drag.mirrored = PieceOutline::isMirrorId(id) != m_turned_pairs.contains(piece);
+    m_drag.start = m_arrangements.value(piece);
+    m_drag.current = m_drag.start;
+    m_drag.grabbed = m_wrap->arrangementOn(m_drag.start.part, m_drag.mirrored ? m_wrap->mirrored(point) : point);
+    for (const quint32 copy : {piece, PieceOutline::mirrorId(piece)})
+    {
+        if (m_draped.contains(copy))
         {
-            return other.piece_id == piece;
-        });
-        if (existing != arrangements.end())
+            m_drag.draped.insert(copy, m_draped.value(copy));
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The mouse moved on with a piece held: the piece goes as far around and up or down its part as the mouse did.
+void GarmentViewWidget::dragPiece(const QVector3D& point)
+{
+    if (m_drag.piece != 0 && !m_wrap.isNull())
+    {
+        const PieceArrangement at = m_wrap->arrangementOn(m_drag.start.part,
+                                                          m_drag.mirrored ? m_wrap->mirrored(point) : point);
+        m_drag.current.angle = std::remainder(m_drag.start.angle + at.angle - m_drag.grabbed.angle, 360.0);
+        m_drag.current.height = m_drag.start.height + at.height - m_drag.grabbed.height;
+        showArrangement(m_drag.piece, m_drag.current);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The held piece was let go: where it was dragged to is stored as one step, or, if it didn't move, it stays as it was.
+void GarmentViewWidget::dropPiece()
+{
+    if (m_drag.piece != 0)
+    {
+        const bool moved = !qFuzzyCompare(1.0 + m_drag.current.angle, 1.0 + m_drag.start.angle)
+                           || !qFuzzyCompare(1.0 + m_drag.current.height, 1.0 + m_drag.start.height);
+        if (moved)
         {
-            *existing = arrangement;
+            const quint32 piece = m_drag.piece;
+            const PieceArrangement current = m_drag.current;
+            m_drag = PieceDrag();
+            storeArrangement(piece, current, tr("move piece"));
         }
         else
         {
-            arrangements.append(arrangement);
+            callOffDrag();
         }
-        saveArrangements(tr("place piece"), arrangements);
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Puts a dragged piece back where it was, drape and all.
+void GarmentViewWidget::callOffDrag()
+{
+    const PieceDrag drag = m_drag;
+    m_drag = PieceDrag();
+    if (drag.piece != 0)
+    {
+        m_arrangements.insert(drag.piece, drag.start);
+        for (auto draped = drag.draped.constBegin(); draped != drag.draped.constEnd(); ++draped)
+        {
+            m_draped.insert(draped.key(), draped.value());
+        }
+        showPlaced(drag.piece);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Shows a piece and its copy where an arrangement puts them, while the piece is dragged there; the pattern only gets
+// it when the piece is let go.
+void GarmentViewWidget::showArrangement(quint32 piece, const PieceArrangement& arrangement)
+{
+    m_arrangements.insert(piece, arrangement);
+    m_draped.remove(piece);
+    m_draped.remove(PieceOutline::mirrorId(piece));
+    showPlaced(piece);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Moves a placed piece and its copy in the scene to where they are now, draped or arranged.
+void GarmentViewWidget::showPlaced(quint32 piece)
+{
+    const CachedMesh cached = m_mesh_cache.value(piece);
+    for (const quint32 copy : {piece, PieceOutline::mirrorId(piece)})
+    {
+        const GarmentMesh& mesh = copy == piece ? cached.garment_mesh : cached.mirror_mesh;
+        if (!mesh.isEmpty())
+        {
+            m_scene_model->setPiecePositions(copy, piecePositions(copy, mesh));
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Stores where a piece is put on the avatar in the pattern, as one undo step.
+void GarmentViewWidget::storeArrangement(quint32 piece, const PieceArrangement& wanted, const QString& text)
+{
+    VPieceArrangement arrangement;
+    arrangement.piece_id = piece;
+    arrangement.part = BodyWrap::partName(wanted.part);
+    arrangement.angle = wanted.angle;
+    arrangement.height = wanted.height;
+
+    QVector<VPieceArrangement> arrangements = m_doc->getArrangements();
+    auto existing = std::find_if(arrangements.begin(), arrangements.end(), [piece](const VPieceArrangement& other)
+    {
+        return other.piece_id == piece;
+    });
+    if (existing != arrangements.end())
+    {
+        *existing = arrangement;
+    }
+    else
+    {
+        arrangements.append(arrangement);
+    }
+    saveArrangements(text, arrangements);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1163,8 +1283,10 @@ void GarmentViewWidget::updateHint()
     else if (m_scene_model->isArranging())
     {
         hint = m_scene_model->selectedPiece() == 0
-               ? tr("Click a piece, then the spot on the avatar where it goes. Esc stops arranging.")
-               : tr("Click the spot on the avatar where the piece goes. Remove puts a placed piece back on the board.");
+               ? tr("Click a piece, then the spot on the avatar where it goes, or drag a placed piece around. Esc "
+                    "stops arranging.")
+               : tr("Click the spot on the avatar where the piece goes, or drag a placed piece around. Remove puts a "
+                    "placed piece back on the board.");
     }
     m_scene_model->setHint(hint);
 }
@@ -1249,7 +1371,8 @@ void GarmentViewWidget::createToolBar()
 
     m_arrange_action = tool_bar->addAction(tr("Arrange"));
     m_arrange_action->setCheckable(true);
-    m_arrange_action->setToolTip(tr("Put pieces on the avatar: click a piece, then the spot where it goes"));
+    m_arrange_action->setToolTip(tr("Put pieces on the avatar: click a piece, then the spot where it goes; drag a "
+                                    "placed piece to move it around"));
     connect(m_arrange_action, &QAction::toggled, this, &GarmentViewWidget::setArranging);
 
     m_simulate_action = tool_bar->addAction(tr("Simulate"));

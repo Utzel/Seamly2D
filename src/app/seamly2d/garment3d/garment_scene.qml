@@ -71,6 +71,26 @@ Rectangle {
     // Set while framing waits for the view to get a size, which its window only gives it after the scene has loaded.
     property bool framePending: false
 
+    // Set while a placed piece is dragged around the avatar, which holds the camera still.
+    property bool draggingPiece: false
+
+    // How far from the eye the mouse took hold of the dragged piece, in cm.
+    property real dragDistance: 0
+
+    // Where the mouse is on the avatar, in scene coordinates; off the avatar, as far along the ray through the mouse as
+    // where it took hold of the dragged piece.
+    function dragPoint(x, y) {
+        const results = view.pickAll(x, y)
+        for (let i = 0; i < results.length; ++i) {
+            if (results[i].objectHit && results[i].objectHit.isAvatar === true) {
+                return results[i].scenePosition
+            }
+        }
+        const near = view.mapTo3DScene(Qt.vector3d(x, y, 0))
+        const far = view.mapTo3DScene(Qt.vector3d(x, y, 100))
+        return near.plus(far.minus(near).normalized().times(root.dragDistance))
+    }
+
     // Looks at all pieces straight on, from just far enough away to see them all.
     function frameAll() {
         root.framePending = view.width < 1 || view.height < 1
@@ -259,6 +279,44 @@ Rectangle {
         anchors.fill: parent
         origin: orbit_origin
         camera: camera
+        mouseEnabled: !root.draggingPiece
+
+        // While arranging, a placed piece pressed on follows the mouse around the avatar until it is let go.
+        PointHandler {
+            id: piece_handler
+            enabled: root.sceneModel.arranging
+            acceptedButtons: Qt.LeftButton
+            acceptedModifiers: Qt.NoModifier
+
+            onActiveChanged: {
+                if (piece_handler.active) {
+                    const x = piece_handler.point.position.x
+                    const y = piece_handler.point.position.y
+                    const results = view.pickAll(x, y)
+                    const piece = results.length > 0 ? results[0].objectHit : null
+                    if (piece && piece.pieceId !== undefined) {
+                        let held = results[0].scenePosition
+                        for (let i = 1; i < results.length; ++i) {
+                            if (results[i].objectHit && results[i].objectHit.isAvatar === true) {
+                                held = results[i].scenePosition
+                                break
+                            }
+                        }
+                        root.dragDistance = held.minus(view.mapTo3DScene(Qt.vector3d(x, y, 0))).length()
+                        root.draggingPiece = root.sceneModel.grabPiece(piece.pieceId, held.x, held.y, held.z)
+                    }
+                } else if (root.draggingPiece) {
+                    root.draggingPiece = false
+                    root.sceneModel.dropPiece()
+                }
+            }
+            onPointChanged: {
+                if (root.draggingPiece && piece_handler.active) {
+                    const at = root.dragPoint(piece_handler.point.position.x, piece_handler.point.position.y)
+                    root.sceneModel.dragTo(at.x, at.y, at.z)
+                }
+            }
+        }
 
         // While arranging, a click on the avatar places the selected piece there. Otherwise seams get the click
         // first, and what they leave selects a piece.

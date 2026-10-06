@@ -317,6 +317,35 @@ void GarmentSceneModel::placeAt(qreal x, qreal y, qreal z)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML when a piece is pressed on while arranging, with where the mouse is on the avatar in scene
+/// coordinates. A placed piece is picked and follows the mouse from then on; says whether it was a placed piece.
+bool GarmentSceneModel::grabPiece(int id, qreal x, qreal y, qreal z)
+{
+    const bool grabbed = m_arranging && id != 0 && isPlaced(static_cast<quint32>(id));
+    if (grabbed)
+    {
+        pickPiece(id);
+        emit grabRequested(static_cast<quint32>(id),
+                           QVector3D(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)));
+    }
+    return grabbed;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML while a grabbed piece is dragged, with where the mouse is now, in scene coordinates.
+void GarmentSceneModel::dragTo(qreal x, qreal y, qreal z)
+{
+    emit dragRequested(QVector3D(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML when a dragged piece is let go.
+void GarmentSceneModel::dropPiece()
+{
+    emit dropRequested();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief While arranging, clicks on the avatar place the selected piece.
 bool GarmentSceneModel::isArranging() const
 {

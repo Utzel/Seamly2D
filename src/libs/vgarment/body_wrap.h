@@ -70,6 +70,7 @@ public:
                        BodyWrap(const BodyModel& model, const QVector<QVector3D>& positions);
 
     PieceArrangement   arrangementAt(const QVector3D& point) const;
+    PieceArrangement   arrangementOn(BodyPart part, const QVector3D& point) const;
     QVector<QVector3D> place(const GarmentMesh& mesh, const PieceArrangement& arrangement) const;
     QVector3D          mirrored(const QVector3D& point) const;
 

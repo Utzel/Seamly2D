@@ -147,8 +147,19 @@ BodyWrap::BodyWrap(const BodyModel& model, const QVector<QVector3D>& positions)
 /// the armpit, around the leg below the crotch if the point is nearer to it, around the body otherwise.
 PieceArrangement BodyWrap::arrangementAt(const QVector3D& point) const
 {
-    PieceArrangement arrangement;
     const int arm = armAt(point);
+    return arrangementOn(arm == 0 ? BodyPart::LeftArm : (arm == 1 ? BodyPart::RightArm : nearestPart(point)), point);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Where a piece goes on a given part of the body if it is put at this point, wherever the point is: around an
+/// arm by where the point is along and around the arm's middle line, around the body or a leg by its height and its
+/// angle around the part's axis.
+PieceArrangement BodyWrap::arrangementOn(BodyPart part, const QVector3D& point) const
+{
+    PieceArrangement arrangement;
+    arrangement.part = part;
+    const int arm = armSide(part);
     if (arm >= 0)
     {
         const LimbLine& line = m_arm_lines[arm];
@@ -157,17 +168,15 @@ PieceArrangement BodyWrap::arrangementAt(const QVector3D& point) const
         const QVector3D out = point - centre;
         const QVector3D front = line.frontAt(along);
         const QVector3D quarter = QVector3D::crossProduct(front, line.directionAt(along));
-        arrangement.part = arm == 0 ? BodyPart::LeftArm : BodyPart::RightArm;
         arrangement.height = centre.y();
         arrangement.angle = qRadiansToDegrees(qAtan2(QVector3D::dotProduct(out, quarter),
                                                      QVector3D::dotProduct(out, front)));
     }
     else
     {
-        arrangement.part = nearestPart(point);
         arrangement.height = point.y();
 
-        const QVector3D axis = axisAt(arrangement.part, point.y());
+        const QVector3D axis = axisAt(part, point.y());
         arrangement.angle = qRadiansToDegrees(qAtan2(point.x() - axis.x(), point.z() - axis.z()));
     }
     return arrangement;
