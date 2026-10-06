@@ -5703,6 +5703,20 @@ void MainWindow::createMenus()
     });
 
     ui->view_Menu->addAction(ui->garment3d_DockWidget->toggleViewAction());
+    // Opened from the menu, the 3D View gets room to show the avatar rather than the least it can do with: the
+    // docks beside it would otherwise leave it at its minimum size.
+    connect(ui->garment3d_DockWidget->toggleViewAction(), &QAction::triggered, this, [this](bool checked)
+    {
+        if (checked && !ui->garment3d_DockWidget->isFloating())
+        {
+            QTimer::singleShot(0, this, [this]()
+            {
+                QDockWidget* dock = ui->garment3d_DockWidget;
+                resizeDocks({dock}, {qMax(dock->width(), width() / 4)}, Qt::Horizontal);
+                resizeDocks({dock}, {qMax(dock->height(), height() / 2)}, Qt::Vertical);
+            });
+        }
+    });
 
     actionDockWidgetLayouts = ui->layoutPages_DockWidget->toggleViewAction();
     ui->view_Menu->addAction(actionDockWidgetLayouts);
