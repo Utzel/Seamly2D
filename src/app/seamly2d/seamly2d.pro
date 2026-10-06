@@ -15,7 +15,7 @@ include(../../../common.pri)
 QT       += core gui widgets xml svg printsupport network multimedia
 
 # The 3D View dock draws its scene with Qt Quick 3D and fits its avatar on a worker thread.
-QT       += quick quickwidgets quick3d concurrent
+QT       += quick quick3d concurrent
 
 # We want create executable file
 TEMPLATE = app

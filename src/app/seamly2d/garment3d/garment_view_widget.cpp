@@ -26,12 +26,14 @@
 
 #include <QAction>
 #include <QColor>
+#include <QEvent>
+#include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
 #include <QList>
 #include <QPalette>
 #include <QQmlError>
-#include <QQuickWidget>
+#include <QQuickView>
 #include <QQuickWindow>
 #include <QSignalBlocker>
 #include <QStringList>
@@ -139,7 +141,8 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_arrange_action(nullptr)
     , m_simulate_action(nullptr)
     , m_reset_action(nullptr)
-    , m_quick_widget(nullptr)
+    , m_quick_view(nullptr)
+    , m_view_container(nullptr)
     , m_message_label(new QLabel(this))
     , m_rebuild_timer(new QTimer(this))
     , m_mesher()
@@ -250,7 +253,7 @@ void GarmentViewWidget::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
 
-    if (m_quick_widget == nullptr)
+    if (m_quick_view == nullptr)
     {
         createScene();
     }
@@ -261,11 +264,48 @@ void GarmentViewWidget::showEvent(QShowEvent* event)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Nobody watches a hidden drape, so it stops.
+// Nobody watches a hidden drape, so it stops; unless the dock was only floated or docked, which hides it for a moment.
 void GarmentViewWidget::hideEvent(QHideEvent* event)
 {
     QWidget::hideEvent(event);
-    m_simulate_action->setChecked(false);
+    QTimer::singleShot(0, this, [this]()
+    {
+        if (!isVisible())
+        {
+            m_simulate_action->setChecked(false);
+        }
+    });
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// While the view has the focus, the keys go to the scene's window rather than to this widget, so Delete and Esc are
+// taken from there, ahead of the main window's shortcuts.
+bool GarmentViewWidget::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_quick_view && (event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress))
+    {
+        const QKeyEvent* key_event = static_cast<QKeyEvent*>(event);
+        QAction* action = nullptr;
+        if (key_event->matches(QKeySequence::Delete))
+        {
+            action = m_remove_action;
+        }
+        else if (key_event->key() == Qt::Key_Escape && key_event->modifiers() == Qt::NoModifier)
+        {
+            action = m_cancel_action;
+        }
+
+        if (action != nullptr && action->isEnabled())
+        {
+            if (event->type() == QEvent::KeyPress)
+            {
+                action->trigger();
+            }
+            event->accept();
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -958,9 +998,9 @@ void GarmentViewWidget::updateActions()
     // With nothing to step back from, Esc is left to the main window.
     m_cancel_action->setEnabled(m_seam_editor->isSewing() || seam_selected || m_scene_model->isArranging());
 
-    if ((m_seam_editor->isSewing() || m_scene_model->isArranging()) && m_quick_widget != nullptr)
+    if ((m_seam_editor->isSewing() || m_scene_model->isArranging()) && m_view_container != nullptr)
     {
-        m_quick_widget->setFocus();
+        m_view_container->setFocus();
     }
     updateHint();
 }
@@ -986,44 +1026,52 @@ void GarmentViewWidget::updateHint()
 //---------------------------------------------------------------------------------------------------------------------
 void GarmentViewWidget::createScene()
 {
-    // Created without a parent and added to the layout last: the first Qt Quick widget in a window makes Qt
-    // recreate the window, which shows this widget again and would otherwise call createScene() a second time.
-    m_quick_widget = new QQuickWidget();
-    m_quick_widget->setResizeMode(QQuickWidget::SizeRootObjectToView);
+    // The scene has a window of its own, in a container: a Qt Quick widget loses its 3D content, or crashes, when it
+    // moves to another top-level window, as it does when the dock is floated or docked again.
+    m_quick_view = new QQuickView();
+    m_quick_view->setResizeMode(QQuickView::SizeRootObjectToView);
 
-    connect(m_quick_widget, &QQuickWidget::statusChanged, this, [this](QQuickWidget::Status status)
+    connect(m_quick_view, &QQuickView::statusChanged, this, [this](QQuickView::Status status)
     {
-        if (status == QQuickWidget::Error)
+        if (status == QQuickView::Error)
         {
             QStringList errors;
-            for (const QQmlError& error : m_quick_widget->errors())
+            for (const QQmlError& error : m_quick_view->errors())
             {
                 errors.append(error.toString());
             }
             showError(errors.join(QLatin1Char('\n')));
         }
     });
-    connect(m_quick_widget, &QQuickWidget::sceneGraphError, this,
+    connect(m_quick_view, &QQuickWindow::sceneGraphError, this,
             [this](QQuickWindow::SceneGraphError, const QString& message)
     {
         showError(message);
     });
 
-    // White, the default piece color, needs a background a little darker than the window to stand out.
+    // White, the default piece color, needs a background a little darker than the window to stand out. The window
+    // shows it too until the scene has loaded.
     const QPalette colors = palette();
+    const QColor background = colors.color(QPalette::Window).darker(125);
+    m_quick_view->setColor(background);
     QVariantMap properties;
     properties.insert(QStringLiteral("sceneModel"), QVariant::fromValue(m_scene_model));
     properties.insert(QStringLiteral("seamEditor"), QVariant::fromValue(m_seam_editor));
     properties.insert(QStringLiteral("emptyText"), tr("Pieces included in the layout show up here."));
     properties.insert(QStringLiteral("hintText"),
                       tr("Drag to turn, Ctrl+drag to move, scroll to zoom, double-click to fit"));
-    properties.insert(QStringLiteral("backgroundColor"), colors.color(QPalette::Window).darker(125));
+    properties.insert(QStringLiteral("backgroundColor"), background);
     properties.insert(QStringLiteral("textColor"), colors.color(QPalette::WindowText));
     properties.insert(QStringLiteral("highlightColor"), colors.color(QPalette::Highlight));
-    m_quick_widget->setInitialProperties(properties);
-    m_quick_widget->setSource(QUrl(QStringLiteral("qrc:/garment3d/garment_scene.qml")));
+    m_quick_view->setInitialProperties(properties);
+    m_quick_view->setSource(QUrl(QStringLiteral("qrc:/garment3d/garment_scene.qml")));
+    m_quick_view->installEventFilter(this);
 
-    layout()->addWidget(m_quick_widget);
+    // Added to the layout last, after m_quick_view is set: that can show this widget again, which would otherwise call
+    // createScene() a second time.
+    m_view_container = QWidget::createWindowContainer(m_quick_view);
+    m_view_container->setFocusPolicy(Qt::StrongFocus);
+    layout()->addWidget(m_view_container);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1092,9 +1140,9 @@ void GarmentViewWidget::saveArrangements(const QString& text, const QVector<VPie
 //---------------------------------------------------------------------------------------------------------------------
 void GarmentViewWidget::showError(const QString& error)
 {
-    if (m_quick_widget != nullptr)
+    if (m_view_container != nullptr)
     {
-        m_quick_widget->hide();
+        m_view_container->hide();
     }
     m_message_label->setText(tr("The 3D view could not be started.\n%1").arg(error));
     m_message_label->show();

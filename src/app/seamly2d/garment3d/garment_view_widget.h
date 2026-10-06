@@ -47,7 +47,7 @@ class DrapeRunner;
 class GarmentSceneModel;
 class QAction;
 class QLabel;
-class QQuickWidget;
+class QQuickView;
 class QTimer;
 class SeamEditor;
 class VAbstractPattern;
@@ -84,6 +84,7 @@ public slots:
 protected:
     virtual void       showEvent(QShowEvent* event) override;
     virtual void       hideEvent(QHideEvent* event) override;
+    virtual bool       eventFilter(QObject* watched, QEvent* event) override;
 
 private slots:
     void               rebuildScene();
@@ -164,7 +165,8 @@ private:
     QAction*                   m_arrange_action;
     QAction*                   m_simulate_action;
     QAction*                   m_reset_action;
-    QQuickWidget*              m_quick_widget;
+    QQuickView*                m_quick_view;
+    QWidget*                   m_view_container;
     QLabel*                    m_message_label;
     QTimer*                    m_rebuild_timer;
     PieceMesher                m_mesher;
