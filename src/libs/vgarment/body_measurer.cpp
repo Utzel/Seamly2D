@@ -46,6 +46,14 @@ const float torso_share = 0.8f;
 // the shoulder joint's distance has arms in it, so the bust isn't measured there.
 const float chest_share = 1.25f;
 
+// Slice outlines whose centre is nearer to the leg's middle than this share of the hip joint's distance from the
+// middle of the body belong to the leg.
+const float leg_share = 0.7f;
+
+// The calf is searched for between these shares of the way down from the knee to the ankle, below the knee itself.
+const float calf_from = 0.1f;
+const float calf_to = 0.5f;
+
 struct Segment
 {
     quint64 start;
@@ -98,83 +106,11 @@ qreal hullPerimeter(QVector<QPointF> points)
     }
     return perimeter;
 }
-} // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
-BodyMeasurer::BodyMeasurer(const BodyModel& model)
-    : m_model(model)
-{}
-
-//---------------------------------------------------------------------------------------------------------------------
-BodyMeasurements BodyMeasurer::measure(const QVector<QVector3D>& positions) const
-{
-    BodyMeasurements measurements;
-    measurements.height = height(positions);
-    measurements.bust = bust(positions);
-    measurements.waist = waist(positions);
-    measurements.hip = hip(positions);
-    measurements.neck = neck(positions);
-    measurements.upper_arm = upperArm(positions);
-    measurements.lower_arm = lowerArm(positions);
-    measurements.arm = measurements.upper_arm + measurements.lower_arm;
-    return measurements;
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-qreal BodyMeasurer::height(const QVector<QVector3D>& positions) const
-{
-    float lowest = std::numeric_limits<float>::max();
-    float highest = -lowest;
-    for (int i = 0; i < m_model.skinVertexCount(); ++i)
-    {
-        lowest = qMin(lowest, positions.at(i).y());
-        highest = qMax(highest, positions.at(i).y());
-    }
-    return m_model.skinVertexCount() > 0 ? highest - lowest : 0;
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-/// @brief Fullest girth between the waist and the armpits, where the arms are still clear of the chest.
-qreal BodyMeasurer::bust(const QVector<QVector3D>& positions) const
-{
-    const float tall = static_cast<float>(height(positions));
-    return extremeGirth(positions, m_model.joint(positions, QStringLiteral("spine-2")).y(),
-                        m_model.joint(positions, QStringLiteral("l-shoulder")).y() - 0.04f * tall, true,
-                        chest_share * shoulderDistance(positions));
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-/// @brief Smallest girth between the hips and the lower ribs.
-qreal BodyMeasurer::waist(const QVector<QVector3D>& positions) const
-{
-    const float tall = static_cast<float>(height(positions));
-    return extremeGirth(positions, m_model.joint(positions, QStringLiteral("pelvis")).y() + 0.03f * tall,
-                        m_model.joint(positions, QStringLiteral("spine-1")).y() - 0.03f * tall, false);
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-/// @brief Fullest girth around hips and seat, from a little below the hip joints to a little above the pelvis.
-qreal BodyMeasurer::hip(const QVector<QVector3D>& positions) const
-{
-    const float tall = static_cast<float>(height(positions));
-    return extremeGirth(positions, m_model.joint(positions, QStringLiteral("l-upper-leg")).y() - 0.075f * tall,
-                        m_model.joint(positions, QStringLiteral("pelvis")).y() + 0.05f * tall, true);
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-/// @brief Smallest girth between the base of the neck and the head.
-qreal BodyMeasurer::neck(const QVector<QVector3D>& positions) const
-{
-    return extremeGirth(positions, m_model.joint(positions, QStringLiteral("neck")).y(),
-                        m_model.joint(positions, QStringLiteral("head")).y(), false);
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-/// @brief Length of a tape around the body at a height: the convex hull of the slice outlines whose centre lies
-/// within max_center_x of the body's middle (x = 0). With a max_extent_x, a kept outline reaching further out than
-/// that makes the slice unusable and the result 0.
-qreal BodyMeasurer::tapeGirth(const QVector<QVector3D>& positions, const QVector<quint32>& triangles, float level,
-                              float max_center_x, float max_extent_x)
+// The closed outlines where a horizontal slice at a height cuts the mesh, as points in x and z.
+QVector<QVector<QPointF>> sliceOutlines(const QVector<QVector3D>& positions, const QVector<quint32>& triangles,
+                                        float level)
 {
     // Where the slice crosses a mesh edge, keyed by that edge, so neighbouring triangles share their crossings.
     QHash<quint64, QPointF> crossings;
@@ -208,10 +144,9 @@ qreal BodyMeasurer::tapeGirth(const QVector<QVector3D>& positions, const QVector
         }
     }
 
-    // Follow the segments around into closed outlines and keep those of the torso or legs.
+    // Follow the segments around into closed outlines.
+    QVector<QVector<QPointF>> outlines;
     QVector<bool> used(segments.size(), false);
-    QVector<QPointF> kept_points;
-    bool too_wide = false;
     for (int first = 0; first < segments.size(); ++first)
     {
         if (!used.at(first))
@@ -235,20 +170,110 @@ qreal BodyMeasurer::tapeGirth(const QVector<QVector3D>& positions, const QVector
                 }
                 current = next;
             }
+            outlines.append(outline);
+        }
+    }
+    return outlines;
+}
+} // anonymous namespace
 
-            qreal center_x = 0;
-            qreal extent_x = 0;
-            for (const QPointF& point : outline)
-            {
-                center_x += point.x();
-                extent_x = qMax(extent_x, qAbs(point.x()));
-            }
-            center_x /= outline.size();
-            if (qAbs(center_x) <= max_center_x)
-            {
-                kept_points += outline;
-                too_wide = too_wide || (max_extent_x > 0 && extent_x > max_extent_x);
-            }
+//---------------------------------------------------------------------------------------------------------------------
+BodyMeasurer::BodyMeasurer(const BodyModel& model)
+    : m_model(model)
+{}
+
+//---------------------------------------------------------------------------------------------------------------------
+BodyMeasurements BodyMeasurer::measure(const QVector<QVector3D>& positions) const
+{
+    BodyMeasurements measurements;
+    measurements.height = height(positions);
+    measurements.bust = bust(positions);
+    measurements.waist = waist(positions);
+    measurements.hip = hip(positions);
+    measurements.neck = neck(positions);
+    measurements.upper_arm = upperArm(positions);
+    measurements.lower_arm = lowerArm(positions);
+    measurements.arm = measurements.upper_arm + measurements.lower_arm;
+    measurements.crotch = crotch(positions);
+    measurements.knee_height = kneeHeight(positions);
+    measurements.knee = knee(positions);
+    measurements.calf = calf(positions);
+    return measurements;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+qreal BodyMeasurer::height(const QVector<QVector3D>& positions) const
+{
+    float highest = -std::numeric_limits<float>::max();
+    for (int i = 0; i < m_model.skinVertexCount(); ++i)
+    {
+        highest = qMax(highest, positions.at(i).y());
+    }
+    return m_model.skinVertexCount() > 0 ? highest - lowest(positions) : 0;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Fullest girth between the waist and the armpits, where the arms are still clear of the chest.
+qreal BodyMeasurer::bust(const QVector<QVector3D>& positions) const
+{
+    const float tall = static_cast<float>(height(positions));
+    return extremeGirth(positions, m_model.joint(positions, QStringLiteral("spine-2")).y(),
+                        m_model.joint(positions, QStringLiteral("l-shoulder")).y() - 0.04f * tall, true,
+                        chest_share * shoulderDistance(positions));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Smallest girth between the hips and the lower ribs.
+qreal BodyMeasurer::waist(const QVector<QVector3D>& positions) const
+{
+    const float tall = static_cast<float>(height(positions));
+    return extremeGirth(positions, m_model.joint(positions, QStringLiteral("pelvis")).y() + 0.03f * tall,
+                        m_model.joint(positions, QStringLiteral("spine-1")).y() - 0.03f * tall, false);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Fullest girth around hips and seat, from a little below the hip joints to a little above the pelvis, but
+/// not below the crotch, where the tape would go around the thighs.
+qreal BodyMeasurer::hip(const QVector<QVector3D>& positions) const
+{
+    const float tall = static_cast<float>(height(positions));
+    return extremeGirth(positions,
+                        qMax(m_model.joint(positions, QStringLiteral("l-upper-leg")).y() - 0.075f * tall,
+                             m_model.crotch(positions).y() + search_step),
+                        m_model.joint(positions, QStringLiteral("pelvis")).y() + 0.05f * tall, true);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Smallest girth between the base of the neck and the head.
+qreal BodyMeasurer::neck(const QVector<QVector3D>& positions) const
+{
+    return extremeGirth(positions, m_model.joint(positions, QStringLiteral("neck")).y(),
+                        m_model.joint(positions, QStringLiteral("head")).y(), false);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Length of a tape around the body at a height: the convex hull of the slice outlines whose centre lies
+/// within max_center_x of the body's middle (x = 0). With a max_extent_x, a kept outline reaching further out than
+/// that makes the slice unusable and the result 0.
+qreal BodyMeasurer::tapeGirth(const QVector<QVector3D>& positions, const QVector<quint32>& triangles, float level,
+                              float max_center_x, float max_extent_x)
+{
+    QVector<QPointF> kept_points;
+    bool too_wide = false;
+    for (const QVector<QPointF>& outline : sliceOutlines(positions, triangles, level))
+    {
+        qreal center_x = 0;
+        qreal extent_x = 0;
+        for (const QPointF& point : outline)
+        {
+            center_x += point.x();
+            extent_x = qMax(extent_x, qAbs(point.x()));
+        }
+        center_x /= outline.size();
+        if (qAbs(center_x) <= max_center_x)
+        {
+            kept_points += outline;
+            too_wide = too_wide || (max_extent_x > 0 && extent_x > max_extent_x);
         }
     }
 
@@ -353,4 +378,93 @@ QVector3D BodyMeasurer::shoulderTip(const QVector<QVector3D>& positions) const
         }
     }
     return tip;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief From the floor to the crotch, the inside leg.
+qreal BodyMeasurer::crotch(const QVector<QVector3D>& positions) const
+{
+    return m_model.crotch(positions).y() - lowest(positions);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief From the floor to the knee joint, as high as the fold at the back of the knee.
+qreal BodyMeasurer::kneeHeight(const QVector<QVector3D>& positions) const
+{
+    return m_model.joint(positions, QStringLiteral("l-knee")).y() - lowest(positions);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Girth around the knee joint.
+qreal BodyMeasurer::knee(const QVector<QVector3D>& positions) const
+{
+    const float knee_level = m_model.joint(positions, QStringLiteral("l-knee")).y();
+    return legGirth(positions, knee_level, knee_level);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Fullest girth of the lower leg, below the knee.
+qreal BodyMeasurer::calf(const QVector<QVector3D>& positions) const
+{
+    const float knee_level = m_model.joint(positions, QStringLiteral("l-knee")).y();
+    const float ankle_level = m_model.joint(positions, QStringLiteral("l-ankle")).y();
+    return legGirth(positions, knee_level - calf_to * (knee_level - ankle_level),
+                    knee_level - calf_from * (knee_level - ankle_level));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The height of the soles of the feet.
+float BodyMeasurer::lowest(const QVector<QVector3D>& positions) const
+{
+    float soles = std::numeric_limits<float>::max();
+    for (int i = 0; i < m_model.skinVertexCount(); ++i)
+    {
+        soles = qMin(soles, positions.at(i).y());
+    }
+    return m_model.skinVertexCount() > 0 ? soles : 0;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Fullest girth of the left leg between two heights: of the slice outlines around the leg's middle, which runs from
+// the hip joint through the knee to the ankle.
+qreal BodyMeasurer::legGirth(const QVector<QVector3D>& positions, float from, float to) const
+{
+    const QVector3D joints[3] = {m_model.joint(positions, QStringLiteral("l-upper-leg")),
+                                 m_model.joint(positions, QStringLiteral("l-knee")),
+                                 m_model.joint(positions, QStringLiteral("l-ankle"))};
+    const float reach = leg_share * qAbs(joints[0].x() - m_model.joint(positions, QStringLiteral("pelvis")).x());
+
+    qreal fullest = 0;
+    for (float level = from; level <= to; level += search_step / 4.0f)
+    {
+        float middle = level >= joints[0].y() ? joints[0].x() : joints[2].x();
+        for (int k = 0; k < 2; ++k)
+        {
+            if (level < joints[k].y() && level >= joints[k + 1].y())
+            {
+                const float t = (joints[k].y() - level) / (joints[k].y() - joints[k + 1].y());
+                middle = joints[k].x() + t * (joints[k + 1].x() - joints[k].x());
+            }
+        }
+
+        QVector<QPointF> kept_points;
+        for (const QVector<QPointF>& outline : sliceOutlines(positions, m_model.triangles(), level))
+        {
+            qreal center_x = 0;
+            for (const QPointF& point : outline)
+            {
+                center_x += point.x();
+            }
+            center_x /= outline.size();
+            if (qAbs(center_x - middle) <= reach)
+            {
+                kept_points += outline;
+            }
+        }
+        if (kept_points.size() >= 3)
+        {
+            fullest = qMax(fullest, hullPerimeter(kept_points));
+        }
+    }
+    return fullest;
 }

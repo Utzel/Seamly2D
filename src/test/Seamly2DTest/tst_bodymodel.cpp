@@ -249,6 +249,53 @@ void TST_BodyModel::armLengthsRunFromTheShoulderTip() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// The crotch is where the legs part, in the middle of the body, and stays there when full thighs touch below it.
+// MakeHuman's leg targets change the heights of the knee and the crotch and the girths of the knee and the calf.
+void TST_BodyModel::legsAreMeasuredFromTheFloor() const
+{
+    const BodyModel model;
+    const BodyMeasurer measurer(model);
+    const QVector<QVector3D> positions = model.evaluate(female());
+    const QVector3D pelvis = model.joint(positions, QStringLiteral("pelvis"));
+    const QVector3D hip_joint = model.joint(positions, QStringLiteral("l-upper-leg"));
+    const QVector3D knee = model.joint(positions, QStringLiteral("l-knee"));
+
+    const QVector3D crotch = model.crotch(positions);
+    QVERIFY(qAbs(crotch.x() - pelvis.x()) < 0.01f);
+    QVERIFY2(crotch.y() < hip_joint.y() - 5 && crotch.y() > knee.y() + 15,
+             qUtf8Printable(QStringLiteral("crotch at %1, hip joint at %2").arg(crotch.y()).arg(hip_joint.y())));
+    const qreal floor = lowestSkinY(model, positions);
+    QVERIFY(qAbs(measurer.crotch(positions) - (crotch.y() - floor)) < 1e-4);
+    QVERIFY(qAbs(measurer.kneeHeight(positions) - (knee.y() - floor)) < 1e-4);
+
+    auto changed = [&model](const QString& target, qreal value)
+    {
+        BodyShape shape = female();
+        shape.measures.insert(target, value);
+        return model.evaluate(shape);
+    };
+
+    const QVector<QVector3D> full_thighs = changed(QStringLiteral("legs/measure-thigh-circ"), 1.0);
+    QVERIFY2(qAbs(measurer.crotch(full_thighs) - measurer.crotch(positions)) < 0.5,
+             qUtf8Printable(QString::number(measurer.crotch(full_thighs))));
+
+    const QVector<QVector3D> long_thighs = changed(QStringLiteral("legs/measure-upperleg-height"), 1.0);
+    QVERIFY(measurer.crotch(long_thighs) > measurer.crotch(positions) + 3);
+    QVERIFY(qAbs(measurer.kneeHeight(long_thighs) - measurer.kneeHeight(positions)) < 0.5);
+    const QVector<QVector3D> long_shins = changed(QStringLiteral("legs/measure-lowerleg-height"), 1.0);
+    QVERIFY(measurer.kneeHeight(long_shins) > measurer.kneeHeight(positions) + 3);
+
+    const qreal knee_girth = measurer.knee(positions);
+    const qreal calf = measurer.calf(positions);
+    QVERIFY2(knee_girth > 25 && knee_girth < 45 && calf > 25 && calf < 45,
+             qUtf8Printable(QStringLiteral("knee %1, calf %2").arg(knee_girth).arg(calf)));
+    const QVector<QVector3D> full_calves = changed(QStringLiteral("legs/measure-calf-circ"), 1.0);
+    QVERIFY(measurer.calf(full_calves) > calf + 3);
+    const QVector<QVector3D> full_knees = changed(QStringLiteral("legs/measure-knee-circ"), 1.0);
+    QVERIFY(measurer.knee(full_knees) > knee_girth + 3);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Measure a known body and fit to those measurements: the fitted body has to measure the same.
 void TST_BodyModel::fitMatchesMeasurements() const
 {
@@ -262,6 +309,9 @@ void TST_BodyModel::fitMatchesMeasurements() const
     known.measures.insert(QStringLiteral("torso/measure-bust-circ"), -0.3);
     known.measures.insert(QStringLiteral("arms/measure-upperarm-length"), 0.4);
     known.measures.insert(QStringLiteral("arms/measure-lowerarm-length"), -0.3);
+    known.measures.insert(QStringLiteral("legs/measure-upperleg-height"), 0.3);
+    known.measures.insert(QStringLiteral("legs/measure-lowerleg-height"), -0.2);
+    known.measures.insert(QStringLiteral("legs/measure-calf-circ"), -0.3);
     const BodyMeasurements wanted = measurer.measure(model.evaluate(known));
 
     const BodyFit fit = BodyFitter(model).fit(wanted, known.gender, known.age);
@@ -275,6 +325,11 @@ void TST_BodyModel::fitMatchesMeasurements() const
              qUtf8Printable(QString::number(fit.measured.upper_arm)));
     QVERIFY2(qAbs(fit.measured.lower_arm - wanted.lower_arm) < 0.5,
              qUtf8Printable(QString::number(fit.measured.lower_arm)));
+    QVERIFY2(qAbs(fit.measured.crotch - wanted.crotch) < 0.5, qUtf8Printable(QString::number(fit.measured.crotch)));
+    QVERIFY2(qAbs(fit.measured.knee_height - wanted.knee_height) < 0.5,
+             qUtf8Printable(QString::number(fit.measured.knee_height)));
+    QVERIFY2(qAbs(fit.measured.knee - wanted.knee) < 1.0, qUtf8Printable(QString::number(fit.measured.knee)));
+    QVERIFY2(qAbs(fit.measured.calf - wanted.calf) < 1.0, qUtf8Printable(QString::number(fit.measured.calf)));
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -296,6 +351,10 @@ void TST_BodyModel::fitReachesTypicalBodies() const
     woman.hip = 100;
     woman.upper_arm = 32;
     woman.lower_arm = 24;
+    woman.crotch = 77;
+    woman.knee_height = 46;
+    woman.knee = 37;
+    woman.calf = 35;
     BodyMeasurements man;
     man.height = 178;
     man.bust = 100;
@@ -303,20 +362,30 @@ void TST_BodyModel::fitReachesTypicalBodies() const
     man.hip = 100;
     man.upper_arm = 34;
     man.lower_arm = 26;
+    man.crotch = 82;
+    man.knee_height = 50;
+    man.knee = 39;
+    man.calf = 38;
 
     for (const Case& body : {Case{0.0, woman}, Case{1.0, man}})
     {
         const BodyFit fit = BodyFitter(model).fit(body.wanted, body.gender, BodyShape::ageFromYears(35));
-        const QString report = QStringLiteral("gender %1: height %2, bust %3, waist %4, hip %5, arm %6 + %7")
+        const QString report = QStringLiteral("gender %1: height %2, bust %3, waist %4, hip %5, arm %6 + %7, "
+                                              "crotch %8, knee %9 high, %10 round, calf %11")
                                    .arg(body.gender).arg(fit.measured.height).arg(fit.measured.bust)
                                    .arg(fit.measured.waist).arg(fit.measured.hip).arg(fit.measured.upper_arm)
-                                   .arg(fit.measured.lower_arm);
+                                   .arg(fit.measured.lower_arm).arg(fit.measured.crotch).arg(fit.measured.knee_height)
+                                   .arg(fit.measured.knee).arg(fit.measured.calf);
         QVERIFY2(qAbs(fit.measured.height - body.wanted.height) < 0.5, qUtf8Printable(report));
         QVERIFY2(qAbs(fit.measured.bust - body.wanted.bust) < 1.5, qUtf8Printable(report));
         QVERIFY2(qAbs(fit.measured.waist - body.wanted.waist) < 1.5, qUtf8Printable(report));
         QVERIFY2(qAbs(fit.measured.hip - body.wanted.hip) < 1.5, qUtf8Printable(report));
         QVERIFY2(qAbs(fit.measured.upper_arm - body.wanted.upper_arm) < 1.0, qUtf8Printable(report));
         QVERIFY2(qAbs(fit.measured.lower_arm - body.wanted.lower_arm) < 1.0, qUtf8Printable(report));
+        QVERIFY2(qAbs(fit.measured.crotch - body.wanted.crotch) < 1.0, qUtf8Printable(report));
+        QVERIFY2(qAbs(fit.measured.knee_height - body.wanted.knee_height) < 1.0, qUtf8Printable(report));
+        QVERIFY2(qAbs(fit.measured.knee - body.wanted.knee) < 1.0, qUtf8Printable(report));
+        QVERIFY2(qAbs(fit.measured.calf - body.wanted.calf) < 1.0, qUtf8Printable(report));
     }
 }
 
@@ -348,6 +417,26 @@ void TST_BodyModel::fitKeepsTheArmsProportions() const
              qUtf8Printable(QString::number(with_upper_arm.measured.upper_arm)));
     QVERIFY2(qAbs(with_upper_arm.measured.lower_arm - 25) < 0.5,
              qUtf8Printable(QString::number(with_upper_arm.measured.lower_arm)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A leg known only by its inside length keeps the body's own proportions: the knee goes up or down with the crotch.
+void TST_BodyModel::fitKeepsTheLegsProportions() const
+{
+    const BodyModel model;
+    const qreal gender = 0.0;
+    const qreal age = BodyShape::ageFromYears(35);
+
+    BodyMeasurements height_only;
+    height_only.height = 168;
+    BodyMeasurements wanted = height_only;
+    wanted.crotch = 74;
+    const BodyFit unfitted = BodyFitter(model).fit(height_only, gender, age);
+    const BodyFit fitted = BodyFitter(model).fit(wanted, gender, age);
+    QVERIFY2(qAbs(fitted.measured.crotch - 74) < 0.5, qUtf8Printable(QString::number(fitted.measured.crotch)));
+    const qreal before = unfitted.measured.knee_height / unfitted.measured.crotch;
+    const qreal after = fitted.measured.knee_height / fitted.measured.crotch;
+    QVERIFY2(qAbs(after - before) < 0.02, qUtf8Printable(QStringLiteral("%1 before, %2 after").arg(before).arg(after)));
 }
 
 //---------------------------------------------------------------------------------------------------------------------

@@ -67,11 +67,14 @@ public:
 
     QVector<QVector3D>       evaluate(const BodyShape& shape) const;
     QVector3D                joint(const QVector<QVector3D>& positions, const QString& name) const;
+    QVector3D                crotch(const QVector<QVector3D>& positions) const;
 
     static QVector<QPair<QString, qreal>> macroTargets(const BodyShape& shape);
 
 private:
     QSharedPointer<const BodyData> m_data;
+    QVector<int>             m_crotch_line;  ///< skin vertices on the middle line from the back between the legs
+                                             ///< to the front
 };
 
 #endif // BODY_MODEL_H

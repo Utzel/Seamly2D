@@ -64,20 +64,6 @@ BodyFit BodyFitter::fit(const BodyMeasurements& wanted, qreal gender, qreal age)
     shape.gender = gender;
     shape.age = age;
 
-    QVector<MeasureControl> controls;
-    const MeasureControl girths[] = {
-        {&BodyMeasurer::bust, wanted.bust, QStringLiteral("torso/measure-bust-circ"), true},
-        {&BodyMeasurer::waist, wanted.waist, QStringLiteral("torso/measure-waist-circ"), true},
-        {&BodyMeasurer::hip, wanted.hip, QStringLiteral("torso/measure-hips-circ"), true},
-        {&BodyMeasurer::neck, wanted.neck, QStringLiteral("neck/measure-neck-circ"), false}};
-    for (const MeasureControl& girth : girths)
-    {
-        if (girth.wanted > 0)
-        {
-            controls.append(girth);
-        }
-    }
-
     // Measurements grow with the scale, so a body is built at scale 1 and its measurements scaled to the wanted
     // height.
     auto scaled = [this, &wanted](const MeasureControl& control, const QVector<QVector3D>& positions)
@@ -86,14 +72,104 @@ BodyFit BodyFitter::fit(const BodyMeasurements& wanted, qreal gender, qreal age)
         return (m_measurer.*control.measure)(positions) * scale;
     };
 
+    // Each measurement on its own: a secant step per round, with the slope taken once at the start.
+    auto correct = [this, &shape, &scaled](const QVector<MeasureControl>& controls)
+    {
+        QVector<qreal> slopes(controls.size(), 0.0);
+        for (int round = 0; round < correction_rounds; ++round)
+        {
+            for (int i = 0; i < controls.size(); ++i)
+            {
+                const MeasureControl& control = controls.at(i);
+                const qreal value = shape.measures.value(control.target, 0.0);
+                const qreal current = scaled(control, m_model.evaluate(shape));
+
+                if (round == 0)
+                {
+                    BodyShape probe = shape;
+                    probe.measures[control.target] = value + (value > 0 ? -slope_probe : slope_probe);
+                    const qreal probed = scaled(control, m_model.evaluate(probe));
+                    slopes[i] = (probed - current) / (probe.measures.value(control.target) - value);
+                }
+
+                if (slopes.at(i) > 0)
+                {
+                    shape.measures[control.target] = qBound(-1.0, value + (control.wanted - current) / slopes.at(i),
+                                                             1.0);
+                }
+            }
+        }
+    };
+
+    auto wanted_only = [](const QVector<MeasureControl>& candidates)
+    {
+        QVector<MeasureControl> controls;
+        for (const MeasureControl& control : candidates)
+        {
+            if (control.wanted > 0)
+            {
+                controls.append(control);
+            }
+        }
+        return controls;
+    };
+
+    // The upper arm and the forearm; an arm only known as a whole keeps the body's own proportions.
+    qreal upper_arm = wanted.upper_arm;
+    qreal lower_arm = wanted.lower_arm;
+    if (wanted.arm > 0 && (upper_arm <= 0 || lower_arm <= 0))
+    {
+        if (upper_arm > 0)
+        {
+            lower_arm = wanted.arm - upper_arm;
+        }
+        else if (lower_arm > 0)
+        {
+            upper_arm = wanted.arm - lower_arm;
+        }
+        else
+        {
+            const QVector<QVector3D> positions = m_model.evaluate(shape);
+            const qreal whole = m_measurer.arm(positions);
+            upper_arm = whole > 0 ? wanted.arm * m_measurer.upperArm(positions) / whole : wanted.arm / 2.0;
+            lower_arm = wanted.arm - upper_arm;
+        }
+    }
+
+    // The legs: the lower leg sets the knee's height, the upper leg the crotch's above it. A leg only known by its
+    // inside length keeps the body's own proportions.
+    qreal knee_height = wanted.knee_height;
+    if (wanted.crotch > 0 && knee_height <= 0)
+    {
+        const QVector<QVector3D> positions = m_model.evaluate(shape);
+        const qreal crotch = m_measurer.crotch(positions);
+        knee_height = crotch > 0 ? wanted.crotch * m_measurer.kneeHeight(positions) / crotch : 0;
+    }
+
+    // Lengths first: how long the limbs are against the height changes how big the rest of the body comes out.
+    const QVector<MeasureControl> lengths = wanted_only({
+        {&BodyMeasurer::upperArm, upper_arm, QStringLiteral("arms/measure-upperarm-length"), false},
+        {&BodyMeasurer::lowerArm, lower_arm, QStringLiteral("arms/measure-lowerarm-length"), false},
+        {&BodyMeasurer::kneeHeight, knee_height, QStringLiteral("legs/measure-lowerleg-height"), false},
+        {&BodyMeasurer::crotch, wanted.crotch, QStringLiteral("legs/measure-upperleg-height"), false}});
+    correct(lengths);
+
+    const QVector<MeasureControl> girths = wanted_only({
+        {&BodyMeasurer::bust, wanted.bust, QStringLiteral("torso/measure-bust-circ"), true},
+        {&BodyMeasurer::waist, wanted.waist, QStringLiteral("torso/measure-waist-circ"), true},
+        {&BodyMeasurer::hip, wanted.hip, QStringLiteral("torso/measure-hips-circ"), true},
+        {&BodyMeasurer::neck, wanted.neck, QStringLiteral("neck/measure-neck-circ"), false},
+        {&BodyMeasurer::knee, wanted.knee, QStringLiteral("legs/measure-knee-circ"), false},
+        {&BodyMeasurer::calf, wanted.calf, QStringLiteral("legs/measure-calf-circ"), false}});
+
     // The overall build: the weight that best matches bust, waist and hip together.
-    auto build_error = [this, &shape, &controls, &scaled](qreal weight)
+    auto build_error = [this, &shape, &girths, &scaled](qreal weight)
     {
         BodyShape candidate = shape;
         candidate.weight = weight;
         const QVector<QVector3D> positions = m_model.evaluate(candidate);
         qreal error = 0;
-        for (const MeasureControl& control : controls)
+        for (const MeasureControl& control : girths)
         {
             if (control.sets_build)
             {
@@ -105,7 +181,7 @@ BodyFit BodyFitter::fit(const BodyMeasurements& wanted, qreal gender, qreal age)
     };
 
     bool any_build_girth = false;
-    for (const MeasureControl& control : controls)
+    for (const MeasureControl& control : girths)
     {
         any_build_girth = any_build_girth || control.sets_build;
     }
@@ -140,63 +216,8 @@ BodyFit BodyFitter::fit(const BodyMeasurements& wanted, qreal gender, qreal age)
         shape.weight = (low + high) / 2.0;
     }
 
-    // The upper arm and the forearm; an arm only known as a whole keeps the body's own proportions.
-    qreal upper_arm = wanted.upper_arm;
-    qreal lower_arm = wanted.lower_arm;
-    if (wanted.arm > 0 && (upper_arm <= 0 || lower_arm <= 0))
-    {
-        if (upper_arm > 0)
-        {
-            lower_arm = wanted.arm - upper_arm;
-        }
-        else if (lower_arm > 0)
-        {
-            upper_arm = wanted.arm - lower_arm;
-        }
-        else
-        {
-            const QVector<QVector3D> positions = m_model.evaluate(shape);
-            const qreal whole = m_measurer.arm(positions);
-            upper_arm = whole > 0 ? wanted.arm * m_measurer.upperArm(positions) / whole : wanted.arm / 2.0;
-            lower_arm = wanted.arm - upper_arm;
-        }
-    }
-    const MeasureControl arm_lengths[] = {
-        {&BodyMeasurer::upperArm, upper_arm, QStringLiteral("arms/measure-upperarm-length"), false},
-        {&BodyMeasurer::lowerArm, lower_arm, QStringLiteral("arms/measure-lowerarm-length"), false}};
-    for (const MeasureControl& length : arm_lengths)
-    {
-        if (length.wanted > 0)
-        {
-            controls.append(length);
-        }
-    }
-
-    // Each measurement on its own: a secant step per round, with the slope taken once at the start.
-    QVector<qreal> slopes(controls.size(), 0.0);
-    for (int round = 0; round < correction_rounds; ++round)
-    {
-        for (int i = 0; i < controls.size(); ++i)
-        {
-            const MeasureControl& control = controls.at(i);
-            const qreal value = shape.measures.value(control.target, 0.0);
-            const qreal current = scaled(control, m_model.evaluate(shape));
-
-            if (round == 0)
-            {
-                BodyShape probe = shape;
-                probe.measures[control.target] = value + (value > 0 ? -slope_probe : slope_probe);
-                const qreal probed = scaled(control, m_model.evaluate(probe));
-                slopes[i] = (probed - current) / (probe.measures.value(control.target) - value);
-            }
-
-            if (slopes.at(i) > 0)
-            {
-                shape.measures[control.target] = qBound(-1.0, value + (control.wanted - current) / slopes.at(i),
-                                                         1.0);
-            }
-        }
-    }
+    // Then everything, as the build changes the lengths a little too.
+    correct(girths + lengths);
 
     shape.scale = scaleFor(shape, wanted);
 

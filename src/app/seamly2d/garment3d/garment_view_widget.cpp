@@ -125,6 +125,10 @@ bool GarmentViewWidget::AvatarRequest::operator==(const AvatarRequest& other) co
            && qFuzzyCompare(1.0 + wanted.upper_arm, 1.0 + other.wanted.upper_arm)
            && qFuzzyCompare(1.0 + wanted.lower_arm, 1.0 + other.wanted.lower_arm)
            && qFuzzyCompare(1.0 + wanted.arm, 1.0 + other.wanted.arm)
+           && qFuzzyCompare(1.0 + wanted.crotch, 1.0 + other.wanted.crotch)
+           && qFuzzyCompare(1.0 + wanted.knee_height, 1.0 + other.wanted.knee_height)
+           && qFuzzyCompare(1.0 + wanted.knee, 1.0 + other.wanted.knee)
+           && qFuzzyCompare(1.0 + wanted.calf, 1.0 + other.wanted.calf)
            && qFuzzyCompare(1.0 + gender, 1.0 + other.gender)
            && qFuzzyCompare(1.0 + age, 1.0 + other.age);
 }
@@ -133,7 +137,8 @@ bool GarmentViewWidget::AvatarRequest::operator==(const AvatarRequest& other) co
 bool GarmentViewWidget::AvatarRequest::hasMeasurements() const
 {
     return wanted.height > 0 || wanted.bust > 0 || wanted.waist > 0 || wanted.hip > 0 || wanted.neck > 0
-           || wanted.upper_arm > 0 || wanted.lower_arm > 0 || wanted.arm > 0;
+           || wanted.upper_arm > 0 || wanted.lower_arm > 0 || wanted.arm > 0 || wanted.crotch > 0
+           || wanted.knee_height > 0 || wanted.knee > 0 || wanted.calf > 0;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -557,6 +562,10 @@ GarmentViewWidget::AvatarRequest GarmentViewWidget::wantedAvatar() const
     request.wanted.upper_arm = value_cm(armShoulderTipToElbow_M);
     request.wanted.lower_arm = value_cm(armElbowToWrist_M);
     request.wanted.arm = value_cm(armShoulderTipToWrist_M);
+    request.wanted.crotch = value_cm(legCrotchToFloor_M);
+    request.wanted.knee_height = value_cm(heightKnee_M);
+    request.wanted.knee = value_cm(legKneeCirc_M);
+    request.wanted.calf = value_cm(legCalfCirc_M);
     request.gender = m_wearer_gender;
     request.age = BodyShape::ageFromYears(m_wearer_age);
     return request;
@@ -583,7 +592,11 @@ QString GarmentViewWidget::avatarNote(const AvatarFit& result) const
         std::make_tuple(tr("neck"), wanted.neck, got.neck),
         std::make_tuple(tr("shoulder tip to elbow"), wanted.upper_arm, got.upper_arm),
         std::make_tuple(tr("elbow to wrist"), wanted.lower_arm, got.lower_arm),
-        std::make_tuple(tr("shoulder tip to wrist"), wanted.arm, got.arm)};
+        std::make_tuple(tr("shoulder tip to wrist"), wanted.arm, got.arm),
+        std::make_tuple(tr("crotch height"), wanted.crotch, got.crotch),
+        std::make_tuple(tr("knee height"), wanted.knee_height, got.knee_height),
+        std::make_tuple(tr("knee"), wanted.knee, got.knee),
+        std::make_tuple(tr("calf"), wanted.calf, got.calf)};
 
     QStringList misses;
     for (const auto& check : checks)

@@ -41,9 +41,6 @@ const qreal clearance = 2.0;
 // pieces aren't wrapped around.
 const float arm_reach = 7.0f;
 
-// Skin this close to the middle of the body, in cm, is where the legs part.
-const float crotch_width = 1.5f;
-
 // A part with no skin at a piece's height still gets a cylinder of this radius, in cm.
 const qreal fallback_radius = 10.0;
 
@@ -124,15 +121,7 @@ BodyWrap::BodyWrap(const BodyModel& model, const QVector<QVector3D>& positions)
     m_shoulder_tips[0] = m_arm_lines[0].alongNearest(shoulder_tip);
     m_shoulder_tips[1] = m_arm_lines[1].alongNearest(mirrored(shoulder_tip));
 
-    // The legs part at the lowest skin in the middle of the body below the pelvis.
-    m_crotch = m_pelvis.y();
-    for (const QVector3D& point : m_skin)
-    {
-        if (qAbs(point.x() - m_pelvis.x()) < crotch_width && point.y() < m_pelvis.y() && point.y() > m_legs[0][1].y())
-        {
-            m_crotch = qMin(m_crotch, static_cast<qreal>(point.y()));
-        }
-    }
+    m_crotch = model.crotch(positions).y();
 
     QVector<QVector<int>> neighbours(m_skin.size());
     const QVector<quint32>& triangles = model.triangles();

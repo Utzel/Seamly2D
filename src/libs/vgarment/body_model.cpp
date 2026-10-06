@@ -107,7 +107,24 @@ qreal BodyShape::ageFromYears(qreal years)
 //---------------------------------------------------------------------------------------------------------------------
 BodyModel::BodyModel(QSharedPointer<const BodyData> data)
     : m_data(data)
-{}
+{
+    // The base mesh is symmetric: its middle line lies on x = 0. Below the pelvis it runs down between the buttocks,
+    // between the legs and up the front.
+    if (isValid())
+    {
+        const QVector<QVector3D>& base = m_data->base_positions;
+        const QVector3D pelvis = joint(base, QStringLiteral("pelvis"));
+        const QVector3D knee = joint(base, QStringLiteral("l-knee"));
+        for (int i = 0; i < m_data->skin_vertex_count; ++i)
+        {
+            const QVector3D& point = base.at(i);
+            if (qAbs(point.x() - pelvis.x()) < 0.01f && point.y() < pelvis.y() && point.y() > knee.y())
+            {
+                m_crotch_line.append(i);
+            }
+        }
+    }
+}
 
 //---------------------------------------------------------------------------------------------------------------------
 bool BodyModel::isValid() const
@@ -195,6 +212,23 @@ QVector3D BodyModel::joint(const QVector<QVector3D>& positions, const QString& n
         }
     }
     return center;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The crotch, where the legs part: the lowest point of the body's middle line between them. Taken from the
+/// middle line, it stays where it is when full thighs touch below it.
+QVector3D BodyModel::crotch(const QVector<QVector3D>& positions) const
+{
+    QVector3D lowest;
+    for (int i = 0; i < m_crotch_line.size(); ++i)
+    {
+        const QVector3D& point = positions.at(m_crotch_line.at(i));
+        if (i == 0 || point.y() < lowest.y())
+        {
+            lowest = point;
+        }
+    }
+    return lowest;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

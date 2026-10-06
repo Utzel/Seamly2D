@@ -42,6 +42,10 @@ struct BodyMeasurements
     qreal upper_arm = 0;  ///< shoulder tip to elbow, the arm straight
     qreal lower_arm = 0;  ///< elbow to wrist, the arm straight
     qreal arm = 0;        ///< shoulder tip to wrist, the arm straight
+    qreal crotch = 0;     ///< floor to the crotch, the inside leg
+    qreal knee_height = 0; ///< floor to the back of the knee
+    qreal knee = 0;       ///< girth of the knee
+    qreal calf = 0;       ///< fullest girth of the calf
 };
 
 /// @brief Measures bodies made by a BodyModel.
@@ -51,7 +55,8 @@ struct BodyMeasurements
 /// between the breasts. Where each girth is searched for follows the body's joints.
 ///
 /// Lengths down the arm run from joint to joint, which is as long as the outside of a straight arm, starting at the
-/// shoulder tip: the top of the shoulder over the shoulder joint.
+/// shoulder tip: the top of the shoulder over the shoulder joint. Heights are taken from the floor, the soles of the
+/// feet, and leg girths around the left leg.
 class BodyMeasurer
 {
 public:
@@ -68,6 +73,10 @@ public:
     qreal              lowerArm(const QVector<QVector3D>& positions) const;
     qreal              arm(const QVector<QVector3D>& positions) const;
     QVector3D          shoulderTip(const QVector<QVector3D>& positions) const;
+    qreal              crotch(const QVector<QVector3D>& positions) const;
+    qreal              kneeHeight(const QVector<QVector3D>& positions) const;
+    qreal              knee(const QVector<QVector3D>& positions) const;
+    qreal              calf(const QVector<QVector3D>& positions) const;
 
     static qreal       tapeGirth(const QVector<QVector3D>& positions, const QVector<quint32>& triangles, float level,
                                  float max_center_x, float max_extent_x = 0);
@@ -78,6 +87,8 @@ private:
     qreal              extremeGirth(const QVector<QVector3D>& positions, float from, float to, bool largest,
                                     float max_extent_x = 0) const;
     float              shoulderDistance(const QVector<QVector3D>& positions) const;
+    float              lowest(const QVector<QVector3D>& positions) const;
+    qreal              legGirth(const QVector<QVector3D>& positions, float from, float to) const;
 };
 
 #endif // BODY_MEASURER_H
