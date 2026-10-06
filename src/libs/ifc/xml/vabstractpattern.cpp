@@ -102,6 +102,8 @@ const QString VAbstractPattern::TagSeams                = QStringLiteral("seams"
 const QString VAbstractPattern::TagSeam                 = QStringLiteral("seam");
 const QString VAbstractPattern::TagArrangements         = QStringLiteral("arrangements");
 const QString VAbstractPattern::TagArrangement          = QStringLiteral("arrangement");
+const QString VAbstractPattern::TagFabrics              = QStringLiteral("fabrics");
+const QString VAbstractPattern::TagFabric               = QStringLiteral("fabric");
 const QString VAbstractPattern::TagDraftBlock           = QStringLiteral("draftBlock");
 const QString VAbstractPattern::TagGroups               = QStringLiteral("groups");
 const QString VAbstractPattern::TagGroup                = QStringLiteral("group");
@@ -195,6 +197,7 @@ const QString VAbstractPattern::AttrSecondStart         = QStringLiteral("second
 const QString VAbstractPattern::AttrSecondEnd           = QStringLiteral("secondEnd");
 const QString VAbstractPattern::AttrPiece               = QStringLiteral("piece");
 const QString VAbstractPattern::AttrPart                = QStringLiteral("part");
+const QString VAbstractPattern::AttrDefault             = QStringLiteral("default");
 
 const QString VAbstractPattern::AttrAll                 = QStringLiteral("all");
 
@@ -2191,6 +2194,32 @@ bool VPieceArrangement::operator==(const VPieceArrangement& other) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+bool VPieceFabric::operator==(const VPieceFabric& other) const
+{
+    return piece_id == other.piece_id && fabric == other.fabric;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool VGarmentFabrics::operator==(const VGarmentFabrics& other) const
+{
+    return garment == other.garment && pieces == other.pieces;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The fabric the piece is cut from: its own, or the garment's; empty for the 3D View's default.
+QString VGarmentFabrics::of(quint32 piece_id) const
+{
+    for (const VPieceFabric& fabric : pieces)
+    {
+        if (fabric.piece_id == piece_id)
+        {
+            return fabric.fabric;
+        }
+    }
+    return garment;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief The seams sewing the pieces together, in the order they were made.
 ///
 /// A seam can name a piece or point that is gone, after the piece was deleted or its path edited. Such seams are
@@ -2322,11 +2351,76 @@ void VAbstractPattern::setArrangements(const QVector<VPieceArrangement>& arrange
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Adds an empty element for the 3D garment's data where the schema wants it: the seams, then the arrangements, all
-// before the draft blocks, which are added at the end.
+/// @brief The fabrics the garment is cut from.
+VGarmentFabrics VAbstractPattern::getFabrics() const
+{
+    VGarmentFabrics fabrics;
+    const QDomElement fabrics_element = documentElement().firstChildElement(TagFabrics);
+    fabrics.garment = fabrics_element.isNull() ? QString() : GetParametrEmptyString(fabrics_element, AttrDefault);
+    QDomElement element = fabrics_element.firstChildElement(TagFabric);
+    while (!element.isNull())
+    {
+        VPieceFabric fabric;
+        fabric.piece_id = GetParametrUInt(element, AttrPiece, NULL_ID_STR);
+        fabric.fabric = GetParametrString(element, AttrName);
+        fabrics.pieces.append(fabric);
+
+        element = element.nextSiblingElement(TagFabric);
+    }
+    return fabrics;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Replaces the fabrics, one per piece at most. Meant to be called by the SaveFabrics undo command.
+void VAbstractPattern::setFabrics(const VGarmentFabrics& fabrics)
+{
+    QDomElement pattern = documentElement();
+    QDomElement element = pattern.firstChildElement(TagFabrics);
+
+    if (fabrics.garment.isEmpty() && fabrics.pieces.isEmpty())
+    {
+        if (!element.isNull())
+        {
+            pattern.removeChild(element);
+        }
+    }
+    else
+    {
+        if (element.isNull())
+        {
+            element = createGarmentElement(TagFabrics);
+        }
+        else
+        {
+            RemoveAllChildren(element);
+        }
+
+        if (fabrics.garment.isEmpty())
+        {
+            element.removeAttribute(AttrDefault);
+        }
+        else
+        {
+            SetAttribute(element, AttrDefault, fabrics.garment);
+        }
+        for (const VPieceFabric& fabric : fabrics.pieces)
+        {
+            QDomElement tag = createElement(TagFabric);
+            SetAttribute(tag, AttrPiece, fabric.piece_id);
+            SetAttribute(tag, AttrName, fabric.fabric);
+            element.appendChild(tag);
+        }
+    }
+
+    emit fabricsChanged();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Adds an empty element for the 3D garment's data where the schema wants it: the seams, the arrangements, then the
+// fabrics, all before the draft blocks, which are added at the end.
 QDomElement VAbstractPattern::createGarmentElement(const QString& tag)
 {
-    const QStringList order = {TagSeams, TagArrangements, TagDraftBlock};
+    const QStringList order = {TagSeams, TagArrangements, TagFabrics, TagDraftBlock};
     QDomElement pattern = documentElement();
 
     QDomElement before;

@@ -140,6 +140,26 @@ struct VPieceArrangement
     bool    operator==(const VPieceArrangement& other) const;
 };
 
+/// A piece cut from another fabric than the rest of the garment: the name of one of the 3D View's fabrics.
+struct VPieceFabric
+{
+    quint32 piece_id {NULL_ID};
+    QString fabric {};
+
+    bool    operator==(const VPieceFabric& other) const;
+};
+
+/// The fabrics a garment is cut from, for the 3D View's drape: one for all its pieces, empty for the 3D View's
+/// default, and another for any piece cut from something else.
+struct VGarmentFabrics
+{
+    QString               garment {};
+    QVector<VPieceFabric> pieces {};
+
+    bool                  operator==(const VGarmentFabrics& other) const;
+    QString               of(quint32 piece_id) const;
+};
+
 struct GroupAttributes
 {
    QString  name;
@@ -172,6 +192,9 @@ public:
 
     QVector<VPieceArrangement>     getArrangements() const;
     void                           setArrangements(const QVector<VPieceArrangement>& arrangements);
+
+    VGarmentFabrics                getFabrics() const;
+    void                           setFabrics(const VGarmentFabrics& fabrics);
     bool                           isVariableUsed(const QStringList &variable_names) const;
 
     virtual void                   CreateEmptyFile()=0;
@@ -355,6 +378,8 @@ public:
     static const QString TagSeam;
     static const QString TagArrangements;
     static const QString TagArrangement;
+    static const QString TagFabrics;
+    static const QString TagFabric;
     static const QString TagDraftBlock;
     static const QString TagGroups;
     static const QString TagGroup;
@@ -448,6 +473,7 @@ public:
     static const QString AttrSecondEnd;
     static const QString AttrPiece;
     static const QString AttrPart;
+    static const QString AttrDefault;
 
     static const QString AttrAll;
 
@@ -563,6 +589,7 @@ signals:
     void           showPiece(quint32 id);
     void           seamsChanged();
     void           arrangementsChanged();
+    void           fabricsChanged();
     void           setCurrentDraftBlock(const QString &draftblock);
     void           patternHasGroups(bool value);
     void           updateGroups();

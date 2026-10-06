@@ -1,7 +1,7 @@
 //---------------------------------------------------------------------------------------------------------------------
-//  @file   tst_patternseams.h
+//  @file   save_fabrics.h
 //  @author Julius
-//  @date   5 Oct, 2026
+//  @date   6 Oct, 2026
 //
 //  @copyright
 //  Copyright (C)  2026 Seamly, LLC
@@ -22,31 +22,32 @@
 //  along with Seamly2D. If not, see <http://www.gnu.org/licenses/>.
 //---------------------------------------------------------------------------------------------------------------------
 
-#ifndef TST_PATTERNSEAMS_H
-#define TST_PATTERNSEAMS_H
+#ifndef SAVE_FABRICS_H
+#define SAVE_FABRICS_H
 
-#include <QObject>
+#include <QString>
 
-class TST_PatternSeams : public QObject
+#include "vundocommand.h"
+
+/// @brief Replaces the fabrics the garment is cut from.
+class SaveFabrics : public VUndoCommand
 {
     Q_OBJECT
 public:
-    explicit TST_PatternSeams(QObject* parent = nullptr);
+                               SaveFabrics(const QString& text, const VGarmentFabrics& old_fabrics,
+                                           const VGarmentFabrics& new_fabrics, VAbstractPattern* doc,
+                                           QUndoCommand* parent = nullptr);
+    virtual                   ~SaveFabrics() = default;
 
-private slots:
-    void seamsAreReadBack() const;
-    void seamsFollowTheSchema() const;
-    void noSeamsLeaveNoElement() const;
-    void undoRestoresSeams() const;
-    void olderPatternsAreConverted() const;
-    void arrangementsAreReadBack() const;
-    void garmentDataKeepsSchemaOrder() const;
-    void undoRestoresArrangements() const;
-    void fabricsAreReadBack() const;
-    void undoRestoresFabrics() const;
+    virtual void               undo() override;
+    virtual void               redo() override;
+    virtual int                id() const override;
 
 private:
-    Q_DISABLE_COPY(TST_PatternSeams)
+    Q_DISABLE_COPY(SaveFabrics)
+
+    VGarmentFabrics            m_old_fabrics;
+    VGarmentFabrics            m_new_fabrics;
 };
 
-#endif // TST_PATTERNSEAMS_H
+#endif // SAVE_FABRICS_H

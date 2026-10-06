@@ -26,10 +26,12 @@
 
 #include <QAction>
 #include <QColor>
+#include <QComboBox>
 #include <QEvent>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
+#include <QLineF>
 #include <QList>
 #include <QPalette>
 #include <QQmlError>
@@ -51,16 +53,23 @@
 #include <utility>
 
 #include "../ifc/exception/vexception.h"
+#include "../ifc/exception/vexceptionbadid.h"
 #include "../ifc/xml/vabstractpattern.h"
+#include "../qmuparser/qmuparsererror.h"
+#include "../vgeometry/vpointf.h"
 #include "../vmisc/def.h"
 #include "../vmisc/vabstractapplication.h"
+#include "../vpatterndb/calculator.h"
+#include "../vpatterndb/floatItemData/vgrainlinedata.h"
 #include "../vpatterndb/floatItemData/vpiecelabeldata.h"
 #include "../vpatterndb/measurements_def.h"
 #include "../vpatterndb/variables/vinternalvariable.h"
 #include "../vpatterndb/vcontainer.h"
 #include "../vpatterndb/vpiece.h"
 #include "../vgarment/cloth_solver.h"
+#include "../vgarment/fabric.h"
 #include "../vtools/undocommands/save_arrangements.h"
+#include "../vtools/undocommands/save_fabrics.h"
 #include "../vtools/undocommands/save_seams.h"
 #include "drape_runner.h"
 #include "garment_scene_model.h"
@@ -142,6 +151,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_simulate_action(nullptr)
     , m_reset_action(nullptr)
     , m_strain_action(nullptr)
+    , m_fabric_box(nullptr)
     , m_quick_view(nullptr)
     , m_view_container(nullptr)
     , m_message_label(new QLabel(this))
@@ -187,6 +197,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     connect(m_seam_editor, &SeamEditor::sewingChanged, this, &GarmentViewWidget::updateActions);
     connect(m_seam_editor, &SeamEditor::selectedSeamChanged, this, &GarmentViewWidget::updateActions);
     connect(m_doc, &VAbstractPattern::arrangementsChanged, this, &GarmentViewWidget::updateArrangements);
+    connect(m_doc, &VAbstractPattern::fabricsChanged, this, &GarmentViewWidget::updateFabrics);
     connect(m_scene_model, &GarmentSceneModel::placeRequested, this, &GarmentViewWidget::placePiece);
     connect(m_scene_model, &GarmentSceneModel::selectedPieceChanged, this, &GarmentViewWidget::updateActions);
     connect(m_scene_model, &GarmentSceneModel::avatarChanged, this, &GarmentViewWidget::updateActions);
@@ -381,7 +392,8 @@ void GarmentViewWidget::rebuildScene()
                 scene_piece.mesh = cached.garment_mesh;
                 scene_piece.positions = piecePositions(id, cached.garment_mesh);
                 scene_pieces.append(scene_piece);
-                m_garment_pieces.append({id, cached.garment_mesh});
+                const qreal grain_angle = grainAngle(piece);
+                m_garment_pieces.append({id, cached.garment_mesh, grain_angle});
 
                 if (cached.symmetry == PieceSymmetry::Pair)
                 {
@@ -390,7 +402,7 @@ void GarmentViewWidget::rebuildScene()
                     mirror_piece.mesh = cached.mirror_mesh;
                     mirror_piece.positions = piecePositions(mirror_piece.id, cached.mirror_mesh);
                     scene_pieces.append(mirror_piece);
-                    m_garment_pieces.append({mirror_piece.id, cached.mirror_mesh});
+                    m_garment_pieces.append({mirror_piece.id, cached.mirror_mesh, 180.0 - grain_angle});
                 }
             }
             else
@@ -880,6 +892,7 @@ void GarmentViewWidget::startSimulation()
     QHash<quint32, quint32> offsets;
     QHash<quint32, GarmentMesh> meshes;
     GarmentSymmetry symmetry;
+    const VGarmentFabrics fabrics = m_doc->getFabrics();
     for (const GarmentPiece& garment_piece : m_garment_pieces)
     {
         const QVector<QVector3D> positions = piecePositions(garment_piece.id, garment_piece.mesh);
@@ -887,7 +900,10 @@ void GarmentViewWidget::startSimulation()
         {
             DrapePiece drape_piece;
             drape_piece.id = garment_piece.id;
-            drape_piece.offset = static_cast<int>(solver->addMesh(garment_piece.mesh, positions));
+            drape_piece.offset = static_cast<int>(solver->addMesh(garment_piece.mesh, positions,
+                                                                  Fabric::preset(fabrics.of(patternPiece(
+                                                                      garment_piece.id))),
+                                                                  garment_piece.grain_angle));
             drape_piece.count = garment_piece.mesh.vertexCount();
             m_drape_pieces.append(drape_piece);
             offsets.insert(garment_piece.id, static_cast<quint32>(drape_piece.offset));
@@ -1004,6 +1020,101 @@ void GarmentViewWidget::updateActions()
         m_view_container->setFocus();
     }
     updateHint();
+
+    // The fabric shown is the selected piece's, or the garment's.
+    const VGarmentFabrics fabrics = m_doc->getFabrics();
+    const quint32 selected = m_scene_model->selectedPiece();
+    const QString fabric = selected != 0 ? fabrics.of(selected) : fabrics.garment;
+    const int index = m_fabric_box->findData(fabric.isEmpty() ? Fabric::defaultName() : fabric);
+    m_fabric_box->setCurrentIndex(qMax(index, 0));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The fabrics were changed, here or by undo. A drape running starts over in them.
+void GarmentViewWidget::updateFabrics()
+{
+    updateActions();
+    if (m_runner->isRunning())
+    {
+        startSimulation();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A fabric was picked: for the selected piece, or for the whole garment when no piece is selected. A piece cut from
+// the garment's fabric doesn't keep a fabric of its own.
+void GarmentViewWidget::chooseFabric(int index)
+{
+    const QString chosen = m_fabric_box->itemData(index).toString();
+    const VGarmentFabrics before = m_doc->getFabrics();
+    VGarmentFabrics after = before;
+    const quint32 selected = m_scene_model->selectedPiece();
+    if (selected != 0)
+    {
+        auto own = [selected](const VPieceFabric& piece)
+        {
+            return piece.piece_id == selected;
+        };
+        after.pieces.erase(std::remove_if(after.pieces.begin(), after.pieces.end(), own), after.pieces.end());
+        const QString garment = after.garment.isEmpty() ? Fabric::defaultName() : after.garment;
+        if (chosen != garment)
+        {
+            after.pieces.append({selected, chosen});
+        }
+    }
+    else
+    {
+        after.garment = chosen == Fabric::defaultName() ? QString() : chosen;
+    }
+
+    if (!(after == before))
+    {
+        qApp->getUndoStack()->push(new SaveFabrics(tr("change fabric"), before, after, m_doc));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Which way the piece's grain runs, in degrees anticlockwise from the piece scene's x axis: along its grainline, from
+// the grainline's bottom anchor point to its top one if it has them; straight up and down if the grainline's rotation
+// can't be worked out.
+qreal GarmentViewWidget::grainAngle(const VPiece& piece) const
+{
+    const VGrainlineData& grainline = piece.GetGrainlineGeometry();
+    qreal angle = 90.0;
+    try
+    {
+        if (grainline.topAnchorPoint() != NULL_ID && grainline.bottomAnchorPoint() != NULL_ID)
+        {
+            const QPointF top(*m_data->GeometricObject<VPointF>(grainline.topAnchorPoint()));
+            const QPointF bottom(*m_data->GeometricObject<VPointF>(grainline.bottomAnchorPoint()));
+            angle = QLineF(bottom, top).angle();
+        }
+        else
+        {
+            Calculator calculator;
+            angle = calculator.EvalFormula(m_data->DataVariables(), grainline.getRotation());
+        }
+    }
+    catch (const VExceptionBadId&)
+    {
+        angle = 90.0;
+    }
+    catch (const qmu::QmuParserError&)
+    {
+        angle = 90.0;
+    }
+    return angle;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QString GarmentViewWidget::fabricTitle(const QString& fabric) const
+{
+    const QHash<QString, QString> titles = {{QStringLiteral("cottonShirting"), tr("Cotton shirting")},
+                                            {QStringLiteral("cottonJersey"), tr("Cotton jersey")},
+                                            {QStringLiteral("denim"), tr("Denim")},
+                                            {QStringLiteral("woolSuiting"), tr("Wool suiting")},
+                                            {QStringLiteral("chiffon"), tr("Chiffon")}};
+    return titles.value(fabric, fabric);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1123,6 +1234,16 @@ void GarmentViewWidget::createToolBar()
     m_strain_action->setToolTip(tr("Color the cloth by how much it is stretched: green not at all, red %1% or more")
                                     .arg(qRound(m_scene_model->fullStrain() * 100)));
     connect(m_strain_action, &QAction::toggled, m_scene_model, &GarmentSceneModel::setStrainShown);
+
+    m_fabric_box = new QComboBox(tool_bar);
+    for (const Fabric& fabric : Fabric::presets())
+    {
+        m_fabric_box->addItem(fabricTitle(fabric.name), fabric.name);
+    }
+    m_fabric_box->setToolTip(tr("The fabric the selected piece is cut from, or the whole garment when no piece is "
+                                "selected"));
+    tool_bar->addWidget(m_fabric_box);
+    connect(m_fabric_box, QOverload<int>::of(&QComboBox::activated), this, &GarmentViewWidget::chooseFabric);
 
     m_cancel_action = new QAction(this);
     m_cancel_action->setShortcut(Qt::Key_Escape);

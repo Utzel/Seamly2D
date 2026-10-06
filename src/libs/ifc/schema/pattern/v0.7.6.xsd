@@ -179,6 +179,23 @@
             <xs:field xpath="@piece"/>
           </xs:unique>
         </xs:element>
+        <xs:element name="fabrics" minOccurs="0" maxOccurs="1">
+          <xs:complexType>
+            <xs:sequence minOccurs="0" maxOccurs="unbounded">
+              <xs:element name="fabric" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="piece" type="xs:unsignedInt" use="required"/>
+                  <xs:attribute name="name" type="xs:string" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="default" type="xs:string"/>
+          </xs:complexType>
+          <xs:unique name="fabricPiece">
+            <xs:selector xpath="fabric"/>
+            <xs:field xpath="@piece"/>
+          </xs:unique>
+        </xs:element>
         <xs:element name="draftBlock" minOccurs="1" maxOccurs="unbounded">
           <xs:complexType>
             <xs:sequence>

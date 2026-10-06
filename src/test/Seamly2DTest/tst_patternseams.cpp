@@ -36,6 +36,7 @@
 #include "../ifc/xml/vabstractpattern.h"
 #include "../ifc/xml/vpatternconverter.h"
 #include "../vtools/undocommands/save_arrangements.h"
+#include "../vtools/undocommands/save_fabrics.h"
 #include "../vtools/undocommands/save_seams.h"
 
 namespace
@@ -264,11 +265,15 @@ void TST_PatternSeams::arrangementsAreReadBack() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Whichever is made first, the seams come before the arrangements, and both before the draft blocks. Pieces can be
-// arranged on every part of the body.
+// Whichever is made first, the seams come before the arrangements, those before the fabrics, and all before the
+// draft blocks. Pieces can be arranged on every part of the body.
 void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
 {
     SeamsPattern pattern;
+    VGarmentFabrics fabrics;
+    fabrics.garment = QStringLiteral("denim");
+    fabrics.pieces = {{20, QStringLiteral("chiffon")}};
+    pattern.setFabrics(fabrics);
     pattern.setArrangements({arrangement(10, QStringLiteral("body"), 0, 120),
                              arrangement(20, QStringLiteral("leftLeg"), 0, 60),
                              arrangement(30, QStringLiteral("rightLeg"), 0, 60),
@@ -279,7 +284,7 @@ void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
     QCOMPARE(childTags(pattern.documentElement()),
              QStringList({QStringLiteral("version"), QStringLiteral("unit"), QStringLiteral("measurements"),
                           QStringLiteral("finalMeasurements"), QStringLiteral("seams"), QStringLiteral("arrangements"),
-                          QStringLiteral("draftBlock"), QStringLiteral("draftBlock")}));
+                          QStringLiteral("fabrics"), QStringLiteral("draftBlock"), QStringLiteral("draftBlock")}));
 
     QTemporaryDir folder;
     QVERIFY(folder.isValid());
@@ -310,5 +315,44 @@ void TST_PatternSeams::undoRestoresArrangements() const
 
     stack.undo();
     QCOMPARE(pattern.getArrangements(), before);
+    QCOMPARE(changes.count(), 2);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A piece without a fabric of its own is cut from the garment's; with no fabrics at all, nothing is stored.
+void TST_PatternSeams::fabricsAreReadBack() const
+{
+    SeamsPattern pattern;
+    VGarmentFabrics fabrics;
+    fabrics.garment = QStringLiteral("cottonJersey");
+    fabrics.pieces = {{10, QStringLiteral("denim")}, {30, QStringLiteral("chiffon")}};
+    pattern.setFabrics(fabrics);
+
+    QCOMPARE(pattern.getFabrics(), fabrics);
+    QCOMPARE(pattern.getFabrics().of(10), QStringLiteral("denim"));
+    QCOMPARE(pattern.getFabrics().of(20), QStringLiteral("cottonJersey"));
+
+    pattern.setFabrics(VGarmentFabrics());
+    QVERIFY(pattern.documentElement().firstChildElement(QStringLiteral("fabrics")).isNull());
+    QCOMPARE(pattern.getFabrics(), VGarmentFabrics());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_PatternSeams::undoRestoresFabrics() const
+{
+    SeamsPattern pattern;
+    VGarmentFabrics before;
+    before.garment = QStringLiteral("cottonShirting");
+    VGarmentFabrics after = before;
+    after.pieces = {{10, QStringLiteral("denim")}};
+    pattern.setFabrics(before);
+
+    QSignalSpy changes(&pattern, &VAbstractPattern::fabricsChanged);
+    QUndoStack stack;
+    stack.push(new SaveFabrics(QStringLiteral("fabric"), before, after, &pattern));
+    QCOMPARE(pattern.getFabrics(), after);
+
+    stack.undo();
+    QCOMPARE(pattern.getFabrics(), before);
     QCOMPARE(changes.count(), 2);
 }

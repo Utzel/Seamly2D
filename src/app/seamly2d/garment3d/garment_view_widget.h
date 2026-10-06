@@ -46,6 +46,7 @@
 class DrapeRunner;
 class GarmentSceneModel;
 class QAction;
+class QComboBox;
 class QLabel;
 class QQuickView;
 class QTimer;
@@ -92,6 +93,8 @@ private slots:
     void               avatarFitted();
     void               updateSeams();
     void               updateArrangements();
+    void               updateFabrics();
+    void               chooseFabric(int index);
     void               flipSeam();
     void               removeSelected();
     void               cancel();
@@ -120,11 +123,13 @@ private:
         GarmentMesh   mirror_mesh;
     };
 
-    // A piece in the garment: a pattern piece or a mirrored copy, with the mesh it is simulated with.
+    // A piece in the garment: a pattern piece or a mirrored copy, with the mesh it is simulated with and the way its
+    // grain runs in it.
     struct GarmentPiece
     {
         quint32     id = 0;
         GarmentMesh mesh;
+        qreal       grain_angle = 90.0;
     };
 
     // What an avatar is fitted to; a new fit only starts when this changes.
@@ -166,6 +171,7 @@ private:
     QAction*                   m_simulate_action;
     QAction*                   m_reset_action;
     QAction*                   m_strain_action;
+    QComboBox*                 m_fabric_box;
     QQuickView*                m_quick_view;
     QWidget*                   m_view_container;
     QLabel*                    m_message_label;
@@ -196,6 +202,8 @@ private:
     void               saveSeams(const QString& text, const QVector<VSeam>& seams);
     void               saveArrangements(const QString& text, const QVector<VPieceArrangement>& arrangements);
     void               readArrangements();
+    qreal              grainAngle(const VPiece& piece) const;
+    QString            fabricTitle(const QString& fabric) const;
     QVector<QVector3D> piecePositions(quint32 id, const GarmentMesh& mesh) const;
     QSet<quint32>      turnedPairs() const;
     qreal              acrossBody(const GarmentMesh& mesh, const QVector<QVector3D>& positions,
