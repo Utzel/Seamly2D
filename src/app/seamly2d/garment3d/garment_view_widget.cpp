@@ -46,6 +46,7 @@
 #include <algorithm>
 #include <iterator>
 #include <tuple>
+#include <utility>
 
 #include "../ifc/exception/vexception.h"
 #include "../ifc/xml/vabstractpattern.h"
@@ -151,6 +152,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_collider()
     , m_arrangements()
     , m_draped()
+    , m_turned_pairs()
     , m_drape_pieces()
     , m_runner(new DrapeRunner(this))
 {
@@ -277,10 +279,8 @@ void GarmentViewWidget::rebuildScene()
     QList<quint32> ids = pieces->keys();
     std::sort(ids.begin(), ids.end());
 
-    QVector<GarmentSceneModel::Piece> scene_pieces;
-    QVector<SeamEditor::Piece> seam_pieces;
+    // All meshes first: where a piece goes can depend on the pieces it is sewn to.
     QHash<quint32, CachedMesh> mesh_cache;
-    m_garment_pieces.clear();
     for (const quint32 id : ids)
     {
         const VPiece& piece = pieces->constFind(id).value();
@@ -298,48 +298,6 @@ void GarmentViewWidget::rebuildScene()
                     m_draped.remove(PieceOutline::mirrorId(id));
                 }
                 mesh_cache.insert(id, cached);
-
-                if (!cached.mesh.isEmpty())
-                {
-                    const QColor color(piece.getColor());
-
-                    GarmentSceneModel::Piece scene_piece;
-                    scene_piece.id = id;
-                    scene_piece.name = piece.GetName();
-                    scene_piece.color = color.isValid() ? color : QColor(Qt::white);
-
-                    const bool placed = !m_wrap.isNull() && m_arrangements.contains(id)
-                                        && !cached.garment_mesh.isEmpty();
-                    if (placed)
-                    {
-                        scene_piece.mesh = cached.garment_mesh;
-                        scene_piece.positions = piecePositions(id, cached.garment_mesh);
-                        scene_pieces.append(scene_piece);
-                        m_garment_pieces.append({id, cached.garment_mesh});
-
-                        if (cached.symmetry == PieceSymmetry::Pair)
-                        {
-                            GarmentSceneModel::Piece mirror_piece = scene_piece;
-                            mirror_piece.id = PieceOutline::mirrorId(id);
-                            mirror_piece.mesh = cached.mirror_mesh;
-                            mirror_piece.positions = piecePositions(mirror_piece.id, cached.mirror_mesh);
-                            scene_pieces.append(mirror_piece);
-                            m_garment_pieces.append({mirror_piece.id, cached.mirror_mesh});
-                        }
-                    }
-                    else
-                    {
-                        // Pieces lie on the board as drafted, and seams are sewn there.
-                        scene_piece.mesh = cached.mesh;
-                        scene_pieces.append(scene_piece);
-
-                        SeamEditor::Piece seam_piece;
-                        seam_piece.id = id;
-                        seam_piece.outline = cached.outline;
-                        seam_piece.mirrored = cached.symmetry == PieceSymmetry::Pair;
-                        seam_pieces.append(seam_piece);
-                    }
-                }
             }
             catch (const VException&)
             {
@@ -352,6 +310,57 @@ void GarmentViewWidget::rebuildScene()
     for (auto draped = m_draped.begin(); draped != m_draped.end();)
     {
         draped = m_mesh_cache.contains(patternPiece(draped.key())) ? std::next(draped) : m_draped.erase(draped);
+    }
+    m_turned_pairs.clear();  // turnedPairs() places body pieces, and those are never turned
+    m_turned_pairs = turnedPairs();
+
+    QVector<GarmentSceneModel::Piece> scene_pieces;
+    QVector<SeamEditor::Piece> seam_pieces;
+    m_garment_pieces.clear();
+    for (const quint32 id : ids)
+    {
+        const CachedMesh cached = m_mesh_cache.value(id);
+        if (!cached.mesh.isEmpty())
+        {
+            const VPiece& piece = pieces->constFind(id).value();
+            const QColor color(piece.getColor());
+
+            GarmentSceneModel::Piece scene_piece;
+            scene_piece.id = id;
+            scene_piece.name = piece.GetName();
+            scene_piece.color = color.isValid() ? color : QColor(Qt::white);
+
+            const bool placed = !m_wrap.isNull() && m_arrangements.contains(id) && !cached.garment_mesh.isEmpty();
+            if (placed)
+            {
+                scene_piece.mesh = cached.garment_mesh;
+                scene_piece.positions = piecePositions(id, cached.garment_mesh);
+                scene_pieces.append(scene_piece);
+                m_garment_pieces.append({id, cached.garment_mesh});
+
+                if (cached.symmetry == PieceSymmetry::Pair)
+                {
+                    GarmentSceneModel::Piece mirror_piece = scene_piece;
+                    mirror_piece.id = PieceOutline::mirrorId(id);
+                    mirror_piece.mesh = cached.mirror_mesh;
+                    mirror_piece.positions = piecePositions(mirror_piece.id, cached.mirror_mesh);
+                    scene_pieces.append(mirror_piece);
+                    m_garment_pieces.append({mirror_piece.id, cached.mirror_mesh});
+                }
+            }
+            else
+            {
+                // Pieces lie on the board as drafted, and seams are sewn there.
+                scene_piece.mesh = cached.mesh;
+                scene_pieces.append(scene_piece);
+
+                SeamEditor::Piece seam_piece;
+                seam_piece.id = id;
+                seam_piece.outline = cached.outline;
+                seam_piece.mirrored = cached.symmetry == PieceSymmetry::Pair;
+                seam_pieces.append(seam_piece);
+            }
+        }
     }
 
     m_scene_model->setPieces(scene_pieces);
@@ -557,7 +566,8 @@ void GarmentViewWidget::readArrangements()
 
 //---------------------------------------------------------------------------------------------------------------------
 // Where a piece of the garment is shown: where the drape took it, else where it is arranged on the avatar, a
-// mirrored copy mirrored to the other side of the body, else nowhere in particular, which puts it on the board.
+// mirrored copy mirrored to the other side of the body, else nowhere in particular, which puts it on the board. Of a
+// pair turned to its seams, the mirrored copy goes where the piece is arranged and the piece to the other side.
 QVector<QVector3D> GarmentViewWidget::piecePositions(quint32 id, const GarmentMesh& mesh) const
 {
     QVector<QVector3D> positions;
@@ -567,9 +577,11 @@ QVector<QVector3D> GarmentViewWidget::piecePositions(quint32 id, const GarmentMe
         positions = m_draped.value(id);
         if (positions.size() != mesh.vertexCount())
         {
-            if (PieceOutline::isMirrorId(id))
+            if (PieceOutline::isMirrorId(id) != m_turned_pairs.contains(piece))
             {
-                positions = m_wrap->place(m_mesh_cache.value(piece).garment_mesh, m_arrangements.value(piece));
+                const CachedMesh& cached = m_mesh_cache.value(piece);
+                const GarmentMesh& other = PieceOutline::isMirrorId(id) ? cached.garment_mesh : cached.mirror_mesh;
+                positions = m_wrap->place(other, m_arrangements.value(piece));
                 for (QVector3D& position : positions)
                 {
                     position = m_wrap->mirrored(position);
@@ -582,6 +594,73 @@ QVector<QVector3D> GarmentViewWidget::piecePositions(quint32 id, const GarmentMe
         }
     }
     return positions;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Pieces cut twice that are arranged on an arm or a leg, but sewn mostly to body pieces on the other side of the
+// body: they are drafted for the other side. Turned, the mirrored copy goes where the piece was put, so a sleeve goes
+// to the armhole it is sewn to whichever arm it was put on.
+QSet<quint32> GarmentViewWidget::turnedPairs() const
+{
+    QHash<quint32, int> votes;
+    if (!m_wrap.isNull())
+    {
+        auto onLimb = [this](quint32 piece)
+        {
+            return m_arrangements.contains(piece) && m_arrangements.value(piece).part != BodyPart::Body
+                   && m_mesh_cache.value(piece).symmetry == PieceSymmetry::Pair;
+        };
+        auto onBody = [this](quint32 piece)
+        {
+            return m_arrangements.contains(piece) && m_arrangements.value(piece).part == BodyPart::Body
+                   && !m_mesh_cache.value(piece).garment_mesh.isEmpty();
+        };
+
+        for (const VSeam& seam : m_doc->getSeams())
+        {
+            for (const auto& sides : {std::make_pair(seam.first, seam.second), std::make_pair(seam.second, seam.first)})
+            {
+                const quint32 piece = sides.first.piece_id;
+                const quint32 partner = sides.second.piece_id;
+                if (onLimb(piece) && onBody(partner))
+                {
+                    const CachedMesh& own = m_mesh_cache.value(piece);
+                    const CachedMesh& other = m_mesh_cache.value(partner);
+                    const qreal own_across = acrossBody(own.garment_mesh,
+                                                        m_wrap->place(own.garment_mesh, m_arrangements.value(piece)),
+                                                        sides.first);
+                    const qreal other_across = acrossBody(other.garment_mesh,
+                                                          piecePositions(partner, other.garment_mesh), sides.second);
+                    votes[piece] += own_across * other_across < 0 ? 1 : -1;
+                }
+            }
+        }
+    }
+
+    QSet<quint32> turned;
+    for (auto vote = votes.constBegin(); vote != votes.constEnd(); ++vote)
+    {
+        if (vote.value() > 0)
+        {
+            turned.insert(vote.key());
+        }
+    }
+    return turned;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// How far a seam side lies to the left of the middle of the body (+x), on average.
+qreal GarmentViewWidget::acrossBody(const GarmentMesh& mesh, const QVector<QVector3D>& positions,
+                                    const VSeamSide& side) const
+{
+    qreal across = 0;
+    const QVector<quint32> vertices = mesh.stretch(side.start_node, side.end_node).vertices();
+    for (const quint32 vertex : vertices)
+    {
+        const QVector3D position = positions.value(static_cast<int>(vertex));
+        across += (position.x() - m_wrap->mirrored(position).x()) / 2.0;
+    }
+    return vertices.isEmpty() ? 0 : across / vertices.size();
 }
 
 //---------------------------------------------------------------------------------------------------------------------

@@ -27,6 +27,7 @@
 
 #include <QFutureWatcher>
 #include <QHash>
+#include <QSet>
 #include <QPointF>
 #include <QScopedPointer>
 #include <QVector3D>
@@ -53,6 +54,7 @@ class VAbstractPattern;
 class VContainer;
 struct VPieceArrangement;
 struct VSeam;
+struct VSeamSide;
 
 /// @brief Content of the 3D View dock: the pattern's pieces and an avatar fitted to the pattern's measurements, in a
 /// 3D scene that follows every edit, and the seams that sew the pieces together.
@@ -179,6 +181,7 @@ private:
     BodyCollider               m_collider;
     QHash<quint32, PieceArrangement>   m_arrangements;
     QHash<quint32, QVector<QVector3D>> m_draped;
+    QSet<quint32>              m_turned_pairs;
     QVector<DrapePiece>        m_drape_pieces;
     QVector<GarmentPiece>      m_garment_pieces;
     DrapeRunner*               m_runner;
@@ -191,6 +194,9 @@ private:
     void               saveArrangements(const QString& text, const QVector<VPieceArrangement>& arrangements);
     void               readArrangements();
     QVector<QVector3D> piecePositions(quint32 id, const GarmentMesh& mesh) const;
+    QSet<quint32>      turnedPairs() const;
+    qreal              acrossBody(const GarmentMesh& mesh, const QVector<QVector3D>& positions,
+                                  const VSeamSide& side) const;
     CachedMesh         garmentMeshes(quint32 id, const PieceOutline& outline, PieceSymmetry wanted) const;
     void               startSimulation();
     void               updateHint();
