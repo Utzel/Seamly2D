@@ -59,6 +59,7 @@ SOURCES += \
     tst_garmentsymmetry.cpp \
     tst_garmentmesh.cpp \
     tst_garmentexport.cpp \
+    tst_topstitch.cpp \
     tst_limbline.cpp \
     tst_patternseams.cpp
 
@@ -96,6 +97,7 @@ HEADERS += \
     tst_garmentsymmetry.h \
     tst_garmentmesh.h \
     tst_garmentexport.h \
+    tst_topstitch.h \
     tst_limbline.h \
     tst_patternseams.h
 

@@ -16,7 +16,8 @@ SOURCES += \
     $$PWD/limb_line.cpp \
     $$PWD/piece_mesher.cpp \
     $$PWD/piece_outline.cpp \
-    $$PWD/seam_stretch.cpp
+    $$PWD/seam_stretch.cpp \
+    $$PWD/topstitch.cpp
 
 *msvc*:SOURCES += $$PWD/stable.cpp
 
@@ -36,6 +37,7 @@ HEADERS += \
     $$PWD/piece_mesher.h \
     $$PWD/piece_outline.h \
     $$PWD/seam_stretch.h \
+    $$PWD/topstitch.h \
     $$PWD/stable.h
 
 # The avatar's body, built by scripts/avatar/build_avatar_data.py. BodyData::standard() initializes it.
