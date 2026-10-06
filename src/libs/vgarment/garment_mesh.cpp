@@ -25,6 +25,7 @@
 #include "garment_mesh.h"
 
 #include <QPolygonF>
+#include <QtMath>
 
 #include <utility>
 
@@ -105,4 +106,67 @@ GarmentMesh GarmentMesh::mirrored() const
         std::swap(mirror.indices[i + 1], mirror.indices[i + 2]);
     }
     return mirror;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief How much the cloth around each vertex is stretched with the vertices at the given positions, as a share of
+/// its drafted size: 0.1 is 10% longer than drafted, 0 or less not stretched at all.
+///
+/// A triangle's stretch is the largest of its principal stretches, so moving, turning or bending the cloth doesn't
+/// count, and stretching it in any direction does. A vertex gets the mean of the triangles around it, weighed by
+/// their drafted area. Positions for another mesh leave every vertex at 0.
+QVector<qreal> GarmentMesh::strain(const QVector<QVector3D>& positions) const
+{
+    const int count = vertexCount();
+    QVector<qreal> strain(count, 0.0);
+    if (positions.size() != count)
+    {
+        return strain;
+    }
+
+    QVector<qreal> weight(count, 0.0);
+    for (int i = 0; i + 2 < indices.size(); i += 3)
+    {
+        const int a = static_cast<int>(indices.at(i));
+        const int b = static_cast<int>(indices.at(i + 1));
+        const int c = static_cast<int>(indices.at(i + 2));
+
+        // The drafted triangle's sides, and what they became.
+        const QPointF drafted_ab = rest_positions.at(b) - rest_positions.at(a);
+        const QPointF drafted_ac = rest_positions.at(c) - rest_positions.at(a);
+        const qreal doubled_area = drafted_ab.x() * drafted_ac.y() - drafted_ac.x() * drafted_ab.y();
+        if (qFuzzyIsNull(doubled_area))
+        {
+            continue;
+        }
+        const QVector3D ab = positions.at(b) - positions.at(a);
+        const QVector3D ac = positions.at(c) - positions.at(a);
+
+        // Where the drafted x and y directions went: the columns of the deformation gradient.
+        const QVector3D along_x = (ab * static_cast<float>(drafted_ac.y()) - ac * static_cast<float>(drafted_ab.y()))
+                                  / static_cast<float>(doubled_area);
+        const QVector3D along_y = (ac * static_cast<float>(drafted_ab.x()) - ab * static_cast<float>(drafted_ac.x()))
+                                  / static_cast<float>(doubled_area);
+
+        // The largest eigenvalue of the right Cauchy-Green tensor is the square of the largest principal stretch.
+        const qreal xx = QVector3D::dotProduct(along_x, along_x);
+        const qreal yy = QVector3D::dotProduct(along_y, along_y);
+        const qreal xy = QVector3D::dotProduct(along_x, along_y);
+        const qreal half_trace = (xx + yy) / 2.0;
+        const qreal largest = half_trace + qSqrt(qMax(0.0, half_trace * half_trace - (xx * yy - xy * xy)));
+        const qreal triangle_strain = qSqrt(largest) - 1.0;
+
+        const qreal area = qAbs(doubled_area) / 2.0;
+        for (const int vertex : {a, b, c})
+        {
+            strain[vertex] += triangle_strain * area;
+            weight[vertex] += area;
+        }
+    }
+
+    for (int i = 0; i < count; ++i)
+    {
+        strain[i] = weight.at(i) > 0 ? strain.at(i) / weight.at(i) : 0.0;
+    }
+    return strain;
 }

@@ -27,6 +27,7 @@
 
 #include <QPointF>
 #include <QRectF>
+#include <QVector3D>
 #include <QVector>
 #include <QtGlobal>
 
@@ -53,6 +54,7 @@ struct GarmentMesh
 
     SeamStretch          stretch(quint32 start_node, quint32 end_node, quint32 vertex_offset = 0) const;
     GarmentMesh          mirrored() const;
+    QVector<qreal>       strain(const QVector<QVector3D>& positions) const;
 };
 
 #endif // GARMENT_MESH_H
