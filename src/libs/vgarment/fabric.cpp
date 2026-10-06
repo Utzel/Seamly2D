@@ -58,7 +58,7 @@ qreal Fabric::shearStiffness() const
 QVector<Fabric> Fabric::presets()
 {
     return {makeFabric(default_name, 120.0, 2000.0, 1200.0, 150.0, 8.0),
-            makeFabric(QStringLiteral("cottonJersey"), 170.0, 80.0, 40.0, 50.0, 3.0),
+            makeFabric(QStringLiteral("cottonJersey"), 170.0, 250.0, 120.0, 100.0, 3.0),
             makeFabric(QStringLiteral("denim"), 400.0, 4000.0, 2500.0, 300.0, 60.0),
             makeFabric(QStringLiteral("woolSuiting"), 260.0, 1500.0, 1100.0, 120.0, 15.0),
             makeFabric(QStringLiteral("chiffon"), 50.0, 600.0, 450.0, 40.0, 0.5)};
