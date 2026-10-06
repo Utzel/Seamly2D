@@ -30,6 +30,8 @@
 #include <limits>
 #include <queue>
 
+#include "body_measurer.h"
+
 namespace
 {
 // How far a placed piece starts out from the body, in cm.
@@ -100,6 +102,7 @@ BodyWrap::BodyWrap(const BodyModel& model, const QVector<QVector3D>& positions)
     , m_pelvis(model.joint(positions, QStringLiteral("pelvis")))
     , m_crotch(0)
     , m_armpits{0, 0}
+    , m_shoulder_tips{0, 0}
     , m_skin_arms(m_skin.size(), -1)
 {
     const QString sides[2] = {QStringLiteral("l-"), QStringLiteral("r-")};
@@ -117,6 +120,9 @@ BodyWrap::BodyWrap(const BodyModel& model, const QVector<QVector3D>& positions)
         m_arm_lines[side] = LimbLine({m_arms[side][0], m_arms[side][1], m_arms[side][2]}, elbow_bend, above_shoulder,
                                      below_wrist);
     }
+    const QVector3D shoulder_tip = BodyMeasurer(model).shoulderTip(positions);
+    m_shoulder_tips[0] = m_arm_lines[0].alongNearest(shoulder_tip);
+    m_shoulder_tips[1] = m_arm_lines[1].alongNearest(mirrored(shoulder_tip));
 
     // The legs part at the lowest skin in the middle of the body below the pelvis.
     m_crotch = m_pelvis.y();
@@ -469,7 +475,7 @@ qreal BodyWrap::armRadius(int side, qreal from, qreal to) const
 
 //---------------------------------------------------------------------------------------------------------------------
 // Wraps the piece around a tube along the arm's middle line, its middle at the arrangement's place on the line and
-// angle around it, its top no higher up the arm than the shoulder joint.
+// angle around it, its top no further up the arm than the shoulder tip.
 //
 // The tube narrows down the arm as the arm does, though slowly, staying clear of the arm near each place along it
 // and wide enough there for the piece to go around without its sides overlapping. So a sleeve narrowing to the wrist
@@ -480,7 +486,7 @@ QVector<QVector3D> BodyWrap::placeOnArm(const GarmentMesh& mesh, const PieceArra
     const LimbLine& line = m_arm_lines[side];
     const QRectF bounds = mesh.bounds();
     const QPointF middle = bounds.center();
-    const qreal top = qMax(line.alongAtHeight(arrangement.height), bounds.height() / 2.0) - bounds.height() / 2.0;
+    const qreal top = qMax(line.alongAtHeight(arrangement.height) - bounds.height() / 2.0, m_shoulder_tips[side]);
 
     // The radius every cm down the piece.
     const int rows = qCeil(bounds.height()) + 2;

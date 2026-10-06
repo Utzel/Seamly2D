@@ -114,6 +114,9 @@ BodyMeasurements BodyMeasurer::measure(const QVector<QVector3D>& positions) cons
     measurements.waist = waist(positions);
     measurements.hip = hip(positions);
     measurements.neck = neck(positions);
+    measurements.upper_arm = upperArm(positions);
+    measurements.lower_arm = lowerArm(positions);
+    measurements.arm = measurements.upper_arm + measurements.lower_arm;
     return measurements;
 }
 
@@ -296,4 +299,58 @@ qreal BodyMeasurer::extremeGirth(const QVector<QVector3D>& positions, float from
 float BodyMeasurer::shoulderDistance(const QVector<QVector3D>& positions) const
 {
     return qAbs(m_model.joint(positions, QStringLiteral("l-shoulder")).x());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief From the shoulder tip to the elbow, the left arm's.
+qreal BodyMeasurer::upperArm(const QVector<QVector3D>& positions) const
+{
+    return (m_model.joint(positions, QStringLiteral("l-elbow")) - shoulderTip(positions)).length();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief From the elbow to the wrist, the left arm's.
+qreal BodyMeasurer::lowerArm(const QVector<QVector3D>& positions) const
+{
+    return (m_model.joint(positions, QStringLiteral("l-hand")) - m_model.joint(positions, QStringLiteral("l-elbow")))
+        .length();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief From the shoulder tip to the wrist, the left arm's.
+qreal BodyMeasurer::arm(const QVector<QVector3D>& positions) const
+{
+    return upperArm(positions) + lowerArm(positions);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The left shoulder tip, where arm lengths start: where the skin is highest straight above the shoulder joint;
+/// the joint itself if no skin is above it.
+QVector3D BodyMeasurer::shoulderTip(const QVector<QVector3D>& positions) const
+{
+    const QVector3D joint = m_model.joint(positions, QStringLiteral("l-shoulder"));
+    const QPointF above(joint.x(), joint.z());
+    const QVector<quint32>& triangles = m_model.triangles();
+    QVector3D tip = joint;
+    for (int t = 0; t + 2 < triangles.size(); t += 3)
+    {
+        const QVector3D a = positions.at(static_cast<int>(triangles.at(t)));
+        const QVector3D b = positions.at(static_cast<int>(triangles.at(t + 1)));
+        const QVector3D c = positions.at(static_cast<int>(triangles.at(t + 2)));
+
+        // Where the vertical line through the joint meets the triangle, seen from above.
+        const qreal area = cross(QPointF(a.x(), a.z()), QPointF(b.x(), b.z()), QPointF(c.x(), c.z()));
+        if (qAbs(area) > 1e-9)
+        {
+            const qreal u = cross(above, QPointF(b.x(), b.z()), QPointF(c.x(), c.z())) / area;
+            const qreal v = cross(QPointF(a.x(), a.z()), above, QPointF(c.x(), c.z())) / area;
+            const qreal w = 1.0 - u - v;
+            const float height = static_cast<float>(u * a.y() + v * b.y() + w * c.y());
+            if (u >= 0 && v >= 0 && w >= 0 && height > tip.y())
+            {
+                tip = QVector3D(joint.x(), height, joint.z());
+            }
+        }
+    }
+    return tip;
 }

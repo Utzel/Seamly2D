@@ -111,6 +111,9 @@ bool GarmentViewWidget::AvatarRequest::operator==(const AvatarRequest& other) co
            && qFuzzyCompare(1.0 + wanted.waist, 1.0 + other.wanted.waist)
            && qFuzzyCompare(1.0 + wanted.hip, 1.0 + other.wanted.hip)
            && qFuzzyCompare(1.0 + wanted.neck, 1.0 + other.wanted.neck)
+           && qFuzzyCompare(1.0 + wanted.upper_arm, 1.0 + other.wanted.upper_arm)
+           && qFuzzyCompare(1.0 + wanted.lower_arm, 1.0 + other.wanted.lower_arm)
+           && qFuzzyCompare(1.0 + wanted.arm, 1.0 + other.wanted.arm)
            && qFuzzyCompare(1.0 + gender, 1.0 + other.gender)
            && qFuzzyCompare(1.0 + age, 1.0 + other.age);
 }
@@ -118,7 +121,8 @@ bool GarmentViewWidget::AvatarRequest::operator==(const AvatarRequest& other) co
 //---------------------------------------------------------------------------------------------------------------------
 bool GarmentViewWidget::AvatarRequest::hasMeasurements() const
 {
-    return wanted.height > 0 || wanted.bust > 0 || wanted.waist > 0 || wanted.hip > 0 || wanted.neck > 0;
+    return wanted.height > 0 || wanted.bust > 0 || wanted.waist > 0 || wanted.hip > 0 || wanted.neck > 0
+           || wanted.upper_arm > 0 || wanted.lower_arm > 0 || wanted.arm > 0;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -476,6 +480,9 @@ GarmentViewWidget::AvatarRequest GarmentViewWidget::wantedAvatar() const
     request.wanted.waist = value_cm(waistCirc_M);
     request.wanted.hip = value_cm(hipCirc_M);
     request.wanted.neck = value_cm(neckMidCirc_M);
+    request.wanted.upper_arm = value_cm(armShoulderTipToElbow_M);
+    request.wanted.lower_arm = value_cm(armElbowToWrist_M);
+    request.wanted.arm = value_cm(armShoulderTipToWrist_M);
     request.gender = m_wearer_gender;
     request.age = BodyShape::ageFromYears(m_wearer_age);
     return request;
@@ -499,7 +506,10 @@ QString GarmentViewWidget::avatarNote(const AvatarFit& result) const
         std::make_tuple(tr("bust"), wanted.bust, got.bust),
         std::make_tuple(tr("waist"), wanted.waist, got.waist),
         std::make_tuple(tr("hip"), wanted.hip, got.hip),
-        std::make_tuple(tr("neck"), wanted.neck, got.neck)};
+        std::make_tuple(tr("neck"), wanted.neck, got.neck),
+        std::make_tuple(tr("shoulder tip to elbow"), wanted.upper_arm, got.upper_arm),
+        std::make_tuple(tr("elbow to wrist"), wanted.lower_arm, got.lower_arm),
+        std::make_tuple(tr("shoulder tip to wrist"), wanted.arm, got.arm)};
 
     QStringList misses;
     for (const auto& check : checks)

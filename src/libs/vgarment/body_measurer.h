@@ -34,11 +34,14 @@ class BodyModel;
 /// @brief Measurements of a body in cm, taken like a tailor takes them.
 struct BodyMeasurements
 {
-    qreal height = 0;   ///< floor to the top of the head
-    qreal bust = 0;     ///< fullest girth of the chest
-    qreal waist = 0;    ///< smallest girth between hips and chest
-    qreal hip = 0;      ///< fullest girth of the hips and seat
-    qreal neck = 0;     ///< smallest girth of the neck
+    qreal height = 0;     ///< floor to the top of the head
+    qreal bust = 0;       ///< fullest girth of the chest
+    qreal waist = 0;      ///< smallest girth between hips and chest
+    qreal hip = 0;        ///< fullest girth of the hips and seat
+    qreal neck = 0;       ///< smallest girth of the neck
+    qreal upper_arm = 0;  ///< shoulder tip to elbow, the arm straight
+    qreal lower_arm = 0;  ///< elbow to wrist, the arm straight
+    qreal arm = 0;        ///< shoulder tip to wrist, the arm straight
 };
 
 /// @brief Measures bodies made by a BodyModel.
@@ -46,6 +49,9 @@ struct BodyMeasurements
 /// A girth is taken like a tape measure: the body is sliced horizontally, the slice outlines of the torso (or both
 /// legs) are kept, and the length around their convex hull is measured, so the tape bridges hollows such as the one
 /// between the breasts. Where each girth is searched for follows the body's joints.
+///
+/// Lengths down the arm run from joint to joint, which is as long as the outside of a straight arm, starting at the
+/// shoulder tip: the top of the shoulder over the shoulder joint.
 class BodyMeasurer
 {
 public:
@@ -58,6 +64,10 @@ public:
     qreal              waist(const QVector<QVector3D>& positions) const;
     qreal              hip(const QVector<QVector3D>& positions) const;
     qreal              neck(const QVector<QVector3D>& positions) const;
+    qreal              upperArm(const QVector<QVector3D>& positions) const;
+    qreal              lowerArm(const QVector<QVector3D>& positions) const;
+    qreal              arm(const QVector<QVector3D>& positions) const;
+    QVector3D          shoulderTip(const QVector<QVector3D>& positions) const;
 
     static qreal       tapeGirth(const QVector<QVector3D>& positions, const QVector<quint32>& triangles, float level,
                                  float max_center_x, float max_extent_x = 0);

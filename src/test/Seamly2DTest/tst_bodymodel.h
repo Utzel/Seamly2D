@@ -43,8 +43,10 @@ private slots:
     void measureTargetChangesGirth() const;
     void tapeGirthOfCylinder() const;
     void tapeLeavesOutArms() const;
+    void armLengthsRunFromTheShoulderTip() const;
     void fitMatchesMeasurements() const;
     void fitReachesTypicalBodies() const;
+    void fitKeepsTheArmsProportions() const;
     void fitStaysInRange() const;
     void wrapFindsBodyParts() const;
     void wrappedPiecesStartOutsideTheBody() const;

@@ -58,8 +58,9 @@ struct PieceArrangement
 /// A piece for the body or a leg is bent around an upright cylinder just outside the part it goes on, measured over
 /// the piece's height with the arms left out, so it starts clear of the body and the seams can pull it in. A piece
 /// for an arm is bent around a tube along the arm's middle line, which follows the arm out from the shoulder, bends
-/// with it at the elbow and narrows as the arm does; the piece doesn't reach above the shoulder joint, so a sleeve's
-/// cap starts on top of the arm. Bending around a cylinder keeps the piece's lengths, so it starts out unstretched,
+/// with it at the elbow and narrows as the arm does; the piece doesn't reach further up the arm than the shoulder tip,
+/// where arm lengths are measured from, so a sleeve's cap starts on top of the arm where the armhole is. Bending
+/// around a cylinder keeps the piece's lengths, so it starts out unstretched,
 /// except where the tube bends or narrows, most of all around the elbow, where it starts out stretched on the outside
 /// of the bend and squeezed on the inside. No piece wraps all the way around, so its sides don't overlap. Seen from
 /// outside, a placed piece looks as it does in the piece scene, its top towards the shoulder on an arm.
@@ -85,13 +86,14 @@ private:
 
     QVector<QVector3D> m_skin;
     QVector3D          m_pelvis;
-    qreal              m_crotch;         // height where the legs part
-    QVector3D          m_legs[2][3];     // hip, knee and ankle of the left and the right leg
-    QVector3D          m_arms[2][6];     // shoulder, elbow, wrist, and middle finger, thumb and little finger tips
-    LimbLine           m_arm_lines[2];   // from the shoulder joint through the elbow and the wrist
-    qreal              m_armpits[2];     // how far along its line each arm parts from the body
+    qreal              m_crotch;            // height where the legs part
+    QVector3D          m_legs[2][3];        // hip, knee and ankle of the left and the right leg
+    QVector3D          m_arms[2][6];        // shoulder, elbow, wrist, and middle finger, thumb and little finger tips
+    LimbLine           m_arm_lines[2];      // from the shoulder joint through the elbow and the wrist
+    qreal              m_armpits[2];        // how far along its line each arm parts from the body
+    qreal              m_shoulder_tips[2];  // how far along its line each arm's shoulder tip is
     QVector<ArmSkin>   m_arm_skin[2];
-    QVector<qint8>     m_skin_arms;      // for each skin vertex the arm below the armpit it is on, or -1
+    QVector<qint8>     m_skin_arms;         // for each skin vertex the arm below the armpit it is on, or -1
 
     QVector<QVector3D> placeUpright(const GarmentMesh& mesh, const PieceArrangement& arrangement) const;
     QVector3D          axisAt(BodyPart part, qreal height) const;

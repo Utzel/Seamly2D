@@ -41,8 +41,9 @@ struct BodyFit
 /// @brief Finds the body shape that matches a set of measurements.
 ///
 /// The uniform scale sets the height. The overall build (MakeHuman's weight) is chosen to match bust, waist and hip
-/// together, then MakeHuman's measure targets correct each girth on its own. Gender and age are taken as given.
-/// Measurements that are 0 are left free.
+/// together, then MakeHuman's measure targets correct each girth and the lengths of the upper arm and the forearm on
+/// their own. An arm only known from shoulder tip to wrist keeps the body's own proportions. Gender and age are taken
+/// as given. Measurements that are 0 are left free.
 class BodyFitter
 {
 public:

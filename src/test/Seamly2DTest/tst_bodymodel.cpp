@@ -218,6 +218,37 @@ void TST_BodyModel::tapeLeavesOutArms() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// The arm is measured from the shoulder tip, on top of the shoulder over its joint, by the elbow to the wrist, and
+// MakeHuman's arm length targets change the upper arm and the forearm on their own.
+void TST_BodyModel::armLengthsRunFromTheShoulderTip() const
+{
+    const BodyModel model;
+    const BodyMeasurer measurer(model);
+    const QVector<QVector3D> positions = model.evaluate(female());
+    const QVector3D shoulder = model.joint(positions, QStringLiteral("l-shoulder"));
+    const QVector3D elbow = model.joint(positions, QStringLiteral("l-elbow"));
+    const QVector3D wrist = model.joint(positions, QStringLiteral("l-hand"));
+
+    const qreal upper_arm = measurer.upperArm(positions);
+    const qreal joints_apart = (elbow - shoulder).length();
+    QVERIFY2(upper_arm > joints_apart + 2 && upper_arm < joints_apart + 8, qUtf8Printable(QString::number(upper_arm)));
+    QVERIFY(qAbs(measurer.lowerArm(positions) - (wrist - elbow).length()) < 1e-4);
+    QVERIFY(qAbs(measurer.arm(positions) - upper_arm - measurer.lowerArm(positions)) < 1e-4);
+
+    BodyShape longer_upper_arm = female();
+    longer_upper_arm.measures.insert(QStringLiteral("arms/measure-upperarm-length"), 1.0);
+    const QVector<QVector3D> long_upper = model.evaluate(longer_upper_arm);
+    QVERIFY(measurer.upperArm(long_upper) > upper_arm + 3);
+    QVERIFY(qAbs(measurer.lowerArm(long_upper) - measurer.lowerArm(positions)) < 0.1);
+
+    BodyShape shorter_forearm = female();
+    shorter_forearm.measures.insert(QStringLiteral("arms/measure-lowerarm-length"), -1.0);
+    const QVector<QVector3D> short_forearm = model.evaluate(shorter_forearm);
+    QVERIFY(measurer.lowerArm(short_forearm) < measurer.lowerArm(positions) - 3);
+    QVERIFY(qAbs(measurer.upperArm(short_forearm) - upper_arm) < 0.1);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Measure a known body and fit to those measurements: the fitted body has to measure the same.
 void TST_BodyModel::fitMatchesMeasurements() const
 {
@@ -229,6 +260,8 @@ void TST_BodyModel::fitMatchesMeasurements() const
     known.scale = 1.05;
     known.measures.insert(QStringLiteral("torso/measure-waist-circ"), 0.4);
     known.measures.insert(QStringLiteral("torso/measure-bust-circ"), -0.3);
+    known.measures.insert(QStringLiteral("arms/measure-upperarm-length"), 0.4);
+    known.measures.insert(QStringLiteral("arms/measure-lowerarm-length"), -0.3);
     const BodyMeasurements wanted = measurer.measure(model.evaluate(known));
 
     const BodyFit fit = BodyFitter(model).fit(wanted, known.gender, known.age);
@@ -238,6 +271,10 @@ void TST_BodyModel::fitMatchesMeasurements() const
     QVERIFY2(qAbs(fit.measured.waist - wanted.waist) < 1.0, qUtf8Printable(QString::number(fit.measured.waist)));
     QVERIFY2(qAbs(fit.measured.hip - wanted.hip) < 1.0, qUtf8Printable(QString::number(fit.measured.hip)));
     QVERIFY2(qAbs(fit.measured.neck - wanted.neck) < 1.0, qUtf8Printable(QString::number(fit.measured.neck)));
+    QVERIFY2(qAbs(fit.measured.upper_arm - wanted.upper_arm) < 0.5,
+             qUtf8Printable(QString::number(fit.measured.upper_arm)));
+    QVERIFY2(qAbs(fit.measured.lower_arm - wanted.lower_arm) < 0.5,
+             qUtf8Printable(QString::number(fit.measured.lower_arm)));
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -257,23 +294,60 @@ void TST_BodyModel::fitReachesTypicalBodies() const
     woman.bust = 92;
     woman.waist = 74;
     woman.hip = 100;
+    woman.upper_arm = 32;
+    woman.lower_arm = 24;
     BodyMeasurements man;
     man.height = 178;
     man.bust = 100;
     man.waist = 86;
     man.hip = 100;
+    man.upper_arm = 34;
+    man.lower_arm = 26;
 
     for (const Case& body : {Case{0.0, woman}, Case{1.0, man}})
     {
         const BodyFit fit = BodyFitter(model).fit(body.wanted, body.gender, BodyShape::ageFromYears(35));
-        const QString report = QStringLiteral("gender %1: height %2, bust %3, waist %4, hip %5")
+        const QString report = QStringLiteral("gender %1: height %2, bust %3, waist %4, hip %5, arm %6 + %7")
                                    .arg(body.gender).arg(fit.measured.height).arg(fit.measured.bust)
-                                   .arg(fit.measured.waist).arg(fit.measured.hip);
+                                   .arg(fit.measured.waist).arg(fit.measured.hip).arg(fit.measured.upper_arm)
+                                   .arg(fit.measured.lower_arm);
         QVERIFY2(qAbs(fit.measured.height - body.wanted.height) < 0.5, qUtf8Printable(report));
         QVERIFY2(qAbs(fit.measured.bust - body.wanted.bust) < 1.5, qUtf8Printable(report));
         QVERIFY2(qAbs(fit.measured.waist - body.wanted.waist) < 1.5, qUtf8Printable(report));
         QVERIFY2(qAbs(fit.measured.hip - body.wanted.hip) < 1.5, qUtf8Printable(report));
+        QVERIFY2(qAbs(fit.measured.upper_arm - body.wanted.upper_arm) < 1.0, qUtf8Printable(report));
+        QVERIFY2(qAbs(fit.measured.lower_arm - body.wanted.lower_arm) < 1.0, qUtf8Printable(report));
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// An arm known only from the shoulder tip to the wrist is fitted as a whole, keeping the body's own proportions; with
+// one of its parts known as well, the other part is what is left.
+void TST_BodyModel::fitKeepsTheArmsProportions() const
+{
+    const BodyModel model;
+    const BodyMeasurer measurer(model);
+    const qreal gender = 0.0;
+    const qreal age = BodyShape::ageFromYears(35);
+
+    BodyMeasurements wanted;
+    wanted.height = 168;
+    wanted.arm = 58;
+    BodyMeasurements height_only;
+    height_only.height = 168;
+    const BodyFit unfitted = BodyFitter(model).fit(height_only, gender, age);
+    const BodyFit whole = BodyFitter(model).fit(wanted, gender, age);
+    QVERIFY2(qAbs(whole.measured.arm - 58) < 0.5, qUtf8Printable(QString::number(whole.measured.arm)));
+    const qreal before = unfitted.measured.upper_arm / unfitted.measured.arm;
+    const qreal after = whole.measured.upper_arm / whole.measured.arm;
+    QVERIFY2(qAbs(after - before) < 0.02, qUtf8Printable(QStringLiteral("%1 before, %2 after").arg(before).arg(after)));
+
+    wanted.upper_arm = 33;
+    const BodyFit with_upper_arm = BodyFitter(model).fit(wanted, gender, age);
+    QVERIFY2(qAbs(with_upper_arm.measured.upper_arm - 33) < 0.5,
+             qUtf8Printable(QString::number(with_upper_arm.measured.upper_arm)));
+    QVERIFY2(qAbs(with_upper_arm.measured.lower_arm - 25) < 0.5,
+             qUtf8Printable(QString::number(with_upper_arm.measured.lower_arm)));
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -404,8 +478,8 @@ void TST_BodyModel::wrappedPiecesStartOutsideTheBody() const
 
 //---------------------------------------------------------------------------------------------------------------------
 // A sleeve placed on an arm starts outside the skin and close around the arm, its cap on top of the arm and no higher
-// up it than the shoulder, its cuff around the wrist. It is stretched most around the elbow, where the arm bends. On
-// the other arm a mirrored sleeve is placed as the mirror image.
+// up it than the shoulder tip, its cuff around the wrist when it is as long as the arm. It is stretched most around
+// the elbow, where the arm bends. On the other arm a mirrored sleeve is placed as the mirror image.
 void TST_BodyModel::sleevesStartAroundTheArm() const
 {
     const BodyModel model;
@@ -416,8 +490,11 @@ void TST_BodyModel::sleevesStartAroundTheArm() const
     const QVector3D elbow = model.joint(positions, QStringLiteral("l-elbow"));
     const QVector3D wrist = model.joint(positions, QStringLiteral("l-hand"));
 
-    // A long sleeve, its cap's top in the middle of its top edge, as long as the arm from the shoulder to the wrist.
-    const qreal length = (elbow - shoulder).length() + (wrist - elbow).length();
+    // A long sleeve, its cap's top in the middle of its top edge, as long as the arm from the shoulder tip to the
+    // wrist.
+    const BodyMeasurer measurer(model);
+    const QVector3D shoulder_tip = measurer.shoulderTip(positions);
+    const qreal length = measurer.arm(positions);
     const QPointF cap_top(16, 0);
     const QPointF front_underarm(0, 13);
     const QPointF back_underarm(32, 13);
@@ -459,11 +536,11 @@ void TST_BodyModel::sleevesStartAroundTheArm() const
             .arg(point.x()).arg(point.y()).arg(point.z()).arg(from_bones)));
     }
 
-    // The cap's top on top of the arm, level with the shoulder joint along the arm; the underarm in front and behind.
+    // The cap's top on top of the arm, level with the shoulder tip along the arm; the underarm in front and behind.
     const QVector3D top = placed.at(vertex(cap_top));
     QVERIFY(top.y() > shoulder.y() && top.x() > shoulder.x());
-    QVERIFY2(qAbs(QVector3D::dotProduct(top - shoulder, upper_arm)) < 0.5f,
-             qUtf8Printable(QString::number(QVector3D::dotProduct(top - shoulder, upper_arm))));
+    QVERIFY2(qAbs(QVector3D::dotProduct(top - shoulder_tip, upper_arm)) < 0.5f,
+             qUtf8Printable(QString::number(QVector3D::dotProduct(top - shoulder_tip, upper_arm))));
     QVERIFY(placed.at(vertex(front_underarm)).z() > shoulder.z() + 3);
     QVERIFY(placed.at(vertex(back_underarm)).z() < shoulder.z() - 3);
 
@@ -472,6 +549,9 @@ void TST_BodyModel::sleevesStartAroundTheArm() const
     const QVector3D cuff_front = placed.at(vertex(QPointF(5, length)));
     const QVector3D cuff_back = placed.at(vertex(QPointF(27, length)));
     const QVector3D cuff_middle = (cuff_front + cuff_back) / 2.0f;
+    QVERIFY2(qAbs(QVector3D::dotProduct(cuff_middle - wrist, forearm)) < 1.5f,
+             qUtf8Printable(QStringLiteral("the cuff is %1 cm past the wrist")
+                 .arg(QVector3D::dotProduct(cuff_middle - wrist, forearm))));
     const QVector3D below_forearm = cuff_middle - elbow - forearm * QVector3D::dotProduct(cuff_middle - elbow, forearm);
     QVERIFY2(below_forearm.length() > 1.5f && below_forearm.y() < -1.0f,
              qUtf8Printable(QStringLiteral("(%1, %2, %3) from the forearm").arg(below_forearm.x())
