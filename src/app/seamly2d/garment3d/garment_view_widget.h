@@ -47,6 +47,7 @@ class DrapeRunner;
 class GarmentSceneModel;
 class QAction;
 class QComboBox;
+class QIcon;
 class QLabel;
 class QQuickView;
 class QTimer;
@@ -84,6 +85,7 @@ public slots:
 
 protected:
     virtual void       showEvent(QShowEvent* event) override;
+    virtual void       changeEvent(QEvent* event) override;
     virtual void       hideEvent(QHideEvent* event) override;
     virtual bool       eventFilter(QObject* watched, QEvent* event) override;
 
@@ -212,6 +214,8 @@ private:
 
     void               createScene();
     void               createToolBar();
+    void               updateIcons();
+    QIcon              toolIcon(const QString& name) const;
     void               showError(const QString& error);
     void               sewSeam(const VSeam& seam);
     void               saveSeams(const QString& text, const QVector<VSeam>& seams);

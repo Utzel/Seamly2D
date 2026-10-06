@@ -1,5 +1,19 @@
 <RCC>
     <qresource prefix="/garment3d">
         <file>garment_scene.qml</file>
+        <file>icons/32x32/sew.png</file>
+        <file>icons/32x32/sew@2x.png</file>
+        <file>icons/32x32/flip.png</file>
+        <file>icons/32x32/flip@2x.png</file>
+        <file>icons/32x32/remove.png</file>
+        <file>icons/32x32/remove@2x.png</file>
+        <file>icons/32x32/arrange.png</file>
+        <file>icons/32x32/arrange@2x.png</file>
+        <file>icons/32x32/simulate.png</file>
+        <file>icons/32x32/simulate@2x.png</file>
+        <file>icons/32x32/reset.png</file>
+        <file>icons/32x32/reset@2x.png</file>
+        <file>icons/32x32/strain.png</file>
+        <file>icons/32x32/strain@2x.png</file>
     </qresource>
 </RCC>

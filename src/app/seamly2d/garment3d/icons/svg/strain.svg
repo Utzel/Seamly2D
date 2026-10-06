@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="strain" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#3db24a"/>
+      <stop offset="0.5" stop-color="#ffd400"/>
+      <stop offset="1" stop-color="#e61a1a"/>
+    </linearGradient>
+  </defs>
+  <path d="M11.5 4.5L6 7.5 2.5 13.5 7 16 9.5 13V28h13V13l2.5 3 4.5-2.5L26 7.5 20.5 4.5C19 7 13 7 11.5 4.5Z"
+        fill="url(#strain)" stroke="#000" stroke-width="1.8" stroke-linejoin="round"/>
+</svg>

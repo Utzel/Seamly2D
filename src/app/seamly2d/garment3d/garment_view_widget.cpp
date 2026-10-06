@@ -28,12 +28,15 @@
 #include <QColor>
 #include <QComboBox>
 #include <QEvent>
+#include <QIcon>
+#include <QImage>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineF>
 #include <QList>
 #include <QPalette>
+#include <QPixmap>
 #include <QQmlError>
 #include <QQuickView>
 #include <QQuickWindow>
@@ -113,6 +116,14 @@ const qreal oldest_age = 110.0;
 
 // Age used when the measurements don't say, MakeHuman's young adult.
 const qreal default_age = 25.0;
+
+// The toolbar's icons are drawn this many pixels wide, and twice that for high resolution screens.
+const int icon_size = 32;
+
+// A palette whose windows are darker than this lightness is dark; icon pixels darker than this in every channel are
+// outline.
+const int dark_lightness = 128;
+const int black_level = 60;
 } // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -282,6 +293,17 @@ void GarmentViewWidget::showEvent(QShowEvent* event)
     if (m_rebuild_pending)
     {
         m_rebuild_timer->start();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A new theme gives the icons new colors.
+void GarmentViewWidget::changeEvent(QEvent* event)
+{
+    QWidget::changeEvent(event);
+    if (event->type() == QEvent::PaletteChange)
+    {
+        updateIcons();
     }
 }
 
@@ -1348,7 +1370,7 @@ void GarmentViewWidget::createScene()
 void GarmentViewWidget::createToolBar()
 {
     QToolBar* tool_bar = new QToolBar(this);
-    tool_bar->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    tool_bar->setToolButtonStyle(Qt::ToolButtonIconOnly);
 
     m_sew_action = tool_bar->addAction(tr("Sew"));
     m_sew_action->setCheckable(true);
@@ -1409,7 +1431,58 @@ void GarmentViewWidget::createToolBar()
     addAction(m_cancel_action);
 
     layout()->addWidget(tool_bar);
+    updateIcons();
     updateActions();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::updateIcons()
+{
+    if (m_sew_action != nullptr)
+    {
+        m_sew_action->setIcon(toolIcon(QStringLiteral("sew")));
+        m_flip_action->setIcon(toolIcon(QStringLiteral("flip")));
+        m_remove_action->setIcon(toolIcon(QStringLiteral("remove")));
+        m_arrange_action->setIcon(toolIcon(QStringLiteral("arrange")));
+        m_simulate_action->setIcon(toolIcon(QStringLiteral("simulate")));
+        m_reset_action->setIcon(toolIcon(QStringLiteral("reset")));
+        m_strain_action->setIcon(toolIcon(QStringLiteral("strain")));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// One of the toolbar's icons. Their outlines are black, like the rest of Seamly's; on a dark palette they are drawn
+// in the color of text instead, so they still show.
+QIcon GarmentViewWidget::toolIcon(const QString& name) const
+{
+    const bool dark = palette().color(QPalette::Window).lightness() < dark_lightness;
+    const QColor outline = palette().color(QPalette::WindowText);
+
+    QIcon icon;
+    for (const QString& file : {name, name + QStringLiteral("@2x")})
+    {
+        QImage image(QStringLiteral(":/garment3d/icons/32x32/%1.png").arg(file));
+        if (image.isNull())
+        {
+            continue;
+        }
+        image = image.convertToFormat(QImage::Format_ARGB32);
+        for (int y = 0; y < image.height() && dark; ++y)
+        {
+            QRgb* line = reinterpret_cast<QRgb*>(image.scanLine(y));
+            for (int x = 0; x < image.width(); ++x)
+            {
+                if (qRed(line[x]) < black_level && qGreen(line[x]) < black_level && qBlue(line[x]) < black_level)
+                {
+                    line[x] = qRgba(outline.red(), outline.green(), outline.blue(), qAlpha(line[x]));
+                }
+            }
+        }
+        QPixmap pixmap = QPixmap::fromImage(image);
+        pixmap.setDevicePixelRatio(image.width() / static_cast<qreal>(icon_size));
+        icon.addPixmap(pixmap);
+    }
+    return icon;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
