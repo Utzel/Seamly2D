@@ -243,13 +243,16 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
     {
         return QLineF(mesh.rest_positions.at(a), mesh.rest_positions.at(b)).length();
     };
-    for (auto edge = edge_opposites.cbegin(); edge != edge_opposites.cend(); ++edge)
+    // In the order of the edges, not of the hash, so the same cloth always drapes the same way.
+    QList<quint64> edges = edge_opposites.keys();
+    std::sort(edges.begin(), edges.end());
+    for (const quint64 edge : edges)
     {
-        const int a = static_cast<int>(edge.key() >> 32);
-        const int b = static_cast<int>(edge.key() & 0xffffffffu);
+        const int a = static_cast<int>(edge >> 32);
+        const int b = static_cast<int>(edge & 0xffffffffu);
         m_springs.append({offset + a, offset + b, rest_distance(a, b), m_settings.stretch_stiffness});
 
-        const QVector<int>& opposite = edge.value();
+        const QVector<int> opposite = edge_opposites.value(edge);
         if (opposite.size() == 2)
         {
             m_springs.append({offset + opposite.at(0), offset + opposite.at(1), rest_distance(opposite.at(0),
