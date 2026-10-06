@@ -1,6 +1,9 @@
 <RCC>
     <qresource prefix="/garment3d">
         <file>garment_scene.qml</file>
+        <file>textures/checks.png</file>
+        <file>icons/32x32/checks.png</file>
+        <file>icons/32x32/checks@2x.png</file>
         <file>icons/32x32/sew.png</file>
         <file>icons/32x32/sew@2x.png</file>
         <file>icons/32x32/flip.png</file>

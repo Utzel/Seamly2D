@@ -60,6 +60,8 @@ class GarmentSceneModel : public QAbstractListModel
     Q_PROPERTY(bool strainShown READ isStrainShown NOTIFY strainShownChanged)
     Q_PROPERTY(qreal fullStrain READ fullStrain CONSTANT)
     Q_PROPERTY(QVariantList strainColors READ strainColors CONSTANT)
+    Q_PROPERTY(bool checksShown READ isChecksShown NOTIFY checksShownChanged)
+    Q_PROPERTY(qreal checkRepeat READ checkRepeat CONSTANT)
 
 public:
     enum Roles
@@ -80,6 +82,7 @@ public:
         QColor             color;
         GarmentMesh        mesh;
         QVector<QVector3D> positions;  ///< where the piece is put, in scene coordinates; none for the board
+        qreal              grain_angle = 90.0;  ///< degrees anticlockwise from the piece's x axis
     };
 
     explicit               GarmentSceneModel(QObject* parent = nullptr);
@@ -119,6 +122,10 @@ public:
     qreal                  fullStrain() const;
     QVariantList           strainColors() const;
 
+    bool                   isChecksShown() const;
+    void                   setChecksShown(bool shown);
+    qreal                  checkRepeat() const;
+
     Q_INVOKABLE void       pickPiece(int id);
     Q_INVOKABLE void       placeAt(qreal x, qreal y, qreal z);
     Q_INVOKABLE bool       grabPiece(int id, qreal x, qreal y, qreal z);
@@ -135,6 +142,7 @@ signals:
     void                   arrangingChanged();
     void                   hintChanged();
     void                   strainShownChanged();
+    void                   checksShownChanged();
     void                   placeRequested(const QVector3D& point);
     void                   grabRequested(quint32 id, const QVector3D& point);
     void                   dragRequested(const QVector3D& point);
@@ -150,6 +158,7 @@ private:
         QColor         color;
         GarmentMesh    mesh;
         QVector<QVector3D> positions;
+        qreal          grain_angle = 90.0;
         bool           placed = false;
         PieceGeometry* geometry = nullptr;
         PieceGeometry* outline = nullptr;
@@ -169,6 +178,7 @@ private:
     bool                   m_arranging;
     QString                m_hint;
     bool                   m_strain_shown;
+    bool                   m_checks_shown;
 
     void                   updateSceneBounds();
 };

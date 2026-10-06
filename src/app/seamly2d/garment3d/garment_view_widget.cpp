@@ -181,6 +181,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_reset_action(nullptr)
     , m_fine_action(nullptr)
     , m_strain_action(nullptr)
+    , m_checks_action(nullptr)
     , m_export_action(nullptr)
     , m_fabric_box(nullptr)
     , m_quick_view(nullptr)
@@ -438,6 +439,8 @@ void GarmentViewWidget::rebuildScene()
             scene_piece.id = id;
             scene_piece.name = piece.GetName();
             scene_piece.color = color.isValid() ? color : QColor(Qt::white);
+            const qreal grain_angle = grainAngle(piece);
+            scene_piece.grain_angle = grain_angle;
 
             const bool placed = !m_wrap.isNull() && m_arrangements.contains(id) && !cached.garment_mesh.isEmpty();
             if (placed)
@@ -445,7 +448,6 @@ void GarmentViewWidget::rebuildScene()
                 scene_piece.mesh = cached.garment_mesh;
                 scene_piece.positions = piecePositions(id, cached.garment_mesh);
                 scene_pieces.append(scene_piece);
-                const qreal grain_angle = grainAngle(piece);
                 m_garment_pieces.append({id, cached.garment_mesh, grain_angle});
 
                 if (cached.symmetry == PieceSymmetry::Pair)
@@ -454,6 +456,7 @@ void GarmentViewWidget::rebuildScene()
                     mirror_piece.id = PieceOutline::mirrorId(id);
                     mirror_piece.mesh = cached.mirror_mesh;
                     mirror_piece.positions = piecePositions(mirror_piece.id, cached.mirror_mesh);
+                    mirror_piece.grain_angle = 180.0 - grain_angle;
                     scene_pieces.append(mirror_piece);
                     m_garment_pieces.append({mirror_piece.id, cached.mirror_mesh, 180.0 - grain_angle});
                 }
@@ -1514,6 +1517,12 @@ void GarmentViewWidget::createToolBar()
                                     .arg(qRound(m_scene_model->fullStrain() * 100)));
     connect(m_strain_action, &QAction::toggled, m_scene_model, &GarmentSceneModel::setStrainShown);
 
+    m_checks_action = tool_bar->addAction(tr("Checks"));
+    m_checks_action->setCheckable(true);
+    m_checks_action->setToolTip(tr("Show the pieces in checks that run along their grainlines, the wider stripe along "
+                                   "the grain: how each piece is cut, and whether the checks meet at its seams"));
+    connect(m_checks_action, &QAction::toggled, m_scene_model, &GarmentSceneModel::setChecksShown);
+
     m_fabric_box = new QComboBox(tool_bar);
     for (const Fabric& fabric : Fabric::presets())
     {
@@ -1555,6 +1564,7 @@ void GarmentViewWidget::updateIcons()
         m_reset_action->setIcon(toolIcon(QStringLiteral("reset")));
         m_fine_action->setIcon(toolIcon(QStringLiteral("fine")));
         m_strain_action->setIcon(toolIcon(QStringLiteral("strain")));
+        m_checks_action->setIcon(toolIcon(QStringLiteral("checks")));
         m_export_action->setIcon(toolIcon(QStringLiteral("export")));
     }
 }

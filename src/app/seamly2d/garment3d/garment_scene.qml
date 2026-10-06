@@ -176,6 +176,20 @@ Rectangle {
             }
         }
 
+        // Checks woven along the grain, the wider stripe along it, repeating every checkRepeat cm; the piece's color
+        // tints them. They follow the pieces' second texture coordinates, which run across and along the grain.
+        Texture {
+            id: checks_texture
+            source: "textures/checks.png"
+            indexUV: 1
+            scaleU: 1.0 / root.sceneModel.checkRepeat
+            scaleV: 1.0 / root.sceneModel.checkRepeat
+            tilingModeHorizontal: Texture.Repeat
+            tilingModeVertical: Texture.Repeat
+            generateMipmaps: true
+            mipFilter: Texture.Linear
+        }
+
         // The pieces, flat on a board; with an avatar the board stands behind it.
         Node {
             position: root.sceneModel.boardOffset
@@ -218,6 +232,8 @@ Rectangle {
                                        : root.sceneModel.selectedPiece !== 0 ? Qt.darker(piece_node.ownColor, 1.8)
                                                                              : piece_node.ownColor
                             vertexColorsEnabled: root.sceneModel.strainShown
+                            baseColorMap: root.sceneModel.checksShown && !root.sceneModel.strainShown
+                                          ? checks_texture : null
                             roughness: 0.85
                             metalness: 0.0
                             cullMode: Material.NoCulling

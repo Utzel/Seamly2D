@@ -192,6 +192,7 @@ private:
     QAction*                   m_reset_action;
     QAction*                   m_fine_action;
     QAction*                   m_strain_action;
+    QAction*                   m_checks_action;
     QAction*                   m_export_action;
     QComboBox*                 m_fabric_box;
     QQuickView*                m_quick_view;

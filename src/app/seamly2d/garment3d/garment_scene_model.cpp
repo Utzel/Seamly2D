@@ -39,6 +39,9 @@ namespace
 // Gap in cm between the back of the avatar and the board of pieces behind it.
 const float board_gap = 40.0f;
 
+// The checks pieces can be shown in repeat every so many cm, across the grain and along it.
+const qreal check_repeat = 4.0;
+
 //---------------------------------------------------------------------------------------------------------------------
 // The pattern piece a row shows, or shows the mirrored copy of.
 quint32 patternPiece(quint32 id)
@@ -75,6 +78,7 @@ GarmentSceneModel::GarmentSceneModel(QObject* parent)
     , m_arranging(false)
     , m_hint()
     , m_strain_shown(false)
+    , m_checks_shown(false)
 {}
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -154,8 +158,9 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.color = pieces.at(i).color;
             row.mesh = pieces.at(i).mesh;
             row.positions = pieces.at(i).positions;
+            row.grain_angle = pieces.at(i).grain_angle;
             row.placed = !row.positions.isEmpty();
-            row.geometry->setMesh(row.mesh, row.positions, m_strain_shown);
+            row.geometry->setMesh(row.mesh, row.positions, m_strain_shown, row.grain_angle);
             row.outline->setOutline(row.mesh, row.positions);
         }
         if (!m_rows.isEmpty())
@@ -182,10 +187,11 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.color = piece.color;
             row.mesh = piece.mesh;
             row.positions = piece.positions;
+            row.grain_angle = piece.grain_angle;
             row.placed = !piece.positions.isEmpty();
             row.geometry = new PieceGeometry();
             row.geometry->setParent(this);
-            row.geometry->setMesh(piece.mesh, piece.positions, m_strain_shown);
+            row.geometry->setMesh(piece.mesh, piece.positions, m_strain_shown, row.grain_angle);
             row.outline = new PieceGeometry();
             row.outline->setParent(this);
             row.outline->setOutline(piece.mesh, piece.positions);
@@ -224,7 +230,7 @@ void GarmentSceneModel::setPiecePositions(quint32 id, const QVector<QVector3D>& 
         if (row.id == id && row.placed && positions.size() == row.mesh.vertexCount())
         {
             row.positions = positions;
-            row.geometry->setMesh(row.mesh, positions, m_strain_shown);
+            row.geometry->setMesh(row.mesh, positions, m_strain_shown, row.grain_angle);
             row.outline->setOutline(row.mesh, positions);
         }
     }
@@ -255,6 +261,7 @@ QVector<GarmentSceneModel::Piece> GarmentSceneModel::placedPieces() const
             piece.color = row.color;
             piece.mesh = row.mesh;
             piece.positions = row.positions;
+            piece.grain_angle = row.grain_angle;
             pieces.append(piece);
         }
     }
@@ -415,10 +422,35 @@ void GarmentSceneModel::setStrainShown(bool shown)
         m_strain_shown = shown;
         for (const Row& row : m_rows)
         {
-            row.geometry->setMesh(row.mesh, row.positions, m_strain_shown);
+            row.geometry->setMesh(row.mesh, row.positions, m_strain_shown, row.grain_angle);
         }
         emit strainShownChanged();
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Whether the pieces are shown in checks that run along their grainlines, to see how they are cut and whether
+/// the checks meet at the seams.
+bool GarmentSceneModel::isChecksShown() const
+{
+    return m_checks_shown;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentSceneModel::setChecksShown(bool shown)
+{
+    if (shown != m_checks_shown)
+    {
+        m_checks_shown = shown;
+        emit checksShownChanged();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief How far the checks repeat, in cm, across and along the grain.
+qreal GarmentSceneModel::checkRepeat() const
+{
+    return check_repeat;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

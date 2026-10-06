@@ -26,6 +26,7 @@
 
 #include <QByteArray>
 #include <QColor>
+#include <QPointF>
 #include <QVector3D>
 #include <QtMath>
 
@@ -36,7 +37,7 @@
 namespace
 {
 // Position, normal and texture coordinate, as floats, and the color when the strain is shown.
-const int floats_per_vertex = 3 + 3 + 2;
+const int floats_per_vertex = 3 + 3 + 2 + 2;
 const int floats_per_color = 4;
 
 // Strain is shown green where there is none, yellow at half the full strain and red from the full strain on.
@@ -110,7 +111,10 @@ PieceGeometry::PieceGeometry(QQuick3DObject* parent)
 /// @brief Replaces the geometry with the mesh, at the given positions in cm, or flat on the board without them.
 /// Texture coordinates are the flat piece's positions in cm, so a fabric texture can later be scaled to its real
 /// repeat size. With the strain shown, each vertex gets the color of how much the cloth around it is stretched.
-void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions, bool strain_shown)
+/// @brief The piece's mesh, where it is put or else lying flat, optionally colored by its strain. The grain runs at
+/// grain_angle degrees anticlockwise from the piece's x axis, as the piece scene shows it.
+void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions, bool strain_shown,
+                            qreal grain_angle)
 {
     const QVector<QVector3D> placed = positionsOrFlat(mesh, positions);
     const QVector<qreal> strain = strain_shown ? mesh.strain(placed) : QVector<qreal>();
@@ -135,6 +139,11 @@ void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& p
         normals[static_cast<int>(c)] += face;
     }
 
+    // Along the grain (the warp) and across it (the weft), in the piece scene's coordinates, whose y points down.
+    const qreal grain = qDegreesToRadians(grain_angle);
+    const QPointF warp(qCos(grain), -qSin(grain));
+    const QPointF weft(qSin(grain), qCos(grain));
+
     const int vertex_floats = floats_per_vertex + (strain_shown ? floats_per_color : 0);
     const int vertex_bytes = vertex_floats * static_cast<int>(sizeof(float));
     QByteArray vertex_data(mesh.vertexCount() * vertex_bytes, Qt::Uninitialized);
@@ -152,6 +161,8 @@ void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& p
         *vertex++ = normal.z();
         *vertex++ = static_cast<float>(rest.x());
         *vertex++ = static_cast<float>(rest.y());
+        *vertex++ = static_cast<float>(QPointF::dotProduct(rest, weft));
+        *vertex++ = static_cast<float>(QPointF::dotProduct(rest, warp));
         if (strain_shown)
         {
             const QVector3D color = strainColor(strain.at(i));
@@ -175,6 +186,7 @@ void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& p
     addAttribute(Attribute::PositionSemantic, 0, Attribute::F32Type);
     addAttribute(Attribute::NormalSemantic, 3 * static_cast<int>(sizeof(float)), Attribute::F32Type);
     addAttribute(Attribute::TexCoord0Semantic, 6 * static_cast<int>(sizeof(float)), Attribute::F32Type);
+    addAttribute(Attribute::TexCoord1Semantic, 8 * static_cast<int>(sizeof(float)), Attribute::F32Type);
     if (strain_shown)
     {
         addAttribute(Attribute::ColorSemantic, floats_per_vertex * static_cast<int>(sizeof(float)),
