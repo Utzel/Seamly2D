@@ -128,7 +128,9 @@ void DrapeRunner::frameShown()
 //---------------------------------------------------------------------------------------------------------------------
 // The simulation loop, on the runner's thread. Pieces held up in the air would fall past where they belong before
 // their seams close, so they are sewn first and only then let go. While being sewn they may pass through each other
-// to get to their seams; once let go, the cloth keeps from passing through itself.
+// to get to their seams, and they keep no speed from one step to the next: the seams pull hard, and cloth flung
+// against the body by them would glance off it and slide away, such as trousers whose crotch is pulled up against
+// the body's. Once let go, the cloth keeps from passing through itself.
 void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation)
 {
     QElapsedTimer since_frame;
@@ -140,12 +142,14 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation)
 
     const QVector3D gravity = solver->settings().gravity;
     const qreal friction = solver->settings().friction;
+    const qreal air_damping = solver->settings().air_damping;
     const bool self_contact = solver->settings().self_contact;
     bool sewing = solver->widestStitch() > sewn_gap;
     if (sewing)
     {
         solver->setGravity(QVector3D());
         solver->setFriction(0);
+        solver->setAirDamping(1.0 / time_step);
         solver->setSelfContact(false);
     }
 
@@ -160,6 +164,7 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation)
             sewing = false;
             solver->setGravity(gravity);
             solver->setFriction(friction);
+            solver->setAirDamping(air_damping);
             solver->setSelfContact(self_contact);
         }
 

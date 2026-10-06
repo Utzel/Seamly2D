@@ -35,6 +35,7 @@ public:
 
 private slots:
     void freeFallFollowsGravity() const;
+    void fullAirDampingKeepsNoSpeed() const;
     void pinnedClothHangs() const;
     void stitchesCloseTheGap() const;
     void colliderMeasuresDistance() const;

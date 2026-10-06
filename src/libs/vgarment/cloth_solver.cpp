@@ -584,6 +584,14 @@ void ClothSolver::setFriction(qreal friction)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief Changes how much of its speed the cloth loses per second from the next step on; at 1 / time step it keeps
+/// none, and only the forces on it in each step move it.
+void ClothSolver::setAirDamping(qreal air_damping)
+{
+    m_settings.air_damping = air_damping;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief Switches the cloth keeping from passing through itself on or off from the next step on; off, pieces can be
 /// sewn together through each other.
 void ClothSolver::setSelfContact(bool self_contact)

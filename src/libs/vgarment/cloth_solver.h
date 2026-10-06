@@ -91,6 +91,7 @@ public:
     const ClothSettings& settings() const;
     void               setGravity(const QVector3D& gravity);
     void               setFriction(qreal friction);
+    void               setAirDamping(qreal air_damping);
     void               setSelfContact(bool self_contact);
 
     quint32            addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions,

@@ -188,6 +188,30 @@ void TST_ClothSolver::freeFallFollowsGravity() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// Losing all its speed in every step, a cloth moves only as far as each step's forces take it: under gravity g h² a
+// step, however long it has been falling.
+void TST_ClothSolver::fullAirDampingKeepsNoSpeed() const
+{
+    ClothSettings settings;
+    settings.floor = false;
+    ClothSolver solver(settings);
+    const GarmentMesh mesh = PieceMesher().meshOutline(rectangle(0, 0, 10, 10, 1));
+    solver.addMesh(mesh, lyingFlat(mesh, 100));
+    solver.setAirDamping(1.0 / frame);
+
+    const int steps = 30;
+    for (int i = 0; i < steps; ++i)
+    {
+        solver.step(frame);
+    }
+
+    const qreal expected = 981.0 * frame * frame * steps;
+    const qreal fallen = 100.0 - centroid(solver.positions()).y();
+    QVERIFY2(qAbs(fallen - expected) < 0.01 * expected,
+             qUtf8Printable(QStringLiteral("fell %1 cm instead of %2").arg(fallen).arg(expected)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Held along one edge, a cloth swings down, hangs straight and comes to rest without stretching much.
 void TST_ClothSolver::pinnedClothHangs() const
 {
