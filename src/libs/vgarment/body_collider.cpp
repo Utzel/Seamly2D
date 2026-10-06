@@ -205,6 +205,20 @@ bool BodyCollider::isEmpty() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief The body's surface: its vertex positions in cm.
+const QVector<QVector3D>& BodyCollider::positions() const
+{
+    return m_positions;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The body's surface: three vertex indices for each triangle, anticlockwise seen from outside.
+const QVector<quint32>& BodyCollider::triangles() const
+{
+    return m_triangles;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief The triangles that may come within the radius of the point, each once.
 QVector<int> BodyCollider::trianglesNear(const QVector3D& point, float radius) const
 {

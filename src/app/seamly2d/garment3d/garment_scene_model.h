@@ -91,6 +91,7 @@ public:
     void                   setPieces(const QVector<Piece>& pieces);
     void                   setPiecePositions(quint32 id, const QVector<QVector3D>& positions);
     bool                   isPlaced(quint32 id) const;
+    QVector<Piece>         placedPieces() const;
     void                   clear();
 
     quint32                selectedPiece() const;

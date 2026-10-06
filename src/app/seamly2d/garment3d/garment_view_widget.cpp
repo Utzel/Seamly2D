@@ -27,13 +27,17 @@
 #include <QAction>
 #include <QColor>
 #include <QComboBox>
+#include <QDir>
 #include <QEvent>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QIcon>
 #include <QImage>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineF>
+#include <QMessageBox>
 #include <QList>
 #include <QPalette>
 #include <QPixmap>
@@ -63,6 +67,7 @@
 #include "../vgeometry/vpointf.h"
 #include "../vmisc/def.h"
 #include "../vmisc/vabstractapplication.h"
+#include "../vmisc/vcommonsettings.h"
 #include "../vpatterndb/calculator.h"
 #include "../vpatterndb/floatItemData/vgrainlinedata.h"
 #include "../vpatterndb/floatItemData/vpiecelabeldata.h"
@@ -120,6 +125,9 @@ const qreal default_age = 25.0;
 // The toolbar's icons are drawn this many pixels wide, and twice that for high resolution screens.
 const int icon_size = 32;
 
+// The avatar's grey, as garment_scene.qml draws it.
+const char* const avatar_color = "#b9b4ad";
+
 // A palette whose windows are darker than this lightness is dark; icon pixels darker than this in every channel are
 // outline.
 const int dark_lightness = 128;
@@ -168,6 +176,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_simulate_action(nullptr)
     , m_reset_action(nullptr)
     , m_strain_action(nullptr)
+    , m_export_action(nullptr)
     , m_fabric_box(nullptr)
     , m_quick_view(nullptr)
     , m_view_container(nullptr)
@@ -1187,6 +1196,7 @@ void GarmentViewWidget::updateActions()
     m_arrange_action->setEnabled(has_avatar);
     m_simulate_action->setEnabled(has_avatar);
     m_reset_action->setEnabled(!m_draped.isEmpty());
+    m_export_action->setEnabled(has_avatar && !m_scene_model->placedPieces().isEmpty());
 
     // With nothing to step back from, Esc is left to the main window.
     m_cancel_action->setEnabled(m_seam_editor->isSewing() || seam_selected || m_scene_model->isArranging());
@@ -1280,6 +1290,73 @@ qreal GarmentViewWidget::grainAngle(const VPiece& piece) const
         angle = 90.0;
     }
     return angle;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Saves the pieces on the avatar as the scene shows them, draped or as they were arranged, and the avatar, in a file
+// other 3D programs open: binary glTF, or OBJ with its materials in an MTL file next to it.
+void GarmentViewWidget::exportDrape()
+{
+    const QString gltf_filter = tr("glTF binary (*.glb)");
+    const QString obj_filter = tr("Wavefront OBJ (*.obj)");
+    const QFileInfo pattern(qApp->getFilePath());
+    const QString folder = qApp->getFilePath().isEmpty() ? QDir::homePath() : pattern.absolutePath();
+    const QString name = qApp->getFilePath().isEmpty() ? tr("drape") : pattern.completeBaseName();
+
+    QString filter = gltf_filter;
+    QString path = QFileDialog::getSaveFileName(this, tr("Export Drape"),
+                                                QDir(folder).filePath(name + QStringLiteral(".glb")),
+                                                gltf_filter + QStringLiteral(";;") + obj_filter, &filter,
+                                                qApp->Settings()->getUseNativeFileDialogs());
+    if (path.isEmpty())
+    {
+        return;
+    }
+
+    QString suffix = QFileInfo(path).suffix().toLower();
+    if (suffix != QLatin1String("glb") && suffix != QLatin1String("obj"))
+    {
+        suffix = filter == obj_filter ? QStringLiteral("obj") : QStringLiteral("glb");
+        path += QLatin1Char('.') + suffix;
+    }
+
+    QString error;
+    const QVector<ExportMesh> meshes = exportMeshes();
+    const bool written = suffix == QLatin1String("obj") ? GarmentExport::writeObj(path, meshes, &error)
+                                                        : GarmentExport::writeGlb(path, meshes, &error);
+    if (!written)
+    {
+        QMessageBox::warning(this, tr("Export Drape"), tr("The drape could not be saved as %1.\n%2")
+                                                           .arg(QDir::toNativeSeparators(path), error));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The garment to export: each piece on the avatar, and the copy of a piece cut twice, where the scene shows it, with
+// its color and its flat shape; and the avatar, in the grey the scene draws it in.
+QVector<ExportMesh> GarmentViewWidget::exportMeshes() const
+{
+    QVector<ExportMesh> meshes;
+    for (const GarmentSceneModel::Piece& piece : m_scene_model->placedPieces())
+    {
+        ExportMesh mesh;
+        mesh.name = piece.name;
+        mesh.color = piece.color;
+        mesh.positions = piece.positions;
+        mesh.flat = piece.mesh.rest_positions;
+        mesh.indices = piece.mesh.indices;
+        meshes.append(mesh);
+    }
+    if (!m_collider.isEmpty())
+    {
+        ExportMesh avatar;
+        avatar.name = tr("Avatar");
+        avatar.color = QColor(avatar_color);
+        avatar.positions = m_collider.positions();
+        avatar.indices = m_collider.triangles();
+        meshes.append(avatar);
+    }
+    return meshes;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1424,6 +1501,13 @@ void GarmentViewWidget::createToolBar()
     tool_bar->addWidget(m_fabric_box);
     connect(m_fabric_box, QOverload<int>::of(&QComboBox::activated), this, &GarmentViewWidget::chooseFabric);
 
+    tool_bar->addSeparator();
+
+    m_export_action = tool_bar->addAction(tr("Export"));
+    m_export_action->setToolTip(tr("Save the pieces on the avatar as they hang, and the avatar, for other 3D programs: "
+                                   "glTF or OBJ"));
+    connect(m_export_action, &QAction::triggered, this, &GarmentViewWidget::exportDrape);
+
     m_cancel_action = new QAction(this);
     m_cancel_action->setShortcut(Qt::Key_Escape);
     m_cancel_action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
@@ -1447,6 +1531,7 @@ void GarmentViewWidget::updateIcons()
         m_simulate_action->setIcon(toolIcon(QStringLiteral("simulate")));
         m_reset_action->setIcon(toolIcon(QStringLiteral("reset")));
         m_strain_action->setIcon(toolIcon(QStringLiteral("strain")));
+        m_export_action->setIcon(toolIcon(QStringLiteral("export")));
     }
 }
 

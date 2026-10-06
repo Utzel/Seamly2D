@@ -48,6 +48,8 @@ public:
                        BodyCollider(const QVector<QVector3D>& positions, const QVector<quint32>& triangles);
 
     bool               isEmpty() const;
+    const QVector<QVector3D>& positions() const;
+    const QVector<quint32>&   triangles() const;
 
     QVector<int>       trianglesNear(const QVector3D& point, float radius) const;
     QVector<int>       trianglesWithin(const QVector3D& point, float radius) const;

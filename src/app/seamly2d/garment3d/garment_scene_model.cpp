@@ -241,6 +241,27 @@ bool GarmentSceneModel::isPlaced(quint32 id) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief The pieces placed on the avatar, where they are shown.
+QVector<GarmentSceneModel::Piece> GarmentSceneModel::placedPieces() const
+{
+    QVector<Piece> pieces;
+    for (const Row& row : m_rows)
+    {
+        if (row.placed)
+        {
+            Piece piece;
+            piece.id = row.id;
+            piece.name = row.name;
+            piece.color = row.color;
+            piece.mesh = row.mesh;
+            piece.positions = row.positions;
+            pieces.append(piece);
+        }
+    }
+    return pieces;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void GarmentSceneModel::clear()
 {
     setSelectedPiece(0);

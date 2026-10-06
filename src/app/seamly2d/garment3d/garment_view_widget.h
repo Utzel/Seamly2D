@@ -38,6 +38,7 @@
 #include "../vgarment/body_fitter.h"
 #include "../vgarment/body_model.h"
 #include "../vgarment/body_wrap.h"
+#include "../vgarment/garment_export.h"
 #include "../vgarment/garment_mesh.h"
 #include "../vgarment/garment_symmetry.h"
 #include "../vgarment/piece_mesher.h"
@@ -107,6 +108,7 @@ private slots:
     void               dropPiece();
     void               setSimulating(bool simulating);
     void               resetDrape();
+    void               exportDrape();
     void               drapeFrame(int generation, const QVector<QVector3D>& positions);
     void               drapeSettled(int generation);
     void               updateActions();
@@ -187,6 +189,7 @@ private:
     QAction*                   m_simulate_action;
     QAction*                   m_reset_action;
     QAction*                   m_strain_action;
+    QAction*                   m_export_action;
     QComboBox*                 m_fabric_box;
     QQuickView*                m_quick_view;
     QWidget*                   m_view_container;
@@ -228,6 +231,7 @@ private:
     qreal              grainAngle(const VPiece& piece) const;
     bool               carryDrape(quint32 id, const GarmentMesh& before, const GarmentMesh& after);
     QString            fabricTitle(const QString& fabric) const;
+    QVector<ExportMesh> exportMeshes() const;
     QVector<QVector3D> piecePositions(quint32 id, const GarmentMesh& mesh) const;
     QSet<quint32>      turnedPairs() const;
     qreal              acrossBody(const GarmentMesh& mesh, const QVector<QVector3D>& positions,
