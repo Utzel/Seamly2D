@@ -31,31 +31,32 @@
 
 namespace
 {
-// Simulated time per step, in s.
-const qreal time_step = 1.0 / 60.0;
+// Steps per simulated second.
+const int steps_per_second = 60;
+const qreal time_step = 1.0 / steps_per_second;
 
 // Frames go out at most this often, in ms.
 const qint64 frame_interval_ms = 30;
 
-// The cloth has come to rest once hardly any vertex has moved faster than this, in cm/s, on average over this many
-// steps, and not before this many steps have passed. On average, as the eye sees it: from step to step, the solver's
-// sweeps leave vertices a tiny bit to either side of where they settle, and cloth caught on a sharp part of the body
-// twitches back and forth.
+// The cloth has come to rest once hardly any vertex has moved faster than this, in cm/s, on average over a second,
+// and not before a second has passed. On average, as the eye sees it: from step to step, the solver's sweeps leave
+// vertices a tiny bit to either side of where they settle, and cloth caught on a sharp part of the body twitches back
+// and forth.
 const float resting_speed = 1.0f;
-const int resting_window = 60;
-const int earliest_rest = 120;
+const int resting_window = steps_per_second;
+const int earliest_rest = steps_per_second;
 
 // At rest, one vertex in this many may still move: a few caught on a sharp part of the body, such as the fingers,
 // can keep twitching where they are.
 const int restless_share = 200;
 
 // The stitches are checked every so many steps.
-const int check_steps = 10;
+const int check_steps = steps_per_second / 6;
 
-// Pieces are sewn together first, without gravity, until no stitch is open wider than this, in cm, or until this many
-// steps have passed; then they fall onto the body.
+// Pieces are sewn together first, without gravity, until no stitch is open wider than this, in cm, or for at most ten
+// seconds; then they fall onto the body.
 const qreal sewn_gap = 1.0;
-const int max_sewing_steps = 600;
+const int max_sewing_steps = 10 * steps_per_second;
 } // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------

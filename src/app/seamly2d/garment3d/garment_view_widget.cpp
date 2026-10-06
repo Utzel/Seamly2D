@@ -335,8 +335,10 @@ void GarmentViewWidget::rebuildScene()
     QList<quint32> ids = pieces->keys();
     std::sort(ids.begin(), ids.end());
 
-    // All meshes first: where a piece goes can depend on the pieces it is sewn to.
+    // All meshes first: where a piece goes can depend on the pieces it is sewn to. A piece edited after it was draped
+    // starts out where it hung, as long as it is cut the same way, and the garment drapes again from there.
     QHash<quint32, CachedMesh> mesh_cache;
+    bool carried = false;
     for (const quint32 id : ids)
     {
         const VPiece& piece = pieces->constFind(id).value();
@@ -349,9 +351,13 @@ void GarmentViewWidget::rebuildScene()
                 CachedMesh cached = m_mesh_cache.value(id);
                 if (cached.outline != outline || cached.wanted != wanted || cached.mesh.isEmpty())
                 {
+                    const CachedMesh before = cached;
                     cached = garmentMeshes(id, outline, wanted);
-                    m_draped.remove(id);
-                    m_draped.remove(PieceOutline::mirrorId(id));
+                    const bool cut_the_same = before.symmetry == cached.symmetry;
+                    carried = carryDrape(id, cut_the_same ? before.garment_mesh : GarmentMesh(), cached.garment_mesh)
+                              || carried;
+                    carried = carryDrape(PieceOutline::mirrorId(id), cut_the_same ? before.mirror_mesh : GarmentMesh(),
+                                         cached.mirror_mesh) || carried;
                 }
                 mesh_cache.insert(id, cached);
             }
@@ -426,11 +432,26 @@ void GarmentViewWidget::rebuildScene()
 
     updateAvatar();
 
-    if (simulating)
+    if (simulating || carried)
     {
+        const QSignalBlocker blocker(m_simulate_action);
+        m_simulate_action->setChecked(true);
         startSimulation();
     }
     updateActions();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The piece's mesh changed: where it was draped goes over to the new mesh, if the old one is known. Says whether there
+// was a drape to carry over.
+bool GarmentViewWidget::carryDrape(quint32 id, const GarmentMesh& before, const GarmentMesh& after)
+{
+    const QVector<QVector3D> carried = before.carry(m_draped.take(id), after);
+    if (!carried.isEmpty())
+    {
+        m_draped.insert(id, carried);
+    }
+    return !carried.isEmpty();
 }
 
 //---------------------------------------------------------------------------------------------------------------------

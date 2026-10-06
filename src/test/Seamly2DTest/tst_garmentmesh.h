@@ -40,6 +40,7 @@ private slots:
     void stretchIsMeasured() const;
     void largestStretchCounts() const;
     void positionsOfAnotherMeshAreIgnored() const;
+    void drapeCarriesOverToAChangedPiece() const;
 
 private:
     Q_DISABLE_COPY(TST_GarmentMesh)

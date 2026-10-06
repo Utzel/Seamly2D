@@ -27,7 +27,22 @@
 #include <QPolygonF>
 #include <QtMath>
 
+#include <limits>
 #include <utility>
+
+namespace
+{
+//---------------------------------------------------------------------------------------------------------------------
+qreal distanceToSide(const QPointF& point, const QPointF& start, const QPointF& end)
+{
+    const QPointF side = end - start;
+    const qreal length_squared = QPointF::dotProduct(side, side);
+    const qreal along = length_squared > 0 ? qBound(0.0, QPointF::dotProduct(point - start, side) / length_squared, 1.0)
+                                           : 0.0;
+    const QPointF apart = point - (start + side * along);
+    return qSqrt(QPointF::dotProduct(apart, apart));
+}
+} // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
 bool GarmentMesh::isEmpty() const
@@ -169,4 +184,71 @@ QVector<qreal> GarmentMesh::strain(const QVector<QVector3D>& positions) const
         strain[i] = weight.at(i) > 0 ? strain.at(i) / weight.at(i) : 0.0;
     }
     return strain;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Where the vertices of a changed version of the piece go, with this mesh's vertices at the given positions:
+/// each where the point of this mesh at the same place in the flat piece is. Beyond this mesh, the triangle nearest
+/// carries on, so a lengthened hem goes on hanging the way the cloth above it hangs. Lets an edited piece start out
+/// where it was draped. Positions for another mesh carry nothing over.
+QVector<QVector3D> GarmentMesh::carry(const QVector<QVector3D>& positions, const GarmentMesh& changed) const
+{
+    QVector<QVector3D> carried;
+    if (positions.size() != vertexCount() || isEmpty())
+    {
+        return carried;
+    }
+
+    carried.reserve(changed.vertexCount());
+    for (const QPointF& point : changed.rest_positions)
+    {
+        // The triangle the point lies in, or else the one it lies nearest, and the point's weights in it.
+        qreal nearest = std::numeric_limits<qreal>::max();
+        qreal weights[3] = {1, 0, 0};
+        int corners[3] = {0, 0, 0};
+        for (int i = 0; i + 2 < indices.size() && nearest > 0; i += 3)
+        {
+            const int a = static_cast<int>(indices.at(i));
+            const int b = static_cast<int>(indices.at(i + 1));
+            const int c = static_cast<int>(indices.at(i + 2));
+            const QPointF ab = rest_positions.at(b) - rest_positions.at(a);
+            const QPointF ac = rest_positions.at(c) - rest_positions.at(a);
+            const QPointF ap = point - rest_positions.at(a);
+            const qreal doubled_area = ab.x() * ac.y() - ac.x() * ab.y();
+            if (qFuzzyIsNull(doubled_area))
+            {
+                continue;
+            }
+            const qreal along_b = (ap.x() * ac.y() - ac.x() * ap.y()) / doubled_area;
+            const qreal along_c = (ab.x() * ap.y() - ap.x() * ab.y()) / doubled_area;
+            const qreal along_a = 1.0 - along_b - along_c;
+
+            // How far outside the triangle the point is, 0 inside.
+            qreal outside = 0;
+            if (along_a < 0 || along_b < 0 || along_c < 0)
+            {
+                outside = qMin(distanceToSide(point, rest_positions.at(a), rest_positions.at(b)),
+                               qMin(distanceToSide(point, rest_positions.at(b), rest_positions.at(c)),
+                                    distanceToSide(point, rest_positions.at(c), rest_positions.at(a))));
+            }
+            if (outside < nearest)
+            {
+                nearest = outside;
+                weights[0] = along_a;
+                weights[1] = along_b;
+                weights[2] = along_c;
+                corners[0] = a;
+                corners[1] = b;
+                corners[2] = c;
+            }
+        }
+
+        QVector3D position;
+        for (int k = 0; k < 3; ++k)
+        {
+            position += positions.at(corners[k]) * static_cast<float>(weights[k]);
+        }
+        carried.append(position);
+    }
+    return carried;
 }

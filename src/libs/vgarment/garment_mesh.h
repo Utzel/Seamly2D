@@ -55,6 +55,7 @@ struct GarmentMesh
     SeamStretch          stretch(quint32 start_node, quint32 end_node, quint32 vertex_offset = 0) const;
     GarmentMesh          mirrored() const;
     QVector<qreal>       strain(const QVector<QVector3D>& positions) const;
+    QVector<QVector3D>   carry(const QVector<QVector3D>& positions, const GarmentMesh& changed) const;
 };
 
 #endif // GARMENT_MESH_H

@@ -203,6 +203,7 @@ private:
     void               saveArrangements(const QString& text, const QVector<VPieceArrangement>& arrangements);
     void               readArrangements();
     qreal              grainAngle(const VPiece& piece) const;
+    bool               carryDrape(quint32 id, const GarmentMesh& before, const GarmentMesh& after);
     QString            fabricTitle(const QString& fabric) const;
     QVector<QVector3D> piecePositions(quint32 id, const GarmentMesh& mesh) const;
     QSet<quint32>      turnedPairs() const;

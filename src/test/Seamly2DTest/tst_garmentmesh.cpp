@@ -162,3 +162,33 @@ void TST_GarmentMesh::positionsOfAnotherMeshAreIgnored() const
     const QString problem = strainProblem(strain, 0.0, 1e-12);
     QVERIFY2(problem.isEmpty(), qUtf8Printable(problem));
 }
+
+//---------------------------------------------------------------------------------------------------------------------
+// A piece wrapped around a body is lengthened by 4 cm: the new vertices go where the cloth was, and the new hem goes on
+// round the body below it.
+void TST_GarmentMesh::drapeCarriesOverToAChangedPiece() const
+{
+    const qreal radius = 15;
+    auto wrapped = [radius](const QPointF& point)
+    {
+        const qreal angle = point.x() / radius;
+        return QVector3D(static_cast<float>(radius * qSin(angle)), static_cast<float>(-point.y()),
+                         static_cast<float>(radius * qCos(angle)));
+    };
+    const GarmentMesh before = rectangleMesh();
+    const GarmentMesh after = PieceMesher().meshPolygon({QPointF(0, 0), QPointF(30, 0), QPointF(30, 24),
+                                                         QPointF(0, 24)});
+
+    const QVector<QVector3D> carried = before.carry(placed(before, wrapped), after);
+    QCOMPARE(carried.size(), after.vertexCount());
+
+    // Flat triangles cut the curve a little short, by at most a few hundredths of a cm with 2 cm triangles.
+    qreal worst = 0;
+    for (int i = 0; i < after.vertexCount(); ++i)
+    {
+        worst = qMax(worst, static_cast<qreal>((carried.at(i) - wrapped(after.rest_positions.at(i))).length()));
+    }
+    QVERIFY2(worst < 0.1, qUtf8Printable(QStringLiteral("a vertex is %1 cm off").arg(worst)));
+
+    QVERIFY(before.carry(QVector<QVector3D>(), after).isEmpty());
+}
