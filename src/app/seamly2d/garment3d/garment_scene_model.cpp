@@ -74,6 +74,7 @@ GarmentSceneModel::GarmentSceneModel(QObject* parent)
     , m_avatar_note()
     , m_arranging(false)
     , m_hint()
+    , m_strain_shown(false)
 {}
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -152,9 +153,10 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.name = pieces.at(i).name;
             row.color = pieces.at(i).color;
             row.mesh = pieces.at(i).mesh;
-            row.placed = !pieces.at(i).positions.isEmpty();
-            row.geometry->setMesh(row.mesh, pieces.at(i).positions);
-            row.outline->setOutline(row.mesh, pieces.at(i).positions);
+            row.positions = pieces.at(i).positions;
+            row.placed = !row.positions.isEmpty();
+            row.geometry->setMesh(row.mesh, row.positions, m_strain_shown);
+            row.outline->setOutline(row.mesh, row.positions);
         }
         if (!m_rows.isEmpty())
         {
@@ -179,10 +181,11 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.name = piece.name;
             row.color = piece.color;
             row.mesh = piece.mesh;
+            row.positions = piece.positions;
             row.placed = !piece.positions.isEmpty();
             row.geometry = new PieceGeometry();
             row.geometry->setParent(this);
-            row.geometry->setMesh(piece.mesh, piece.positions);
+            row.geometry->setMesh(piece.mesh, piece.positions, m_strain_shown);
             row.outline = new PieceGeometry();
             row.outline->setParent(this);
             row.outline->setOutline(piece.mesh, piece.positions);
@@ -220,7 +223,8 @@ void GarmentSceneModel::setPiecePositions(quint32 id, const QVector<QVector3D>& 
     {
         if (row.id == id && row.placed && positions.size() == row.mesh.vertexCount())
         {
-            row.geometry->setMesh(row.mesh, positions);
+            row.positions = positions;
+            row.geometry->setMesh(row.mesh, positions, m_strain_shown);
             row.outline->setOutline(row.mesh, positions);
         }
     }
@@ -344,6 +348,46 @@ void GarmentSceneModel::setHint(const QString& hint)
         m_hint = hint;
         emit hintChanged();
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Whether the pieces are colored by how much their cloth is stretched rather than in their own colors.
+bool GarmentSceneModel::isStrainShown() const
+{
+    return m_strain_shown;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentSceneModel::setStrainShown(bool shown)
+{
+    if (shown != m_strain_shown)
+    {
+        m_strain_shown = shown;
+        for (const Row& row : m_rows)
+        {
+            row.geometry->setMesh(row.mesh, row.positions, m_strain_shown);
+        }
+        emit strainShownChanged();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The strain shown in full red, as a share of the drafted size.
+qreal GarmentSceneModel::fullStrain() const
+{
+    return PieceGeometry::fullStrain();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The colors the strain is shown in, for the legend: for none, half the full strain and the full strain.
+QVariantList GarmentSceneModel::strainColors() const
+{
+    QVariantList colors;
+    for (const QColor& color : PieceGeometry::strainColors())
+    {
+        colors.append(color);
+    }
+    return colors;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

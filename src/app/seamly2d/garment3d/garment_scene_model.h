@@ -30,6 +30,7 @@
 #include <QHash>
 #include <QRectF>
 #include <QString>
+#include <QVariantList>
 #include <QVector3D>
 #include <QVector>
 
@@ -56,6 +57,9 @@ class GarmentSceneModel : public QAbstractListModel
     Q_PROPERTY(QString avatarNote READ avatarNote NOTIFY avatarChanged)
     Q_PROPERTY(bool arranging READ isArranging NOTIFY arrangingChanged)
     Q_PROPERTY(QString hint READ hint NOTIFY hintChanged)
+    Q_PROPERTY(bool strainShown READ isStrainShown NOTIFY strainShownChanged)
+    Q_PROPERTY(qreal fullStrain READ fullStrain CONSTANT)
+    Q_PROPERTY(QVariantList strainColors READ strainColors CONSTANT)
 
 public:
     enum Roles
@@ -109,6 +113,11 @@ public:
     QString                hint() const;
     void                   setHint(const QString& hint);
 
+    bool                   isStrainShown() const;
+    void                   setStrainShown(bool shown);
+    qreal                  fullStrain() const;
+    QVariantList           strainColors() const;
+
     Q_INVOKABLE void       pickPiece(int id);
     Q_INVOKABLE void       placeAt(qreal x, qreal y, qreal z);
 
@@ -121,6 +130,7 @@ signals:
     void                   piecePicked(quint32 id);
     void                   arrangingChanged();
     void                   hintChanged();
+    void                   strainShownChanged();
     void                   placeRequested(const QVector3D& point);
 
 private:
@@ -132,6 +142,7 @@ private:
         QString        name;
         QColor         color;
         GarmentMesh    mesh;
+        QVector<QVector3D> positions;
         bool           placed = false;
         PieceGeometry* geometry = nullptr;
         PieceGeometry* outline = nullptr;
@@ -150,6 +161,7 @@ private:
     QString                m_avatar_note;
     bool                   m_arranging;
     QString                m_hint;
+    bool                   m_strain_shown;
 
     void                   updateSceneBounds();
 };

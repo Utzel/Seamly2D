@@ -179,6 +179,9 @@ Rectangle {
 
                     position: placed ? root.sceneModel.boardOffset.times(-1) : Qt.vector3d(0, 0, index * 0.05)
 
+                    // With the strain shown, the vertex colors take the place of the piece's own.
+                    readonly property color ownColor: root.sceneModel.strainShown ? "white" : pieceColor
+
                     Model {
                         readonly property int pieceId: piece_node.pieceId
 
@@ -189,11 +192,12 @@ Rectangle {
                         // colors are.
                         materials: PrincipledMaterial {
                             baseColor: piece_node.selected
-                                       ? Qt.tint(piece_node.pieceColor, Qt.rgba(root.highlightColor.r,
-                                                                                root.highlightColor.g,
-                                                                                root.highlightColor.b, 0.35))
-                                       : root.sceneModel.selectedPiece !== 0 ? Qt.darker(piece_node.pieceColor, 1.8)
-                                                                             : piece_node.pieceColor
+                                       ? Qt.tint(piece_node.ownColor, Qt.rgba(root.highlightColor.r,
+                                                                              root.highlightColor.g,
+                                                                              root.highlightColor.b, 0.35))
+                                       : root.sceneModel.selectedPiece !== 0 ? Qt.darker(piece_node.ownColor, 1.8)
+                                                                             : piece_node.ownColor
+                            vertexColorsEnabled: root.sceneModel.strainShown
                             roughness: 0.85
                             metalness: 0.0
                             cullMode: Material.NoCulling
@@ -331,6 +335,58 @@ Rectangle {
         font.pointSize: 8
         wrapMode: Text.WordWrap
         horizontalAlignment: Text.AlignHCenter
+    }
+
+    // How the strain colors read: green unstretched, yellow at half the full strain, red from the full strain on.
+    Row {
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.margins: 8
+        spacing: 4
+        visible: root.sceneModel.strainShown
+
+        Item {
+            width: Math.max(full_label.implicitWidth, half_label.implicitWidth, none_label.implicitWidth)
+            height: strain_bar.height
+
+            Text {
+                id: full_label
+                anchors.right: parent.right
+                anchors.top: parent.top
+                text: Math.round(root.sceneModel.fullStrain * 100) + "%+"
+                color: root.textColor
+                font.pointSize: 8
+            }
+
+            Text {
+                id: half_label
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                text: Math.round(root.sceneModel.fullStrain * 50) + "%"
+                color: root.textColor
+                font.pointSize: 8
+            }
+
+            Text {
+                id: none_label
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                text: "0%"
+                color: root.textColor
+                font.pointSize: 8
+            }
+        }
+
+        Rectangle {
+            id: strain_bar
+            width: 10
+            height: 120
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: root.sceneModel.strainColors[2] }
+                GradientStop { position: 0.5; color: root.sceneModel.strainColors[1] }
+                GradientStop { position: 1.0; color: root.sceneModel.strainColors[0] }
+            }
+        }
     }
 
     // What the avatar couldn't match, if anything.

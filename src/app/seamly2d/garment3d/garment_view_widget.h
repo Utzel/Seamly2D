@@ -165,6 +165,7 @@ private:
     QAction*                   m_arrange_action;
     QAction*                   m_simulate_action;
     QAction*                   m_reset_action;
+    QAction*                   m_strain_action;
     QQuickView*                m_quick_view;
     QWidget*                   m_view_container;
     QLabel*                    m_message_label;

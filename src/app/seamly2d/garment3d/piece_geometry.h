@@ -25,6 +25,7 @@
 #ifndef PIECE_GEOMETRY_H
 #define PIECE_GEOMETRY_H
 
+#include <QColor>
 #include <QVector3D>
 #include <QVector>
 #include <QtQuick3D/QQuick3DGeometry>
@@ -35,7 +36,7 @@ struct GarmentMesh;
 ///
 /// Without positions the piece lies flat in the z = 0 plane, facing the camera; with them it is where they put it,
 /// on the avatar or draped. Units stay cm. The piece scene's y axis points down and the 3D scene's points up, so y
-/// is flipped on the way.
+/// is flipped on the way. The mesh can come with vertex colors that show how much the cloth is stretched.
 class PieceGeometry : public QQuick3DGeometry
 {
     Q_OBJECT
@@ -43,9 +44,13 @@ class PieceGeometry : public QQuick3DGeometry
 public:
     explicit           PieceGeometry(QQuick3DObject* parent = nullptr);
 
-    void               setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions = QVector<QVector3D>());
+    void               setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions = QVector<QVector3D>(),
+                               bool strain_shown = false);
     void               setOutline(const GarmentMesh& mesh,
                                   const QVector<QVector3D>& positions = QVector<QVector3D>());
+
+    static qreal       fullStrain();
+    static QVector<QColor> strainColors();
 
 private:
     Q_DISABLE_COPY(PieceGeometry)

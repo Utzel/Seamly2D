@@ -141,6 +141,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_arrange_action(nullptr)
     , m_simulate_action(nullptr)
     , m_reset_action(nullptr)
+    , m_strain_action(nullptr)
     , m_quick_view(nullptr)
     , m_view_container(nullptr)
     , m_message_label(new QLabel(this))
@@ -1114,6 +1115,14 @@ void GarmentViewWidget::createToolBar()
     m_reset_action = tool_bar->addAction(tr("Reset"));
     m_reset_action->setToolTip(tr("Put the draped pieces back where they were arranged"));
     connect(m_reset_action, &QAction::triggered, this, &GarmentViewWidget::resetDrape);
+
+    tool_bar->addSeparator();
+
+    m_strain_action = tool_bar->addAction(tr("Strain"));
+    m_strain_action->setCheckable(true);
+    m_strain_action->setToolTip(tr("Color the cloth by how much it is stretched: green not at all, red %1% or more")
+                                    .arg(qRound(m_scene_model->fullStrain() * 100)));
+    connect(m_strain_action, &QAction::toggled, m_scene_model, &GarmentSceneModel::setStrainShown);
 
     m_cancel_action = new QAction(this);
     m_cancel_action->setShortcut(Qt::Key_Escape);
