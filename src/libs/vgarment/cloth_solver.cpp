@@ -26,6 +26,7 @@
 
 #include <QHash>
 #include <QtConcurrent/QtConcurrentMap>
+#include <QThread>
 #include <QtMath>
 
 #include <algorithm>
@@ -52,6 +53,9 @@ const double friction_rest = 0.01;
 // Body triangles this much further away than the cloth's thickness, in cm, are watched for contact. They are only
 // looked up again once a vertex has used up half of that margin moving, which saves most lookups.
 const double contact_margin = 2.0;
+
+// The self contact search shares out the vertices and the edges among threads in runs of this many.
+const int search_run = 256;
 
 // Colours with at least this many vertices are solved on several threads; for fewer, handing out the work costs
 // more than it saves.
@@ -866,9 +870,9 @@ void ClothSolver::step(qreal time_step)
     // Vertices of one colour share no membrane, hinge or stitch, so they can move at the same time. Each writes only
     // its own position, which mustn't be shared with another list then. Cloth touching itself can bring vertices of
     // one colour together, so they see each other where they were when the colour started.
-    m_position.detach();
     QVector<double> two_sweeps_ago = m_position;
     QVector<double> one_sweep_ago = m_position;
+    m_position.detach();
     double weight = 1.0;
     for (int iteration = 0; iteration < m_settings.iterations; ++iteration)
     {
@@ -878,11 +882,20 @@ void ClothSolver::step(qreal time_step)
             {
                 m_snapshot = m_position;
                 m_snapshot.detach();
-                QtConcurrent::blockingMap(color, [this, h](const int& vertex)
+                const int run_count = qMax(1, QThread::idealThreadCount());
+                const int run_length = (static_cast<int>(color.size()) + run_count - 1) / run_count;
+                QVector<int> runs(run_count);
+                std::iota(runs.begin(), runs.end(), 0);
+                QtConcurrent::blockingMap(runs, [this, h, &color, run_length](const int& run)
                 {
-                    if (!m_pinned.at(vertex))
+                    const int end = qMin(static_cast<int>(color.size()), (run + 1) * run_length);
+                    for (int i = run * run_length; i < end; ++i)
                     {
-                        solveVertex(vertex, h, m_snapshot);
+                        const int vertex = color.at(i);
+                        if (!m_pinned.at(vertex))
+                        {
+                            solveVertex(vertex, h, m_snapshot);
+                        }
                     }
                 });
             }
@@ -1357,36 +1370,32 @@ void ClothSolver::findSelfContacts()
 void ClothSolver::findSelfContactsAround(const QVector<double>& heading)
 {
     const int count = vertexCount();
-    double furthest = 0;
-    const double infinite = std::numeric_limits<double>::infinity();
-    Vec3 low{infinite, infinite, infinite};
-    Vec3 high{-infinite, -infinite, -infinite};
-    for (int i = 0; i < count; ++i)
-    {
-        const Vec3 start = load(m_previous, i);
-        furthest = qMax(furthest, heading.at(i));
-        low = {qMin(low.x, start.x), qMin(low.y, start.y), qMin(low.z, start.z)};
-        high = {qMax(high.x, start.x), qMax(high.y, start.y), qMax(high.z, start.z)};
-    }
 
-    // Two parts can come together by what both are heading.
+    // Two parts can come together by the gap the cloth keeps and what both are heading. Each part reaches out by half
+    // the gap and as far as it is heading; the parts whose reaches overlap may touch. Each part reaching only as far
+    // as itself keeps the search small when a few vertices move fast.
     const double close_by = m_settings.thickness + self_margin;
-    const double reach = close_by + 2.0 * furthest;
-    const Vec3 around{reach, reach, reach};
-
-    auto bounds = [this](const int* vertices, int count_of, double grow, Vec3* box_low, Vec3* box_high)
+    const double half_gap = close_by / 2.0;
+    auto reach_of = [this, &heading, half_gap](const int* vertices, int count_of, Vec3* box_low, Vec3* box_high)
     {
-        const double infinite_box = std::numeric_limits<double>::infinity();
-        *box_low = {infinite_box, infinite_box, infinite_box};
-        *box_high = {-infinite_box, -infinite_box, -infinite_box};
+        const double infinite = std::numeric_limits<double>::infinity();
+        *box_low = {infinite, infinite, infinite};
+        *box_high = {-infinite, -infinite, -infinite};
+        double grow = half_gap;
         for (int k = 0; k < count_of; ++k)
         {
             const Vec3 point = load(m_previous, vertices[k]);
-            *box_low = {qMin(box_low->x, point.x - grow), qMin(box_low->y, point.y - grow),
-                        qMin(box_low->z, point.z - grow)};
-            *box_high = {qMax(box_high->x, point.x + grow), qMax(box_high->y, point.y + grow),
-                         qMax(box_high->z, point.z + grow)};
+            grow = qMax(grow, half_gap + heading.at(vertices[k]));
+            *box_low = {qMin(box_low->x, point.x), qMin(box_low->y, point.y), qMin(box_low->z, point.z)};
+            *box_high = {qMax(box_high->x, point.x), qMax(box_high->y, point.y), qMax(box_high->z, point.z)};
         }
+        *box_low = *box_low - Vec3{grow, grow, grow};
+        *box_high = *box_high + Vec3{grow, grow, grow};
+    };
+    auto overlap = [](const Vec3& a_low, const Vec3& a_high, const Vec3& b_low, const Vec3& b_high)
+    {
+        return a_low.x <= b_high.x && b_low.x <= a_high.x && a_low.y <= b_high.y && b_low.y <= a_high.y
+               && a_low.z <= b_high.z && b_low.z <= a_high.z;
     };
     auto heading_of = [&heading](const int* vertices, int count_of)
     {
@@ -1398,85 +1407,171 @@ void ClothSolver::findSelfContactsAround(const QVector<double>& heading)
         return most;
     };
 
-    // Each vertex and the triangles near it.
-    CubeGrid faces(low - around, high + around, qMax(reach, smallest_cube));
-    faces.fill(m_faces.size() / 3, [this, &bounds, reach](int face, Vec3* box_low, Vec3* box_high)
+    // The reaches of the triangles and the edges, and a grid of cubes around all of them.
+    const int face_count = static_cast<int>(m_faces.size() / 3);
+    const int edge_count = static_cast<int>(m_edges.size() / 2);
+    QVector<Vec3> face_low(face_count);
+    QVector<Vec3> face_high(face_count);
+    QVector<Vec3> edge_low(edge_count);
+    QVector<Vec3> edge_high(edge_count);
+    const double infinite = std::numeric_limits<double>::infinity();
+    Vec3 low{infinite, infinite, infinite};
+    Vec3 high{-infinite, -infinite, -infinite};
+    for (int face = 0; face < face_count; ++face)
     {
-        bounds(m_faces.constData() + 3 * face, 3, reach, box_low, box_high);
-    });
-    for (int vertex = 0; vertex < count; ++vertex)
+        reach_of(m_faces.constData() + 3 * face, 3, &face_low[face], &face_high[face]);
+        low = {qMin(low.x, face_low.at(face).x), qMin(low.y, face_low.at(face).y), qMin(low.z, face_low.at(face).z)};
+        high = {qMax(high.x, face_high.at(face).x), qMax(high.y, face_high.at(face).y),
+                qMax(high.z, face_high.at(face).z)};
+    }
+    for (int edge = 0; edge < edge_count; ++edge)
     {
-        const Vec3 point = load(m_previous, vertex);
-        const int cube = faces.cubeOf(point);
-        for (int i = faces.starts.at(cube); i < faces.starts.at(cube + 1); ++i)
-        {
-            const int* corners = m_faces.constData() + 3 * faces.items.at(i);
-            bool related = false;
-            for (int k = 0; k < 3; ++k)
-            {
-                related = related || corners[k] == vertex || sewnTogether(vertex, corners[k]);
-            }
-            related = related || closeAtRest(&vertex, 1, corners, 3);
-            if (!related)
-            {
-                SelfContact contact;
-                contact.vertices[0] = vertex;
-                std::copy(corners, corners + 3, contact.vertices + 1);
-                addSelfContact(contact, close_by + heading.at(vertex) + heading_of(corners, 3));
-            }
-        }
+        reach_of(m_edges.constData() + 2 * edge, 2, &edge_low[edge], &edge_high[edge]);
     }
 
-    // Each edge and the edges near it, each pair once: found in the cubes the edge passes through.
-    CubeGrid edges(low - around, high + around, qMax(reach, smallest_cube));
-    edges.fill(m_edges.size() / 2, [this, &bounds, reach](int edge, Vec3* box_low, Vec3* box_high)
+    // Each vertex and the triangles near it.
+    CubeGrid faces(low, high, smallest_cube);
+    faces.fill(face_count, [&face_low, &face_high](int face, Vec3* box_low, Vec3* box_high)
     {
-        bounds(m_edges.constData() + 2 * edge, 2, reach, box_low, box_high);
+        *box_low = face_low.at(face);
+        *box_high = face_high.at(face);
     });
-    QVector<int> seen(m_edges.size() / 2, -1);
-    QVector<int> near_edge;
-    for (int edge = 0; edge < m_edges.size() / 2; ++edge)
+
+    // The vertices and the edges are shared out among threads in runs as long whatever the threads. Each run keeps the
+    // contacts it finds in the order of its vertices or edges, so the contacts come out the same.
+    struct SearchRun
     {
-        const int* first = m_edges.constData() + 2 * edge;
-        Vec3 box_low;
-        Vec3 box_high;
-        bounds(first, 2, 0.0, &box_low, &box_high);
-        near_edge.clear();
-        edges.forEachCube(box_low, box_high, [&edges, &seen, &near_edge, edge](int cube)
+        int                  begin = 0;
+        int                  end = 0;
+        QVector<SelfContact> found;
+    };
+    auto runs_of = [](int item_count)
+    {
+        QVector<SearchRun> runs;
+        for (int begin = 0; begin < item_count; begin += search_run)
         {
-            for (int i = edges.starts.at(cube); i < edges.starts.at(cube + 1); ++i)
-            {
-                const int other = edges.items.at(i);
-                if (other > edge && seen.at(other) != edge)
-                {
-                    seen[other] = edge;
-                    near_edge.append(other);
-                }
-            }
-        });
-        for (const int other : near_edge)
+            SearchRun run;
+            run.begin = begin;
+            run.end = qMin(begin + search_run, item_count);
+            runs.append(run);
+        }
+        return runs;
+    };
+    QVector<SearchRun> vertex_runs = runs_of(count);
+    QtConcurrent::blockingMap(vertex_runs, [&](SearchRun& run)
+    {
+        QVector<int> seen_face(face_count, -1);
+        QVector<int> near_face;
+        for (int vertex = run.begin; vertex < run.end; ++vertex)
         {
-            const int* second = m_edges.constData() + 2 * other;
-            bool related = false;
-            for (int j = 0; j < 2 && !related; ++j)
+            Vec3 vertex_low;
+            Vec3 vertex_high;
+            reach_of(&vertex, 1, &vertex_low, &vertex_high);
+            near_face.clear();
+            faces.forEachCube(vertex_low, vertex_high, [&](int cube)
             {
-                for (int k = 0; k < 2 && !related; ++k)
+                for (int i = faces.starts.at(cube); i < faces.starts.at(cube + 1); ++i)
                 {
-                    related = first[j] == second[k] || sewnTogether(first[j], second[k]);
+                    const int face = faces.items.at(i);
+                    if (seen_face.at(face) != vertex)
+                    {
+                        seen_face[face] = vertex;
+                        if (overlap(vertex_low, vertex_high, face_low.at(face), face_high.at(face)))
+                        {
+                            near_face.append(face);
+                        }
+                    }
                 }
-            }
-            related = related || closeAtRest(first, 2, second, 2);
-            if (!related)
+            });
+            for (const int face : near_face)
             {
-                SelfContact contact;
-                contact.edges = true;
-                contact.vertices[0] = first[0];
-                contact.vertices[1] = first[1];
-                contact.vertices[2] = second[0];
-                contact.vertices[3] = second[1];
-                addSelfContact(contact, close_by + heading_of(first, 2) + heading_of(second, 2));
+                const int* corners = m_faces.constData() + 3 * face;
+                bool related = false;
+                for (int k = 0; k < 3; ++k)
+                {
+                    related = related || corners[k] == vertex || sewnTogether(vertex, corners[k]);
+                }
+                related = related || closeAtRest(&vertex, 1, corners, 3);
+                if (!related)
+                {
+                    SelfContact contact;
+                    contact.vertices[0] = vertex;
+                    std::copy(corners, corners + 3, contact.vertices + 1);
+                    if (mayTouch(contact, close_by + heading.at(vertex) + heading_of(corners, 3)))
+                    {
+                        run.found.append(contact);
+                    }
+                }
             }
         }
+    });
+    for (const SearchRun& run : vertex_runs)
+    {
+        m_self_contacts += run.found;
+    }
+
+    // Each edge and the edges near it, each pair once.
+    CubeGrid edges(low, high, smallest_cube);
+    edges.fill(edge_count, [&edge_low, &edge_high](int edge, Vec3* box_low, Vec3* box_high)
+    {
+        *box_low = edge_low.at(edge);
+        *box_high = edge_high.at(edge);
+    });
+    QVector<SearchRun> edge_runs = runs_of(edge_count);
+    QtConcurrent::blockingMap(edge_runs, [&](SearchRun& run)
+    {
+        QVector<int> seen(edge_count, -1);
+        QVector<int> near_edge;
+        for (int edge = run.begin; edge < run.end; ++edge)
+        {
+            const int* first = m_edges.constData() + 2 * edge;
+            near_edge.clear();
+            edges.forEachCube(edge_low.at(edge), edge_high.at(edge), [&](int cube)
+            {
+                for (int i = edges.starts.at(cube); i < edges.starts.at(cube + 1); ++i)
+                {
+                    const int other = edges.items.at(i);
+                    if (other > edge && seen.at(other) != edge)
+                    {
+                        seen[other] = edge;
+                        if (overlap(edge_low.at(edge), edge_high.at(edge), edge_low.at(other), edge_high.at(other)))
+                        {
+                            near_edge.append(other);
+                        }
+                    }
+                }
+            });
+            for (const int other : near_edge)
+            {
+                const int* second = m_edges.constData() + 2 * other;
+                bool related = false;
+                for (int j = 0; j < 2 && !related; ++j)
+                {
+                    for (int k = 0; k < 2 && !related; ++k)
+                    {
+                        related = first[j] == second[k] || sewnTogether(first[j], second[k]);
+                    }
+                }
+                related = related || closeAtRest(first, 2, second, 2);
+                if (!related)
+                {
+                    SelfContact contact;
+                    contact.edges = true;
+                    contact.vertices[0] = first[0];
+                    contact.vertices[1] = first[1];
+                    contact.vertices[2] = second[0];
+                    contact.vertices[3] = second[1];
+                    if (mayTouch(contact, close_by + heading_of(first, 2) + heading_of(second, 2)))
+                    {
+                        run.found.append(contact);
+                    }
+                }
+            }
+        }
+    });
+    for (const SearchRun& run : edge_runs)
+    {
+        m_self_contacts += run.found;
     }
 
     // Which contacts each vertex takes part in.
@@ -1505,7 +1600,7 @@ void ClothSolver::findSelfContactsAround(const QVector<double>& heading)
 
 //---------------------------------------------------------------------------------------------------------------------
 // Keeps a contact if its parts were no further apart than that when the step started, with the side they were on.
-void ClothSolver::addSelfContact(const SelfContact& contact, double furthest)
+bool ClothSolver::mayTouch(const SelfContact& contact, double furthest) const
 {
     Vec3 corners[4];
     for (int k = 0; k < 4; ++k)
@@ -1513,10 +1608,7 @@ void ClothSolver::addSelfContact(const SelfContact& contact, double furthest)
         corners[k] = load(m_previous, contact.vertices[k]);
     }
     double weights[4];
-    if (contactGap(corners, contact.edges, weights).length() <= furthest)
-    {
-        m_self_contacts.append(contact);
-    }
+    return contactGap(corners, contact.edges, weights).length() <= furthest;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

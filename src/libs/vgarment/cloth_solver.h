@@ -208,7 +208,7 @@ private:
     void               findContacts();
     void               findSelfContacts();
     void               findSelfContactsAround(const QVector<double>& heading);
-    void               addSelfContact(const SelfContact& contact, double furthest);
+    bool               mayTouch(const SelfContact& contact, double furthest) const;
     void               startSelfContact(SelfContact* contact, const QVector<double>& heading);
     void               solveVertex(int vertex, double time_step, const QVector<double>& others);
     double             bodyReach(int vertex) const;
