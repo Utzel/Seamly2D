@@ -352,7 +352,9 @@ void GarmentSceneModel::setHint(const QString& hint)
 void GarmentSceneModel::setAvatar(const QVector<QVector3D>& positions, const QVector<quint32>& triangles,
                                   int skin_vertex_count, const QString& note)
 {
-    const bool was_empty = m_rows.isEmpty() && !m_has_avatar;
+    // The first avatar frames the view again: the pieces arranged on it were on the board until it came, so the view
+    // was framed on them there.
+    const bool first_avatar = !m_has_avatar;
 
     if (m_avatar == nullptr)
     {
@@ -376,7 +378,7 @@ void GarmentSceneModel::setAvatar(const QVector<QVector3D>& positions, const QVe
     emit avatarChanged();
 
     updateSceneBounds();
-    if (was_empty)
+    if (first_avatar)
     {
         emit framingRequested();
     }

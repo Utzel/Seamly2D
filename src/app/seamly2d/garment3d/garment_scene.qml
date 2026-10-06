@@ -68,8 +68,16 @@ Rectangle {
         return beside === undefined ? 1 : beside.minus(point).length()
     }
 
+    // Set while framing waits for the view to get a size, which its window only gives it after the scene has loaded.
+    property bool framePending: false
+
     // Looks at all pieces straight on, from just far enough away to see them all.
     function frameAll() {
+        root.framePending = view.width < 1 || view.height < 1
+        if (root.framePending) {
+            return
+        }
+
         const aspect = view.width / Math.max(view.height, 1)
         const half_vertical = camera.fieldOfView * Math.PI / 360
         const half_horizontal = Math.atan(Math.tan(half_vertical) * aspect)
@@ -93,6 +101,17 @@ Rectangle {
         anchors.fill: parent
         // Rendering would find the camera by itself, mapTo3DScene() needs to be told.
         camera: camera
+
+        onWidthChanged: {
+            if (root.framePending) {
+                root.frameAll()
+            }
+        }
+        onHeightChanged: {
+            if (root.framePending) {
+                root.frameAll()
+            }
+        }
 
         environment: SceneEnvironment {
             backgroundMode: SceneEnvironment.Transparent
