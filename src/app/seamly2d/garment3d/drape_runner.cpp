@@ -27,6 +27,8 @@
 #include <QElapsedTimer>
 #include <QThread>
 
+#include <algorithm>
+
 #include "../vgarment/cloth_solver.h"
 
 namespace
@@ -37,11 +39,15 @@ const qreal time_step = 1.0 / 60.0;
 // Frames go out at most this often, in ms.
 const qint64 frame_interval_ms = 30;
 
-// The cloth has come to rest once no vertex moves faster than this, in cm/s, for this many steps in a row, and not
-// before this many steps have passed.
+// The cloth has come to rest once hardly any vertex moves faster than this, in cm/s, for this many steps in a row,
+// and not before this many steps have passed.
 const float resting_speed = 1.0f;
 const int resting_steps = 60;
 const int earliest_rest = 120;
+
+// At rest, one vertex in this many may still move: a few caught on a sharp part of the body, such as the fingers,
+// can keep twitching where they are.
+const int restless_share = 200;
 
 // The speed and the stitches are checked every so many steps; it costs a copy of all velocities.
 const int check_steps = 10;
@@ -153,12 +159,12 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation)
                 solver->setFriction(friction);
             }
 
-            float fastest = 0;
-            for (const QVector3D& velocity : solver->velocities())
+            const QVector<QVector3D> velocities = solver->velocities();
+            const auto moving = std::count_if(velocities.cbegin(), velocities.cend(), [](const QVector3D& velocity)
             {
-                fastest = qMax(fastest, velocity.length());
-            }
-            resting = fastest < resting_speed ? resting + check_steps : 0;
+                return velocity.length() >= resting_speed;
+            });
+            resting = moving <= velocities.size() / restless_share ? resting + check_steps : 0;
         }
 
         const bool at_rest = !sewing && falling_steps >= earliest_rest && resting >= resting_steps;
