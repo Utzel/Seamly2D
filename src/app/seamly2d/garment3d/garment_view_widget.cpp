@@ -125,6 +125,10 @@ const qreal default_age = 25.0;
 // The toolbar's icons are drawn this many pixels wide, and twice that for high resolution screens.
 const int icon_size = 32;
 
+// Edge length of the triangles in cm for a final drape; CLO recommends 20 mm while editing and 5 to 10 mm for the
+// final drape.
+const qreal fine_edge_length = 1.0;
+
 // The avatar's grey, as garment_scene.qml draws it.
 const char* const avatar_color = "#b9b4ad";
 
@@ -175,6 +179,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_arrange_action(nullptr)
     , m_simulate_action(nullptr)
     , m_reset_action(nullptr)
+    , m_fine_action(nullptr)
     , m_strain_action(nullptr)
     , m_export_action(nullptr)
     , m_fabric_box(nullptr)
@@ -390,7 +395,8 @@ void GarmentViewWidget::rebuildScene()
                 const PieceOutline outline = PieceOutline::fromPiece(piece, m_data);
                 const PieceSymmetry wanted = symmetryOf(piece);
                 CachedMesh cached = m_mesh_cache.value(id);
-                if (cached.outline != outline || cached.wanted != wanted || cached.mesh.isEmpty())
+                if (cached.outline != outline || cached.wanted != wanted || cached.mesh.isEmpty()
+                    || !qFuzzyCompare(cached.edge_length, m_mesher.edgeLength()))
                 {
                     const CachedMesh before = cached;
                     cached = garmentMeshes(id, outline, wanted);
@@ -805,6 +811,7 @@ GarmentViewWidget::CachedMesh GarmentViewWidget::garmentMeshes(quint32 id, const
     CachedMesh cached;
     cached.outline = outline;
     cached.wanted = wanted;
+    cached.edge_length = m_mesher.edgeLength();
     cached.mesh = m_mesher.meshOutline(outline);
     cached.mesh.piece_id = id;
     cached.symmetry = wanted;
@@ -1293,6 +1300,15 @@ qreal GarmentViewWidget::grainAngle(const VPiece& piece) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// Meshes the pieces finer for a final drape, or coarse again for editing. Every piece is meshed again, and a drape
+// carries over onto the new meshes and goes on from there.
+void GarmentViewWidget::setFine(bool fine)
+{
+    m_mesher.setEdgeLength(fine ? fine_edge_length : PieceMesher::defaultEdgeLength());
+    rebuildScene();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Saves the pieces on the avatar as the scene shows them, draped or as they were arranged, and the avatar, in a file
 // other 3D programs open: binary glTF, or OBJ with its materials in an MTL file next to it.
 void GarmentViewWidget::exportDrape()
@@ -1483,6 +1499,13 @@ void GarmentViewWidget::createToolBar()
     m_reset_action->setToolTip(tr("Put the draped pieces back where they were arranged"));
     connect(m_reset_action, &QAction::triggered, this, &GarmentViewWidget::resetDrape);
 
+    m_fine_action = tool_bar->addAction(tr("Fine"));
+    m_fine_action->setCheckable(true);
+    m_fine_action->setToolTip(tr("Drape with smaller triangles, %1 instead of %2 cm: slower, but folds and the fit "
+                                 "show in finer detail. A drape goes on from where it hangs.")
+                                  .arg(fine_edge_length).arg(PieceMesher::defaultEdgeLength()));
+    connect(m_fine_action, &QAction::toggled, this, &GarmentViewWidget::setFine);
+
     tool_bar->addSeparator();
 
     m_strain_action = tool_bar->addAction(tr("Strain"));
@@ -1530,6 +1553,7 @@ void GarmentViewWidget::updateIcons()
         m_arrange_action->setIcon(toolIcon(QStringLiteral("arrange")));
         m_simulate_action->setIcon(toolIcon(QStringLiteral("simulate")));
         m_reset_action->setIcon(toolIcon(QStringLiteral("reset")));
+        m_fine_action->setIcon(toolIcon(QStringLiteral("fine")));
         m_strain_action->setIcon(toolIcon(QStringLiteral("strain")));
         m_export_action->setIcon(toolIcon(QStringLiteral("export")));
     }

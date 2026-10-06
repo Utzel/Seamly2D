@@ -41,6 +41,7 @@ private slots:
     void largestStretchCounts() const;
     void positionsOfAnotherMeshAreIgnored() const;
     void drapeCarriesOverToAChangedPiece() const;
+    void drapeCarriesOverToAFinerMesh() const;
 
 private:
     Q_DISABLE_COPY(TST_GarmentMesh)

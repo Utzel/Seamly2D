@@ -108,6 +108,7 @@ private slots:
     void               dropPiece();
     void               setSimulating(bool simulating);
     void               resetDrape();
+    void               setFine(bool fine);
     void               exportDrape();
     void               drapeFrame(int generation, const QVector<QVector3D>& positions);
     void               drapeSettled(int generation);
@@ -122,6 +123,7 @@ private:
     {
         PieceOutline  outline;
         PieceSymmetry wanted = PieceSymmetry::Single;
+        qreal         edge_length = 0;
         GarmentMesh   mesh;
         PieceSymmetry symmetry = PieceSymmetry::Single;
         quint32       fold_start = 0;
@@ -188,6 +190,7 @@ private:
     QAction*                   m_arrange_action;
     QAction*                   m_simulate_action;
     QAction*                   m_reset_action;
+    QAction*                   m_fine_action;
     QAction*                   m_strain_action;
     QAction*                   m_export_action;
     QComboBox*                 m_fabric_box;

@@ -192,3 +192,31 @@ void TST_GarmentMesh::drapeCarriesOverToAChangedPiece() const
 
     QVERIFY(before.carry(QVector<QVector3D>(), after).isEmpty());
 }
+
+//---------------------------------------------------------------------------------------------------------------------
+// The same piece meshed again with 1 cm triangles, as for a final drape: every new vertex goes where the drape had the
+// cloth, and the finer mesh has about four times the vertices.
+void TST_GarmentMesh::drapeCarriesOverToAFinerMesh() const
+{
+    const qreal radius = 15;
+    auto wrapped = [radius](const QPointF& point)
+    {
+        const qreal angle = point.x() / radius;
+        return QVector3D(static_cast<float>(radius * qSin(angle)), static_cast<float>(-point.y()),
+                         static_cast<float>(radius * qCos(angle)));
+    };
+    const GarmentMesh coarse = rectangleMesh();
+    const GarmentMesh fine = PieceMesher(1.0).meshPolygon({QPointF(0, 0), QPointF(30, 0), QPointF(30, 20),
+                                                           QPointF(0, 20)});
+    QVERIFY2(fine.vertexCount() > 3 * coarse.vertexCount(),
+             qUtf8Printable(QStringLiteral("%1 and %2 vertices").arg(coarse.vertexCount()).arg(fine.vertexCount())));
+
+    const QVector<QVector3D> carried = coarse.carry(placed(coarse, wrapped), fine);
+    QCOMPARE(carried.size(), fine.vertexCount());
+    qreal worst = 0;
+    for (int i = 0; i < fine.vertexCount(); ++i)
+    {
+        worst = qMax(worst, static_cast<qreal>((carried.at(i) - wrapped(fine.rest_positions.at(i))).length()));
+    }
+    QVERIFY2(worst < 0.1, qUtf8Printable(QStringLiteral("a vertex is %1 cm off").arg(worst)));
+}
