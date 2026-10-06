@@ -127,8 +127,9 @@ struct VSeam
     bool      operator==(const VSeam& other) const;
 };
 
-/// Where a piece starts out on the avatar: wrapped around a part of the body, "body", "leftLeg" or "rightLeg", at an
-/// angle around it in degrees, 0 in front, and with its middle at a height in cm above the floor.
+/// Where a piece starts out on the avatar: wrapped around a part of the body, "body", "leftLeg", "rightLeg",
+/// "leftArm" or "rightArm", at an angle around it in degrees, 0 in front, and with its middle at a height in cm above
+/// the floor; on an arm, the height of the point of the arm's middle line the piece's middle is at.
 struct VPieceArrangement
 {
     quint32 piece_id {NULL_ID};

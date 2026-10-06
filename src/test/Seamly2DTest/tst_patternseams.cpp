@@ -264,11 +264,16 @@ void TST_PatternSeams::arrangementsAreReadBack() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Whichever is made first, the seams come before the arrangements, and both before the draft blocks.
+// Whichever is made first, the seams come before the arrangements, and both before the draft blocks. Pieces can be
+// arranged on every part of the body.
 void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
 {
     SeamsPattern pattern;
-    pattern.setArrangements({arrangement(10, QStringLiteral("body"), 0, 120)});
+    pattern.setArrangements({arrangement(10, QStringLiteral("body"), 0, 120),
+                             arrangement(20, QStringLiteral("leftLeg"), 0, 60),
+                             arrangement(30, QStringLiteral("rightLeg"), 0, 60),
+                             arrangement(40, QStringLiteral("leftArm"), 90, 115),
+                             arrangement(50, QStringLiteral("rightArm"), -90, 115)});
     pattern.setSeams({seam(10, 20, false)});
 
     QCOMPARE(childTags(pattern.documentElement()),

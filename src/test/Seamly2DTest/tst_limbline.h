@@ -1,7 +1,7 @@
 //---------------------------------------------------------------------------------------------------------------------
-//  @file   tst_bodymodel.h
+//  @file   tst_limbline.h
 //  @author Julius
-//  @date   5 Oct, 2026
+//  @date   6 Oct, 2026
 //
 //  @copyright
 //  Copyright (C)  2026 Seamly, LLC
@@ -22,36 +22,27 @@
 //  along with Seamly2D. If not, see <http://www.gnu.org/licenses/>.
 //---------------------------------------------------------------------------------------------------------------------
 
-#ifndef TST_BODYMODEL_H
-#define TST_BODYMODEL_H
+#ifndef TST_LIMBLINE_H
+#define TST_LIMBLINE_H
 
 #include <QObject>
 
-class TST_BodyModel : public QObject
+class TST_LimbLine : public QObject
 {
     Q_OBJECT
 public:
-    explicit TST_BodyModel(QObject* parent = nullptr);
+    explicit TST_LimbLine(QObject* parent = nullptr);
 
 private slots:
-    void bodyDataLoads() const;
-    void ageFromYears() const;
-    void macroTargetsFollowMpfb() const;
-    void defaultBodiesHaveTheirHeights() const;
-    void bodyStandsOnTheFloor() const;
-    void scaleSetsHeight() const;
-    void measureTargetChangesGirth() const;
-    void tapeGirthOfCylinder() const;
-    void tapeLeavesOutArms() const;
-    void fitMatchesMeasurements() const;
-    void fitReachesTypicalBodies() const;
-    void fitStaysInRange() const;
-    void wrapFindsBodyParts() const;
-    void wrappedPiecesStartOutsideTheBody() const;
-    void sleevesStartAroundTheArm() const;
+    void straightLimbFollowsItsBone() const;
+    void bendIsAnArc() const;
+    void frontTurnsWithTheLine() const;
+    void anglesGoRoundLikeTheBody() const;
+    void heightFindsThePlaceAlong() const;
+    void noJointsNoLine() const;
 
 private:
-    Q_DISABLE_COPY(TST_BodyModel)
+    Q_DISABLE_COPY(TST_LimbLine)
 };
 
-#endif // TST_BODYMODEL_H
+#endif // TST_LIMBLINE_H

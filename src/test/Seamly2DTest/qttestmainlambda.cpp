@@ -80,6 +80,7 @@
 #include "tst_pieceoutline.h"
 #include "tst_clothsolver.h"
 #include "tst_garmentsymmetry.h"
+#include "tst_limbline.h"
 #include "tst_patternseams.h"
 
 #include "../vmisc/def.h"
@@ -190,6 +191,7 @@ int main(int argc, char** argv)
     ASSERT_TEST(new TST_VTranslateVars());
     ASSERT_TEST(new TST_VToolMove());
     ASSERT_TEST(new TST_PieceMesher());
+    ASSERT_TEST(new TST_LimbLine());
     ASSERT_TEST(new TST_BodyModel());
     ASSERT_TEST(new TST_PieceOutline());
     ASSERT_TEST(new TST_GarmentSymmetry());

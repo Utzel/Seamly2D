@@ -318,7 +318,25 @@ void TST_BodyModel::wrapFindsBodyParts() const
     QVERIFY(thigh.part == BodyPart::LeftLeg);
     QVERIFY(qAbs(thigh.angle) < 20.0);
 
-    for (const BodyPart part : {BodyPart::Body, BodyPart::LeftLeg, BodyPart::RightLeg})
+    // On an arm below the armpit pieces go around the arm, its top at 90 degrees on the left arm; above the armpit
+    // they go around the body.
+    const QVector3D shoulder = model.joint(positions, QStringLiteral("l-shoulder"));
+    const QVector3D elbow = model.joint(positions, QStringLiteral("l-elbow"));
+    const QVector3D upper_arm = shoulder + (elbow - shoulder) * 0.6f;
+    const QVector3D arm_top = QVector3D::crossProduct(QVector3D(0, 0, 1), elbow - shoulder).normalized();
+    const PieceArrangement sleeve = wrap.arrangementAt(upper_arm + arm_top * 6);
+    QVERIFY(sleeve.part == BodyPart::LeftArm);
+    QVERIFY2(qAbs(sleeve.angle - 90.0) < 15.0, qUtf8Printable(QString::number(sleeve.angle)));
+    QVERIFY2(qAbs(sleeve.height - upper_arm.y()) < 1.0, qUtf8Printable(QString::number(sleeve.height)));
+
+    const QVector3D right_forearm = (model.joint(positions, QStringLiteral("r-elbow"))
+                                     + model.joint(positions, QStringLiteral("r-hand"))) / 2.0f;
+    QVERIFY(wrap.arrangementAt(right_forearm + QVector3D(0, 0, 5)).part == BodyPart::RightArm);
+    QVERIFY(wrap.arrangementAt(shoulder + QVector3D(0, 8, 0)).part == BodyPart::Body);
+    QVERIFY(wrap.arrangementAt(QVector3D(pelvis.x() + 10, chest.y() + 15, pelvis.z())).part == BodyPart::Body);
+
+    for (const BodyPart part : {BodyPart::Body, BodyPart::LeftLeg, BodyPart::RightLeg, BodyPart::LeftArm,
+                                BodyPart::RightArm})
     {
         QVERIFY(BodyWrap::partFromName(BodyWrap::partName(part)) == part);
     }
@@ -381,5 +399,113 @@ void TST_BodyModel::wrappedPiecesStartOutsideTheBody() const
         }
         QVERIFY2(worst_strain < 0.01, qUtf8Printable(QStringLiteral("%1: an edge is %2 % off its length")
             .arg(BodyWrap::partName(arrangement.part)).arg(worst_strain * 100)));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A sleeve placed on an arm starts outside the skin and close around the arm, its cap on top of the arm and no higher
+// up it than the shoulder, its cuff around the wrist. It is stretched most around the elbow, where the arm bends. On
+// the other arm a mirrored sleeve is placed as the mirror image.
+void TST_BodyModel::sleevesStartAroundTheArm() const
+{
+    const BodyModel model;
+    const QVector<QVector3D> positions = model.evaluate(female());
+    const BodyWrap wrap(model, positions);
+    const BodyCollider skin(positions.mid(0, model.skinVertexCount()), model.triangles());
+    const QVector3D shoulder = model.joint(positions, QStringLiteral("l-shoulder"));
+    const QVector3D elbow = model.joint(positions, QStringLiteral("l-elbow"));
+    const QVector3D wrist = model.joint(positions, QStringLiteral("l-hand"));
+
+    // A long sleeve, its cap's top in the middle of its top edge, as long as the arm from the shoulder to the wrist.
+    const qreal length = (elbow - shoulder).length() + (wrist - elbow).length();
+    const QPointF cap_top(16, 0);
+    const QPointF front_underarm(0, 13);
+    const QPointF back_underarm(32, 13);
+    const GarmentMesh sleeve = PieceMesher().meshPolygon({cap_top, QPointF(22, 1.5), QPointF(28, 5.5), back_underarm,
+                                                         QPointF(27, length), QPointF(5, length), front_underarm,
+                                                         QPointF(4, 5.5), QPointF(10, 1.5)});
+    auto vertex = [&sleeve](const QPointF& rest)
+    {
+        int found = -1;
+        for (int i = 0; i < sleeve.vertexCount(); ++i)
+        {
+            found = QLineF(sleeve.rest_positions.at(i), rest).length() < 1e-6 ? i : found;
+        }
+        return found;
+    };
+
+    PieceArrangement on_arm;
+    on_arm.part = BodyPart::LeftArm;
+    on_arm.angle = 90;
+    on_arm.height = shoulder.y();  // as high up the arm as it goes
+    const QVector<QVector3D> placed = wrap.place(sleeve, on_arm);
+    QCOMPARE(placed.size(), sleeve.vertexCount());
+
+    const QVector3D upper_arm = (elbow - shoulder).normalized();
+    const QVector3D forearm = (wrist - elbow).normalized();
+    for (const QVector3D& point : placed)
+    {
+        BodyContact contact;
+        if (skin.closest(point, skin.trianglesWithin(point, 30), &contact))
+        {
+            QVERIFY2(contact.distance > 0, qUtf8Printable(QStringLiteral("(%1, %2, %3) is %4 cm inside")
+                .arg(point.x()).arg(point.y()).arg(point.z()).arg(-contact.distance)));
+        }
+        const float from_bones = qMin((point - shoulder - upper_arm * QVector3D::dotProduct(point - shoulder,
+                                                                                           upper_arm)).length(),
+                                      (point - elbow - forearm * QVector3D::dotProduct(point - elbow,
+                                                                                      forearm)).length());
+        QVERIFY2(from_bones < 11.0f, qUtf8Printable(QStringLiteral("(%1, %2, %3) is %4 cm from the arm")
+            .arg(point.x()).arg(point.y()).arg(point.z()).arg(from_bones)));
+    }
+
+    // The cap's top on top of the arm, level with the shoulder joint along the arm; the underarm in front and behind.
+    const QVector3D top = placed.at(vertex(cap_top));
+    QVERIFY(top.y() > shoulder.y() && top.x() > shoulder.x());
+    QVERIFY2(qAbs(QVector3D::dotProduct(top - shoulder, upper_arm)) < 0.5f,
+             qUtf8Printable(QString::number(QVector3D::dotProduct(top - shoulder, upper_arm))));
+    QVERIFY(placed.at(vertex(front_underarm)).z() > shoulder.z() + 3);
+    QVERIFY(placed.at(vertex(back_underarm)).z() < shoulder.z() - 3);
+
+    // The sleeve narrows to the wrist, and so does the tube it starts on: the sides of the cuff meet under the wrist,
+    // not across it.
+    const QVector3D cuff_front = placed.at(vertex(QPointF(5, length)));
+    const QVector3D cuff_back = placed.at(vertex(QPointF(27, length)));
+    const QVector3D cuff_middle = (cuff_front + cuff_back) / 2.0f;
+    const QVector3D below_forearm = cuff_middle - elbow - forearm * QVector3D::dotProduct(cuff_middle - elbow, forearm);
+    QVERIFY2(below_forearm.length() > 1.5f && below_forearm.y() < -1.0f,
+             qUtf8Printable(QStringLiteral("(%1, %2, %3) from the forearm").arg(below_forearm.x())
+                 .arg(below_forearm.y()).arg(below_forearm.z())));
+
+    // Hardly stretched above the elbow, where the tube only narrows slowly; most around the elbow, which the tube
+    // bends around from 10 cm above to 10 cm below.
+    const qreal elbow_along = (elbow - shoulder).length();
+    qreal worst_strain = 0;
+    for (int t = 0; t + 2 < sleeve.indices.size(); t += 3)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            const int a = static_cast<int>(sleeve.indices.at(t + k));
+            const int b = static_cast<int>(sleeve.indices.at(t + (k + 1) % 3));
+            const qreal rest = QLineF(sleeve.rest_positions.at(a), sleeve.rest_positions.at(b)).length();
+            const qreal strain = qAbs((placed.at(a) - placed.at(b)).length() / rest - 1.0);
+            const bool above_elbow = qMax(sleeve.rest_positions.at(a).y(), sleeve.rest_positions.at(b).y())
+                                     < elbow_along - 12;
+            QVERIFY2(!above_elbow || strain < 0.15,
+                     qUtf8Printable(QStringLiteral("an edge above the elbow is %1 % off").arg(strain * 100)));
+            worst_strain = qMax(worst_strain, strain);
+        }
+    }
+    QVERIFY2(worst_strain < 0.4, qUtf8Printable(QStringLiteral("an edge is %1 % off").arg(worst_strain * 100)));
+
+    // Seen from the other side of the body, a sleeve cut the other way round on the right arm is the same.
+    PieceArrangement on_right_arm = on_arm;
+    on_right_arm.part = BodyPart::RightArm;
+    on_right_arm.angle = -90;
+    const QVector<QVector3D> mirrored = wrap.place(sleeve.mirrored(), on_right_arm);
+    QCOMPARE(mirrored.size(), placed.size());
+    for (int i = 0; i < placed.size(); ++i)
+    {
+        QVERIFY2((wrap.mirrored(placed.at(i)) - mirrored.at(i)).length() < 0.05f, qUtf8Printable(QString::number(i)));
     }
 }
