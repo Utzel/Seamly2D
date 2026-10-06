@@ -316,3 +316,136 @@ void TST_ClothSolver::clothRestsOnSphere() const
     const qreal strain = worstStrain(mesh, positions);
     QVERIFY2(strain < 0.1, qUtf8Printable(QStringLiteral("an edge is stretched by %1 %").arg(strain * 100)));
 }
+
+//---------------------------------------------------------------------------------------------------------------------
+// A sheet dropped onto another lying on the floor comes to rest on top of it, a thickness above; without self contact
+// it falls through onto the floor.
+void TST_ClothSolver::clothLandsOnCloth() const
+{
+    for (const bool self_contact : {true, false})
+    {
+        ClothSettings settings;
+        settings.self_contact = self_contact;
+        ClothSolver solver(settings);
+
+        const PieceMesher mesher;
+        const GarmentMesh lower = mesher.meshOutline(rectangle(0, 0, 30, 30, 1));
+        const GarmentMesh upper = mesher.meshOutline(rectangle(5, 5, 20, 20, 11));
+        solver.addMesh(lower, lyingFlat(lower, settings.thickness));
+        const int upper_offset = static_cast<int>(solver.addMesh(upper, lyingFlat(upper, 5)));
+
+        for (int i = 0; i < 120; ++i)
+        {
+            solver.step(frame);
+        }
+
+        const QVector<QVector3D> positions = solver.positions();
+        float upper_lowest = std::numeric_limits<float>::max();
+        for (int i = upper_offset; i < positions.size(); ++i)
+        {
+            upper_lowest = qMin(upper_lowest, positions.at(i).y());
+        }
+        float lower_highest = -std::numeric_limits<float>::max();
+        for (int i = 0; i < upper_offset; ++i)
+        {
+            lower_highest = qMax(lower_highest, positions.at(i).y());
+        }
+
+        const QString report = QStringLiteral("with self contact %1: the upper sheet's lowest at %2 cm, the lower's "
+                                              "highest at %3 cm").arg(self_contact).arg(upper_lowest)
+                                   .arg(lower_highest);
+        if (self_contact)
+        {
+            QVERIFY2(upper_lowest > lower_highest + 0.5f * static_cast<float>(settings.thickness)
+                         && upper_lowest < 1.5f, qUtf8Printable(report));
+        }
+        else
+        {
+            QVERIFY2(upper_lowest < lower_highest, qUtf8Printable(report));
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A strip folded over onto itself keeps its two layers apart as the upper one settles onto the lower one.
+void TST_ClothSolver::foldedClothKeepsItsLayers() const
+{
+    ClothSettings settings;
+    ClothSolver solver(settings);
+
+    const GarmentMesh strip = PieceMesher().meshOutline(rectangle(0, 0, 40, 10, 1));
+    QVector<QVector3D> folded;
+    for (const QPointF& point : strip.rest_positions)
+    {
+        const bool over = point.x() > 20;
+        folded.append(QVector3D(static_cast<float>(over ? 40 - point.x() : point.x()),
+                                static_cast<float>(over ? 3.0 : settings.thickness), static_cast<float>(point.y())));
+    }
+    solver.addMesh(strip, folded);
+
+    for (int i = 0; i < 120; ++i)
+    {
+        solver.step(frame);
+    }
+
+    // Away from the fold, the folded over half lies on the other.
+    const QVector<QVector3D> positions = solver.positions();
+    float upper_lowest = std::numeric_limits<float>::max();
+    float lower_highest = -std::numeric_limits<float>::max();
+    for (int i = 0; i < strip.vertexCount(); ++i)
+    {
+        const qreal x = strip.rest_positions.at(i).x();
+        if (x > 24)
+        {
+            upper_lowest = qMin(upper_lowest, positions.at(i).y());
+        }
+        else if (x < 16)
+        {
+            lower_highest = qMax(lower_highest, positions.at(i).y());
+        }
+    }
+    QVERIFY2(upper_lowest > lower_highest + 0.5f * static_cast<float>(settings.thickness) && upper_lowest < 1.5f,
+             qUtf8Printable(QStringLiteral("the upper half's lowest at %1 cm, the lower's highest at %2 cm")
+                 .arg(upper_lowest).arg(lower_highest)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The cloth keeping its thickness from itself doesn't hold seams open: sewn sides close as tightly as without it.
+void TST_ClothSolver::seamsCloseDespiteSelfContact() const
+{
+    float widest[2] = {0, 0};
+    for (const bool self_contact : {true, false})
+    {
+        ClothSettings settings;
+        settings.gravity = QVector3D();
+        settings.floor = false;
+        settings.self_contact = self_contact;
+        ClothSolver solver(settings);
+
+        const PieceMesher mesher;
+        const GarmentMesh left = mesher.meshOutline(rectangle(0, 0, 10, 10, 1));
+        const GarmentMesh right = mesher.meshOutline(rectangle(15, 0, 10, 10, 11));
+        const quint32 left_offset = solver.addMesh(left, standing(left));
+        const quint32 right_offset = solver.addMesh(right, standing(right));
+        const QVector<Stitch> stitches = SeamStretch::stitches(left.stretch(2, 3, left_offset),
+                                                               right.stretch(14, 11, right_offset).reversed());
+        solver.addStitches(stitches);
+
+        for (int i = 0; i < 120; ++i)
+        {
+            solver.step(frame);
+        }
+
+        const QVector<QVector3D> positions = solver.positions();
+        for (const Stitch& stitch : stitches)
+        {
+            const QVector3D target = positions.at(static_cast<int>(stitch.edge_start)) * (1.0f - stitch.along)
+                                     + positions.at(static_cast<int>(stitch.edge_end)) * stitch.along;
+            widest[self_contact ? 0 : 1] = qMax(widest[self_contact ? 0 : 1],
+                                                (positions.at(static_cast<int>(stitch.vertex)) - target).length());
+        }
+    }
+    QVERIFY2(widest[0] < 0.1f && widest[0] < widest[1] + 0.01f,
+             qUtf8Printable(QStringLiteral("a stitch is %1 cm open with self contact, %2 cm without")
+                 .arg(widest[0]).arg(widest[1])));
+}

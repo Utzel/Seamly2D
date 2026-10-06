@@ -55,6 +55,39 @@ const double singular = 1e-12;
 // No vertex gets less mass than this, in g, so loose bits of mesh don't make the solve stiff.
 const double min_mass = 1e-4;
 
+// Parts of the cloth up to this much further apart than its thickness, in cm, are watched for touching, more if they
+// are moving; they are looked for again once some vertex has moved half as far.
+const double self_margin = 1.0;
+
+// Moving parts of the cloth are watched for touching at most this much further away, in cm; a vertex moving further
+// in one step could pass through cloth unseen, but watching that far around everything would cost too much.
+const double self_reach_limit = 2.0;
+
+// The cubes the cloth is sorted into to find its parts near each other are at least this big, in cm, and there are no
+// more than this many of them.
+const double smallest_cube = 2.0;
+const int most_cubes = 1 << 20;
+
+// Lengths below this, in cm, count as none.
+const double tiny = 1e-9;
+
+// Parts of a piece with corners closer than this to each other in the flat piece, in cm, are neighbours there: they
+// don't push each other apart. At a mesh's usual 2 cm, cloth can't fold over tighter than that, and thin triangles
+// along a piece's edges would otherwise push their neighbours.
+const double rest_neighbours = 2.5;
+
+// Parts of cloth lie on each other, rather than beside each other, when the gap between them is at least this close
+// to square to the triangle or to both edges, as the cosine of the angle.
+const double lying_on = 0.5;
+
+// The direction square to a triangle, or to two edges, is only trusted when the angle between its sides, or between
+// the edges, is at least this wide, as its sine: about 12 degrees.
+const double clear_angle = 0.2;
+
+// A vertex moves at most this share of the way to the nearest other cloth in a step, so two parts moving towards
+// each other can't pass through each other; parts already touching count as a thickness apart.
+const double self_bound_share = 0.45;
+
 //---------------------------------------------------------------------------------------------------------------------
 struct Vec3
 {
@@ -168,6 +201,323 @@ void store(QVector<double>& values, int vertex, const Vec3& value)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// A part of a whole, or nothing of nothing, as a triangle squashed flat has.
+double share(double part, double whole)
+{
+    return qAbs(whole) > tiny ? part / whole : 0.0;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Where the point of triangle abc closest to p is, as the weights of a, b and c (Ericson, Real-Time Collision
+// Detection, 5.1.5).
+void closestOnTriangle(const Vec3& p, const Vec3& a, const Vec3& b, const Vec3& c, double weights[3])
+{
+    const Vec3 ab = b - a;
+    const Vec3 ac = c - a;
+    const double d1 = ab.dot(p - a);
+    const double d2 = ac.dot(p - a);
+    const double d3 = ab.dot(p - b);
+    const double d4 = ac.dot(p - b);
+    const double d5 = ab.dot(p - c);
+    const double d6 = ac.dot(p - c);
+    const double va = d3 * d6 - d5 * d4;
+    const double vb = d5 * d2 - d1 * d6;
+    const double vc = d1 * d4 - d3 * d2;
+
+    double u = 1;  // of a
+    double v = 0;  // of b
+    double w = 0;  // of c
+    if (d1 <= 0 && d2 <= 0)
+    {
+        // a is closest
+    }
+    else if (d3 >= 0 && d4 <= d3)
+    {
+        u = 0;
+        v = 1;
+    }
+    else if (vc <= 0 && d1 >= 0 && d3 <= 0)
+    {
+        v = share(d1, d1 - d3);
+        u = 1 - v;
+    }
+    else if (d6 >= 0 && d5 <= d6)
+    {
+        u = 0;
+        w = 1;
+    }
+    else if (vb <= 0 && d2 >= 0 && d6 <= 0)
+    {
+        w = share(d2, d2 - d6);
+        u = 1 - w;
+    }
+    else if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0)
+    {
+        w = share(d4 - d3, (d4 - d3) + (d5 - d6));
+        u = 0;
+        v = 1 - w;
+    }
+    else
+    {
+        const double whole = va + vb + vc;
+        v = share(vb, whole);
+        w = share(vc, whole);
+        u = 1 - v - w;
+    }
+    weights[0] = u;
+    weights[1] = v;
+    weights[2] = w;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Where the closest points of the segments p1-q1 and p2-q2 are, as how far along each they are, from 0 to 1
+// (Ericson, Real-Time Collision Detection, 5.1.9).
+void closestOnSegments(const Vec3& p1, const Vec3& q1, const Vec3& p2, const Vec3& q2, double* s, double* t)
+{
+    const Vec3 d1 = q1 - p1;
+    const Vec3 d2 = q2 - p2;
+    const Vec3 r = p1 - p2;
+    const double a = d1.dot(d1);
+    const double e = d2.dot(d2);
+    const double f = d2.dot(r);
+    *s = 0;
+    *t = 0;
+    if (a <= tiny && e > tiny)
+    {
+        *t = qBound(0.0, f / e, 1.0);
+    }
+    else if (a > tiny)
+    {
+        const double c = d1.dot(r);
+        if (e <= tiny)
+        {
+            *s = qBound(0.0, -c / a, 1.0);
+        }
+        else
+        {
+            const double b = d1.dot(d2);
+            const double apart = a * e - b * b;
+            *s = apart > tiny ? qBound(0.0, (b * f - c * e) / apart, 1.0) : 0.0;
+            *t = (b * *s + f) / e;
+            if (*t < 0)
+            {
+                *t = 0;
+                *s = qBound(0.0, -c / a, 1.0);
+            }
+            else if (*t > 1)
+            {
+                *t = 1;
+                *s = qBound(0.0, (b - c) / a, 1.0);
+            }
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+Vec3 cross(const Vec3& a, const Vec3& b)
+{
+    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The gap between the closest points of two parts of cloth, from the second to the first: a vertex and a triangle,
+// corners 0 and 1 to 3, or two edges, corners 0 to 1 and 2 to 3. It is the sum of the corners, each weighted as given
+// back in weights.
+Vec3 contactGap(const Vec3 corners[4], bool edges, double weights[4])
+{
+    weights[0] = 1;
+    if (edges)
+    {
+        double s = 0;
+        double t = 0;
+        closestOnSegments(corners[0], corners[1], corners[2], corners[3], &s, &t);
+        weights[0] = 1 - s;
+        weights[1] = s;
+        weights[2] = t - 1;
+        weights[3] = -t;
+    }
+    else
+    {
+        double on_triangle[3];
+        closestOnTriangle(corners[0], corners[1], corners[2], corners[3], on_triangle);
+        weights[1] = -on_triangle[0];
+        weights[2] = -on_triangle[1];
+        weights[3] = -on_triangle[2];
+    }
+
+    Vec3 gap;
+    for (int k = 0; k < 4; ++k)
+    {
+        gap += corners[k] * weights[k];
+    }
+    return gap;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The direction square to the triangle, or to both edges, of two parts of cloth; not a unit vector.
+Vec3 contactNormal(const Vec3 corners[4], bool edges)
+{
+    return edges ? cross(corners[1] - corners[0], corners[3] - corners[2])
+                 : cross(corners[2] - corners[1], corners[3] - corners[1]);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Whether the direction square to the triangle, or to both edges, is well defined: not for a sliver of a triangle, nor
+// for edges close to parallel, whose square direction turns wildly as they move.
+bool clearNormal(const Vec3 corners[4], bool edges, const Vec3& normal)
+{
+    const Vec3 a = edges ? corners[1] - corners[0] : corners[2] - corners[1];
+    const Vec3 b = edges ? corners[3] - corners[2] : corners[3] - corners[1];
+    return normal.length() >= clear_angle * a.length() * b.length() && normal.length() > tiny;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Whether the closest points of two parts of cloth lie inside the triangle, or inside both edges, as given by the
+// weights of contactGap(). Only there can the parts pass through each other.
+bool acrossContact(bool edges, const double weights[4])
+{
+    return edges ? weights[1] > 0 && weights[1] < 1 && weights[3] < 0 && weights[3] > -1
+                 : weights[1] < 0 && weights[2] < 0 && weights[3] < 0;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// How far apart two parts of cloth are, and the unit direction from the second to the first, given the gap between
+// them. Where the closest points are inside the triangle, or both edges, the distance is measured square to it on the
+// side the first part is meant to be on, negative once it has passed through. Elsewhere it is the gap's length.
+double contactDistance(const Vec3 corners[4], bool edges, const double weights[4], const Vec3& gap, double side,
+                       Vec3* direction)
+{
+    const Vec3 normal = contactNormal(corners, edges);
+    const double normal_length = normal.length();
+    double distance = gap.length();
+    if (side != 0 && acrossContact(edges, weights) && clearNormal(corners, edges, normal))
+    {
+        *direction = normal * (side / normal_length);
+        distance = gap.dot(*direction);
+    }
+    else if (distance > tiny)
+    {
+        *direction = gap * (1.0 / distance);
+    }
+    else
+    {
+        *direction = normal_length > tiny ? normal * ((side < 0 ? -1.0 : 1.0) / normal_length) : Vec3{0.0, 1.0, 0.0};
+    }
+    return distance;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Cubes of the same size over a box, each listing the items whose own boxes reach into it.
+struct CubeGrid
+{
+    Vec3         origin;
+    double       size = 1;
+    int          counts[3] = {1, 1, 1};
+    QVector<int> starts;  // where each cube's items start, and where the last one's end
+    QVector<int> items;
+
+    // Cubes covering the box from low to high, at least big enough.
+    CubeGrid(const Vec3& low, const Vec3& high, double wanted_size)
+        : origin(low)
+        , size(wanted_size)
+    {
+        const double extent[3] = {high.x - low.x, high.y - low.y, high.z - low.z};
+        auto total = [this, &extent]()
+        {
+            qint64 cubes = 1;
+            for (int k = 0; k < 3; ++k)
+            {
+                counts[k] = qMax(1, qCeil(extent[k] / size));
+                cubes *= counts[k];
+            }
+            return cubes;
+        };
+        while (total() > most_cubes)
+        {
+            size *= 2;
+        }
+    }
+
+    void indexOf(const Vec3& point, int index[3]) const
+    {
+        const double offset[3] = {point.x - origin.x, point.y - origin.y, point.z - origin.z};
+        for (int k = 0; k < 3; ++k)
+        {
+            index[k] = qBound(0, qFloor(offset[k] / size), counts[k] - 1);
+        }
+    }
+
+    int cubeOf(const Vec3& point) const
+    {
+        int index[3];
+        indexOf(point, index);
+        return (index[2] * counts[1] + index[1]) * counts[0] + index[0];
+    }
+
+    // Visits each cube the box from low to high reaches into.
+    template <typename Visit>
+    void forEachCube(const Vec3& low, const Vec3& high, Visit visit) const
+    {
+        int from[3];
+        int to[3];
+        indexOf(low, from);
+        indexOf(high, to);
+        for (int z = from[2]; z <= to[2]; ++z)
+        {
+            for (int y = from[1]; y <= to[1]; ++y)
+            {
+                for (int x = from[0]; x <= to[0]; ++x)
+                {
+                    visit((z * counts[1] + y) * counts[0] + x);
+                }
+            }
+        }
+    }
+
+    // Sorts the items into the cubes, each into all its box reaches into; bounds(item, low, high) gives the box.
+    template <typename Bounds>
+    void fill(int item_count, Bounds bounds)
+    {
+        starts = QVector<int>(counts[0] * counts[1] * counts[2] + 1, 0);
+        for (int pass = 0; pass < 2; ++pass)
+        {
+            QVector<int> next = starts;
+            for (int item = 0; item < item_count; ++item)
+            {
+                Vec3 low;
+                Vec3 high;
+                bounds(item, &low, &high);
+                forEachCube(low, high, [this, pass, item, &next](int cube)
+                {
+                    if (pass == 0)
+                    {
+                        ++starts[cube + 1];
+                    }
+                    else
+                    {
+                        items[next[cube]++] = item;
+                    }
+                });
+            }
+            if (pass == 0)
+            {
+                for (int cube = 1; cube < starts.size(); ++cube)
+                {
+                    starts[cube] += starts.at(cube - 1);
+                }
+                items = QVector<int>(starts.last());
+            }
+        }
+    }
+};
+
+//---------------------------------------------------------------------------------------------------------------------
+quint64 pairKey(int a, int b)
+{
+    return (static_cast<quint64>(qMin(a, b)) << 32) | static_cast<quint32>(qMax(a, b));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 quint64 edgeKey(quint32 a, quint32 b)
 {
     return (static_cast<quint64>(qMin(a, b)) << 32) | qMax(a, b);
@@ -202,12 +552,26 @@ void ClothSolver::setFriction(qreal friction)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief Switches the cloth keeping from passing through itself on or off from the next step on; off, pieces can be
+/// sewn together through each other.
+void ClothSolver::setSelfContact(bool self_contact)
+{
+    m_settings.self_contact = self_contact;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief Adds a piece of cloth: its flat mesh, which gives its rest shape, and where its vertices start out in cm.
 /// Returns the number of its first vertex; stitches and pins count vertices over all pieces.
 quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions)
 {
     const int offset = vertexCount();
     const int count = mesh.vertexCount();
+    const int piece = m_pieces.isEmpty() ? 0 : m_pieces.last() + 1;
+    if (m_piece_start.isEmpty())
+    {
+        m_piece_start.append(0);
+    }
+    m_piece_start.append(offset + count);
     for (int i = 0; i < count; ++i)
     {
         const QVector3D start = i < positions.size() ? positions.at(i) : QVector3D();
@@ -216,6 +580,8 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
         m_last_velocity << 0.0 << 0.0 << 0.0;
         m_mass << 0.0;
         m_pinned << false;
+        m_pieces << piece;
+        m_rest << mesh.rest_positions.at(i);
     }
 
     // A third of each triangle's weight goes to each corner. Each edge resists stretching; across each inner
@@ -238,6 +604,10 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
     {
         m_mass[i] = qMax(m_mass.at(i), min_mass);
     }
+    for (const quint32 index : mesh.indices)
+    {
+        m_faces.append(offset + static_cast<int>(index));
+    }
 
     auto rest_distance = [&mesh](int a, int b)
     {
@@ -251,6 +621,7 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
         const int a = static_cast<int>(edge >> 32);
         const int b = static_cast<int>(edge & 0xffffffffu);
         m_springs.append({offset + a, offset + b, rest_distance(a, b), m_settings.stretch_stiffness});
+        m_edges << offset + a << offset + b;
 
         const QVector<int> opposite = edge_opposites.value(edge);
         if (opposite.size() == 2)
@@ -392,28 +763,47 @@ void ClothSolver::step(qreal time_step)
     m_stepped = true;
 
     findContacts();
+    findSelfContacts();
+    for (int i = 0; i < m_self_bound.size(); ++i)
+    {
+        const Vec3 start = load(m_previous, i);
+        const Vec3 guess = load(m_position, i);
+        const double travelled = (guess - start).length();
+        if (travelled > m_self_bound.at(i))
+        {
+            store(m_position, i, start + (guess - start) * (m_self_bound.at(i) / travelled));
+        }
+    }
 
     // Vertices of one colour share no spring or stitch, so they can move at the same time. Each writes only its own
-    // position, which mustn't be shared with another list then.
+    // position, which mustn't be shared with another list then. Cloth touching itself can bring vertices of one colour
+    // together, so they see each other where they were when the colour started.
     m_position.detach();
-    auto solve = [this, h](const int& vertex)
-    {
-        if (!m_pinned.at(vertex))
-        {
-            solveVertex(vertex, h);
-        }
-    };
     for (int iteration = 0; iteration < m_settings.iterations; ++iteration)
     {
         for (QVector<int>& color : m_colors)
         {
             if (color.size() >= parallel_colour)
             {
-                QtConcurrent::blockingMap(color, solve);
+                m_snapshot = m_position;
+                m_snapshot.detach();
+                QtConcurrent::blockingMap(color, [this, h](const int& vertex)
+                {
+                    if (!m_pinned.at(vertex))
+                    {
+                        solveVertex(vertex, h, m_snapshot);
+                    }
+                });
             }
             else
             {
-                std::for_each(color.cbegin(), color.cend(), solve);
+                for (const int vertex : color)
+                {
+                    if (!m_pinned.at(vertex))
+                    {
+                        solveVertex(vertex, h, m_position);
+                    }
+                }
             }
         }
     }
@@ -421,7 +811,8 @@ void ClothSolver::step(qreal time_step)
     const double kept = qMax(0.0, 1.0 - m_settings.air_damping * h);
     for (int i = 0; i < vertexCount(); ++i)
     {
-        store(m_velocity, i, m_pinned.at(i) ? Vec3() : (load(m_position, i) - load(m_previous, i)) * (kept / h));
+        const bool still = m_pinned.at(i) || m_stopped.value(i, 0) != 0;
+        store(m_velocity, i, still ? Vec3() : (load(m_position, i) - load(m_previous, i)) * (kept / h));
     }
 }
 
@@ -444,9 +835,15 @@ void ClothSolver::prepare()
         neighbours[spring.b].append(spring.a);
     }
 
+    m_stitched = QVector<QVector<int>>(count);
     for (int s = 0; s < m_stitches.size(); ++s)
     {
         const StitchTerm& stitch = m_stitches.at(s);
+        for (const int end : {stitch.edge_start, stitch.edge_end})
+        {
+            m_stitched[stitch.vertex].append(end);
+            m_stitched[end].append(stitch.vertex);
+        }
         QVector<int> involved{stitch.vertex, stitch.edge_start};
         m_vertex_stitches[stitch.vertex].append({s, 1.0});
         if (stitch.edge_start == stitch.edge_end)
@@ -466,6 +863,48 @@ void ClothSolver::prepare()
                 if (a != b)
                 {
                     neighbours[a].append(b);
+                }
+            }
+        }
+    }
+
+    for (QVector<int>& stitched : m_stitched)
+    {
+        std::sort(stitched.begin(), stitched.end());
+        stitched.erase(std::unique(stitched.begin(), stitched.end()), stitched.end());
+    }
+
+    // Across a seam, the cloth near the stitched vertices on one side is next to the cloth near their partners on the
+    // other, as it is next to itself within a piece; also where a piece is sewn to itself, as a sleeve is.
+    m_seam_neighbours.clear();
+    auto near_at_rest = [this](int vertex)
+    {
+        QVector<int> near_vertex;
+        const int piece = m_pieces.at(vertex);
+        for (int other = m_piece_start.at(piece); other < m_piece_start.at(piece + 1); ++other)
+        {
+            const QPointF apart = m_rest.at(other) - m_rest.at(vertex);
+            if (QPointF::dotProduct(apart, apart) < rest_neighbours * rest_neighbours)
+            {
+                near_vertex.append(other);
+            }
+        }
+        return near_vertex;
+    };
+    for (int vertex = 0; vertex < count; ++vertex)
+    {
+        for (const int partner : m_stitched.at(vertex))
+        {
+            if (partner > vertex)
+            {
+                const QVector<int> here = near_at_rest(vertex);
+                const QVector<int> there = near_at_rest(partner);
+                for (const int a : here)
+                {
+                    for (const int b : there)
+                    {
+                        m_seam_neighbours.insert(pairKey(a, b));
+                    }
                 }
             }
         }
@@ -493,6 +932,7 @@ void ClothSolver::prepare()
     }
 
     m_contacts.clear();
+    m_self_found_at.clear();
     m_prepared = true;
 }
 
@@ -548,7 +988,7 @@ void ClothSolver::findContacts()
 
 //---------------------------------------------------------------------------------------------------------------------
 // Moves one vertex to where its forces balance, holding all others still: one Newton step on its own energy.
-void ClothSolver::solveVertex(int vertex, double time_step)
+void ClothSolver::solveVertex(int vertex, double time_step, const QVector<double>& others)
 {
     const double h = time_step;
     const Vec3 position = load(m_position, vertex);
@@ -594,6 +1034,43 @@ void ClothSolver::solveVertex(int vertex, double time_step)
         const Vec3 gap = load(m_position, stitch.vertex) - target;
         force -= gap * (m_settings.stitch_stiffness * role.weight);
         hessian.addIdentity(m_settings.stitch_stiffness * role.weight * role.weight);
+    }
+
+    // Cloth closer to itself than its thickness is pushed apart, along the line between the closest points. Parts that
+    // have passed through each other during the step are pushed back to the sides they started the step on.
+    for (int r = m_self_role_start.value(vertex); r < m_self_role_start.value(vertex + 1); ++r)
+    {
+        const SelfContactRole& role = m_self_roles.at(r);
+        const SelfContact& contact = m_self_contacts.at(role.contact);
+        if (!contact.live)
+        {
+            continue;
+        }
+        Vec3 corners[4];
+        for (int k = 0; k < 4; ++k)
+        {
+            corners[k] = k == role.role ? position : load(others, contact.vertices[k]);
+        }
+        double weights[4];
+        const Vec3 gap = contactGap(corners, contact.edges, weights);
+        Vec3 normal;
+        const double distance = contactDistance(corners, contact.edges, weights, gap, contact.side, &normal);
+        if (distance < m_settings.thickness)
+        {
+            const double weight = weights[role.role];
+            const double k = m_settings.self_contact_stiffness;
+            force += normal * (k * (m_settings.thickness - distance) * weight);
+            hessian.addOuter(normal, k * weight * weight);
+
+            // Damping slows the parts coming together or apart, so cloth landing on cloth doesn't bounce.
+            Vec3 closing;
+            for (int c = 0; c < 4; ++c)
+            {
+                closing += (corners[c] - load(m_previous, contact.vertices[c])) * weights[c];
+            }
+            force -= normal * (damping * k * weight * normal.dot(closing));
+            hessian.addOuter(normal, damping * k * weight * weight);
+        }
     }
 
     const int triangle = m_contact_triangle.value(vertex, -1);
@@ -647,6 +1124,306 @@ void ClothSolver::solveVertex(int vertex, double time_step)
                 moved_to = start + (moved_to - start) * (reach / travelled);
             }
         }
+
+        // Nor may it go further towards other cloth than it was searched for.
+        const double bound = m_self_bound.value(vertex, std::numeric_limits<double>::infinity());
+        const Vec3 start = load(m_previous, vertex);
+        const double travelled = (moved_to - start).length();
+        const bool stopped = travelled > bound;
+        if (stopped)
+        {
+            moved_to = start + (moved_to - start) * (bound / travelled);
+        }
+        if (vertex < m_stopped.size())
+        {
+            m_stopped[vertex] = stopped ? 1 : 0;
+        }
         store(m_position, vertex, moved_to);
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Finds the parts of the cloth that may touch each other during the step: each vertex and the triangles, and each edge
+// and the edges, that were near when the step started, or further apart by as much as they are heading this step.
+// Parts sewn to each other are left out.
+void ClothSolver::findSelfContacts()
+{
+    const int count = vertexCount();
+    m_self_bound.clear();
+    m_stopped = QVector<char>(count, 0);
+    if (!m_settings.self_contact || m_faces.isEmpty())
+    {
+        m_self_contacts.clear();
+        m_self_roles.clear();
+        m_self_role_start = QVector<int>(count + 1, 0);
+        m_self_found_at.clear();
+        return;
+    }
+
+    QVector<double> heading(count, 0.0);
+    for (int i = 0; i < count; ++i)
+    {
+        heading[i] = qMin((load(m_inertial, i) - load(m_previous, i)).length(), self_reach_limit);
+    }
+
+    // The contacts found in an earlier step still do while no vertex has moved, and is heading, further than half the
+    // margin from where they were found: parts that weren't near then can't touch yet.
+    bool still = m_self_found_at.size() == m_previous.size();
+    for (int i = 0; i < count && still; ++i)
+    {
+        still = (load(m_previous, i) - load(m_self_found_at, i)).length() + heading.at(i) <= self_margin / 2.0;
+    }
+    if (!still)
+    {
+        m_self_contacts.clear();
+        findSelfContactsAround(heading);
+        m_self_found_at = m_previous;
+    }
+
+    // Which sides the parts start the step on, and how far their vertices may move in it.
+    m_self_bound = QVector<double>(count, std::numeric_limits<double>::infinity());
+    for (SelfContact& contact : m_self_contacts)
+    {
+        startSelfContact(&contact, heading);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Searches the cloth for the parts near each other, as findSelfContacts() says, from where the vertices are now and
+// how far they are heading, and lists which contacts each vertex takes part in.
+void ClothSolver::findSelfContactsAround(const QVector<double>& heading)
+{
+    const int count = vertexCount();
+    double furthest = 0;
+    const double infinite = std::numeric_limits<double>::infinity();
+    Vec3 low{infinite, infinite, infinite};
+    Vec3 high{-infinite, -infinite, -infinite};
+    for (int i = 0; i < count; ++i)
+    {
+        const Vec3 start = load(m_previous, i);
+        furthest = qMax(furthest, heading.at(i));
+        low = {qMin(low.x, start.x), qMin(low.y, start.y), qMin(low.z, start.z)};
+        high = {qMax(high.x, start.x), qMax(high.y, start.y), qMax(high.z, start.z)};
+    }
+
+    // Two parts can come together by what both are heading.
+    const double close_by = m_settings.thickness + self_margin;
+    const double reach = close_by + 2.0 * furthest;
+    const Vec3 around{reach, reach, reach};
+
+    auto bounds = [this](const int* vertices, int count_of, double grow, Vec3* box_low, Vec3* box_high)
+    {
+        const double infinite_box = std::numeric_limits<double>::infinity();
+        *box_low = {infinite_box, infinite_box, infinite_box};
+        *box_high = {-infinite_box, -infinite_box, -infinite_box};
+        for (int k = 0; k < count_of; ++k)
+        {
+            const Vec3 point = load(m_previous, vertices[k]);
+            *box_low = {qMin(box_low->x, point.x - grow), qMin(box_low->y, point.y - grow),
+                        qMin(box_low->z, point.z - grow)};
+            *box_high = {qMax(box_high->x, point.x + grow), qMax(box_high->y, point.y + grow),
+                         qMax(box_high->z, point.z + grow)};
+        }
+    };
+    auto heading_of = [&heading](const int* vertices, int count_of)
+    {
+        double most = 0;
+        for (int k = 0; k < count_of; ++k)
+        {
+            most = qMax(most, heading.at(vertices[k]));
+        }
+        return most;
+    };
+
+    // Each vertex and the triangles near it.
+    CubeGrid faces(low - around, high + around, qMax(reach, smallest_cube));
+    faces.fill(m_faces.size() / 3, [this, &bounds, reach](int face, Vec3* box_low, Vec3* box_high)
+    {
+        bounds(m_faces.constData() + 3 * face, 3, reach, box_low, box_high);
+    });
+    for (int vertex = 0; vertex < count; ++vertex)
+    {
+        const Vec3 point = load(m_previous, vertex);
+        const int cube = faces.cubeOf(point);
+        for (int i = faces.starts.at(cube); i < faces.starts.at(cube + 1); ++i)
+        {
+            const int* corners = m_faces.constData() + 3 * faces.items.at(i);
+            bool related = false;
+            for (int k = 0; k < 3; ++k)
+            {
+                related = related || corners[k] == vertex || sewnTogether(vertex, corners[k]);
+            }
+            related = related || closeAtRest(&vertex, 1, corners, 3);
+            if (!related)
+            {
+                SelfContact contact;
+                contact.vertices[0] = vertex;
+                std::copy(corners, corners + 3, contact.vertices + 1);
+                addSelfContact(contact, close_by + heading.at(vertex) + heading_of(corners, 3));
+            }
+        }
+    }
+
+    // Each edge and the edges near it, each pair once: found in the cubes the edge passes through.
+    CubeGrid edges(low - around, high + around, qMax(reach, smallest_cube));
+    edges.fill(m_edges.size() / 2, [this, &bounds, reach](int edge, Vec3* box_low, Vec3* box_high)
+    {
+        bounds(m_edges.constData() + 2 * edge, 2, reach, box_low, box_high);
+    });
+    QVector<int> seen(m_edges.size() / 2, -1);
+    QVector<int> near_edge;
+    for (int edge = 0; edge < m_edges.size() / 2; ++edge)
+    {
+        const int* first = m_edges.constData() + 2 * edge;
+        Vec3 box_low;
+        Vec3 box_high;
+        bounds(first, 2, 0.0, &box_low, &box_high);
+        near_edge.clear();
+        edges.forEachCube(box_low, box_high, [&edges, &seen, &near_edge, edge](int cube)
+        {
+            for (int i = edges.starts.at(cube); i < edges.starts.at(cube + 1); ++i)
+            {
+                const int other = edges.items.at(i);
+                if (other > edge && seen.at(other) != edge)
+                {
+                    seen[other] = edge;
+                    near_edge.append(other);
+                }
+            }
+        });
+        for (const int other : near_edge)
+        {
+            const int* second = m_edges.constData() + 2 * other;
+            bool related = false;
+            for (int j = 0; j < 2 && !related; ++j)
+            {
+                for (int k = 0; k < 2 && !related; ++k)
+                {
+                    related = first[j] == second[k] || sewnTogether(first[j], second[k]);
+                }
+            }
+            related = related || closeAtRest(first, 2, second, 2);
+            if (!related)
+            {
+                SelfContact contact;
+                contact.edges = true;
+                contact.vertices[0] = first[0];
+                contact.vertices[1] = first[1];
+                contact.vertices[2] = second[0];
+                contact.vertices[3] = second[1];
+                addSelfContact(contact, close_by + heading_of(first, 2) + heading_of(second, 2));
+            }
+        }
+    }
+
+    // Which contacts each vertex takes part in.
+    m_self_role_start = QVector<int>(count + 1, 0);
+    for (const SelfContact& contact : m_self_contacts)
+    {
+        for (const int vertex : contact.vertices)
+        {
+            ++m_self_role_start[vertex + 1];
+        }
+    }
+    for (int vertex = 0; vertex < count; ++vertex)
+    {
+        m_self_role_start[vertex + 1] += m_self_role_start.at(vertex);
+    }
+    m_self_roles = QVector<SelfContactRole>(m_self_role_start.last());
+    QVector<int> next = m_self_role_start;
+    for (int c = 0; c < m_self_contacts.size(); ++c)
+    {
+        for (int k = 0; k < 4; ++k)
+        {
+            m_self_roles[next[m_self_contacts.at(c).vertices[k]]++] = {c, k};
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Keeps a contact if its parts were no further apart than that when the step started, with the side they were on.
+void ClothSolver::addSelfContact(const SelfContact& contact, double furthest)
+{
+    Vec3 corners[4];
+    for (int k = 0; k < 4; ++k)
+    {
+        corners[k] = load(m_previous, contact.vertices[k]);
+    }
+    double weights[4];
+    if (contactGap(corners, contact.edges, weights).length() <= furthest)
+    {
+        m_self_contacts.append(contact);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Notes which side of each other the parts of a contact start the step on and whether they can touch during it, and
+// limits how far their vertices may move in it.
+void ClothSolver::startSelfContact(SelfContact* contact, const QVector<double>& heading)
+{
+    Vec3 corners[4];
+    for (int k = 0; k < 4; ++k)
+    {
+        corners[k] = load(m_previous, contact->vertices[k]);
+    }
+    double weights[4];
+    const Vec3 gap = contactGap(corners, contact->edges, weights);
+    const Vec3 normal = contactNormal(corners, contact->edges);
+    const double along = gap.dot(normal);
+    contact->side = 0;
+    if (clearNormal(corners, contact->edges, normal) && qAbs(along) >= lying_on * gap.length() * normal.length()
+        && qAbs(along) > tiny)
+    {
+        contact->side = along < 0 ? -1.0 : 1.0;
+    }
+
+    // The first part is a vertex or the first edge, the second the rest.
+    const int first_count = contact->edges ? 2 : 1;
+    double first_heading = 0;
+    double second_heading = 0;
+    for (int k = 0; k < 4; ++k)
+    {
+        double& part = k < first_count ? first_heading : second_heading;
+        part = qMax(part, heading.at(contact->vertices[k]));
+    }
+    contact->live = gap.length() <= m_settings.thickness + self_margin / 4.0 + first_heading + second_heading;
+
+    // Only parts lying on each other can pass through each other.
+    if (contact->side != 0)
+    {
+        const double bound = self_bound_share * qMax(gap.length(), m_settings.thickness);
+        for (const int vertex : contact->vertices)
+        {
+            m_self_bound[vertex] = qMin(m_self_bound.at(vertex), bound);
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Whether a vertex and a triangle, or two edges, are neighbours: in the same flat piece, or across a seam.
+bool ClothSolver::closeAtRest(const int* first, int first_count, const int* second, int second_count) const
+{
+    const bool same_piece = m_pieces.at(first[0]) == m_pieces.at(second[0]);
+    bool close = false;
+    for (int j = 0; j < first_count && !close; ++j)
+    {
+        for (int k = 0; k < second_count && !close; ++k)
+        {
+            if (same_piece)
+            {
+                const QPointF apart = m_rest.at(first[j]) - m_rest.at(second[k]);
+                close = QPointF::dotProduct(apart, apart) < rest_neighbours * rest_neighbours;
+            }
+            close = close || m_seam_neighbours.contains(pairKey(first[j], second[k]));
+        }
+    }
+    return close;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Whether a stitch holds the two vertices together.
+bool ClothSolver::sewnTogether(int a, int b) const
+{
+    const QVector<int>& stitched = m_stitched.at(a);
+    return std::binary_search(stitched.cbegin(), stitched.cend(), b);
 }

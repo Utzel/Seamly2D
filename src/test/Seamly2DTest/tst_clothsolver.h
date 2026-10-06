@@ -39,6 +39,9 @@ private slots:
     void stitchesCloseTheGap() const;
     void colliderMeasuresDistance() const;
     void clothRestsOnSphere() const;
+    void clothLandsOnCloth() const;
+    void foldedClothKeepsItsLayers() const;
+    void seamsCloseDespiteSelfContact() const;
 
 private:
     Q_DISABLE_COPY(TST_ClothSolver)
