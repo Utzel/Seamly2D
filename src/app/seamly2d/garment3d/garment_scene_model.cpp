@@ -33,6 +33,7 @@
 #include "../vgarment/piece_outline.h"
 #include "avatar_geometry.h"
 #include "piece_geometry.h"
+#include "stitch_geometry.h"
 
 namespace
 {
@@ -42,11 +43,71 @@ const float board_gap = 40.0f;
 // The checks pieces can be shown in repeat every so many cm, across the grain and along it.
 const qreal check_repeat = 4.0;
 
+// Stitches an edge under the mouse would get are drawn this much thicker than stitches, so they show over them.
+const qreal preview_scale = 1.8;
+
 //---------------------------------------------------------------------------------------------------------------------
 // The pattern piece a row shows, or shows the mirrored copy of.
 quint32 patternPiece(quint32 id)
 {
     return PieceOutline::isMirrorId(id) ? PieceOutline::mirrorId(id) : id;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The point of the triangle nearest to the given point, as how much of each corner it takes.
+QVector3D nearestWeights(const QVector3D& point, const QVector3D& a, const QVector3D& b, const QVector3D& c)
+{
+    const QVector3D ab = b - a;
+    const QVector3D ac = c - a;
+    const QVector3D ap = point - a;
+    const float d1 = QVector3D::dotProduct(ab, ap);
+    const float d2 = QVector3D::dotProduct(ac, ap);
+    if (d1 <= 0 && d2 <= 0)
+    {
+        return QVector3D(1, 0, 0);
+    }
+
+    const QVector3D bp = point - b;
+    const float d3 = QVector3D::dotProduct(ab, bp);
+    const float d4 = QVector3D::dotProduct(ac, bp);
+    if (d3 >= 0 && d4 <= d3)
+    {
+        return QVector3D(0, 1, 0);
+    }
+
+    const float vc = d1 * d4 - d3 * d2;
+    if (vc <= 0 && d1 >= 0 && d3 <= 0)
+    {
+        const float v = d1 / (d1 - d3);
+        return QVector3D(1 - v, v, 0);
+    }
+
+    const QVector3D cp = point - c;
+    const float d5 = QVector3D::dotProduct(ab, cp);
+    const float d6 = QVector3D::dotProduct(ac, cp);
+    if (d6 >= 0 && d5 <= d6)
+    {
+        return QVector3D(0, 0, 1);
+    }
+
+    const float vb = d5 * d2 - d1 * d6;
+    if (vb <= 0 && d2 >= 0 && d6 <= 0)
+    {
+        const float w = d2 / (d2 - d6);
+        return QVector3D(1 - w, 0, w);
+    }
+
+    const float va = d3 * d6 - d5 * d4;
+    if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0)
+    {
+        const float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return QVector3D(0, 1 - w, w);
+    }
+
+    const float area = va + vb + vc;
+    const float v = vb / area;
+    const float w = vc / area;
+    return QVector3D(1 - v - w, v, w);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -111,6 +172,12 @@ QVariant GarmentSceneModel::data(const QModelIndex& index, int role) const
             case PieceOutlineRole:
                 value = QVariant::fromValue(static_cast<QObject*>(row.outline));
                 break;
+            case PieceStitchesRole:
+                value = QVariant::fromValue(static_cast<QObject*>(row.stitch_geometry));
+                break;
+            case PieceStitchPreviewRole:
+                value = QVariant::fromValue(static_cast<QObject*>(row.preview_geometry));
+                break;
             case SelectedRole:
                 value = patternPiece(row.id) == m_selected_piece;
                 break;
@@ -132,6 +199,8 @@ QHash<int, QByteArray> GarmentSceneModel::roleNames() const
             {PieceColorRole, QByteArrayLiteral("pieceColor")},
             {PieceGeometryRole, QByteArrayLiteral("pieceGeometry")},
             {PieceOutlineRole, QByteArrayLiteral("pieceOutline")},
+            {PieceStitchesRole, QByteArrayLiteral("pieceStitches")},
+            {PieceStitchPreviewRole, QByteArrayLiteral("pieceStitchPreview")},
             {SelectedRole, QByteArrayLiteral("selected")},
             {PlacedRole, QByteArrayLiteral("placed")}};
 }
@@ -160,8 +229,11 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.positions = pieces.at(i).positions;
             row.grain_angle = pieces.at(i).grain_angle;
             row.placed = !row.positions.isEmpty();
+            row.stitches = pieces.at(i).stitches;
+            row.preview = pieces.at(i).preview;
             row.geometry->setMesh(row.mesh, row.positions, m_strain_shown, row.grain_angle);
             row.outline->setOutline(row.mesh, row.positions);
+            showStitches(row);
         }
         if (!m_rows.isEmpty())
         {
@@ -176,6 +248,8 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
         {
             row.geometry->deleteLater();
             row.outline->deleteLater();
+            row.stitch_geometry->deleteLater();
+            row.preview_geometry->deleteLater();
         }
         m_rows.clear();
 
@@ -195,6 +269,13 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.outline = new PieceGeometry();
             row.outline->setParent(this);
             row.outline->setOutline(piece.mesh, piece.positions);
+            row.stitches = piece.stitches;
+            row.preview = piece.preview;
+            row.stitch_geometry = new StitchGeometry();
+            row.stitch_geometry->setParent(this);
+            row.preview_geometry = new StitchGeometry();
+            row.preview_geometry->setParent(this);
+            showStitches(row);
             m_rows.append(row);
         }
         endResetModel();
@@ -232,6 +313,37 @@ void GarmentSceneModel::setPiecePositions(quint32 id, const QVector<QVector3D>& 
             row.positions = positions;
             row.geometry->setMesh(row.mesh, positions, m_strain_shown, row.grain_angle);
             row.outline->setOutline(row.mesh, positions);
+            showStitches(row);
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The topstitching of every piece shown, by its id; pieces left out have none.
+void GarmentSceneModel::setStitches(const QHash<quint32, QVector<ThreadStitch>>& stitches)
+{
+    for (Row& row : m_rows)
+    {
+        const QVector<ThreadStitch> wanted = stitches.value(row.id);
+        if (wanted != row.stitches)
+        {
+            row.stitches = wanted;
+            row.stitch_geometry->setStitches(row.mesh, row.stitches, row.positions);
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The topstitching the edge under the mouse would get, by the ids of the pieces it shows on.
+void GarmentSceneModel::setStitchPreview(const QHash<quint32, QVector<ThreadStitch>>& preview)
+{
+    for (Row& row : m_rows)
+    {
+        const QVector<ThreadStitch> wanted = preview.value(row.id);
+        if (wanted != row.preview)
+        {
+            row.preview = wanted;
+            row.preview_geometry->setStitches(row.mesh, row.preview, row.positions, preview_scale);
         }
     }
 }
@@ -371,6 +483,43 @@ void GarmentSceneModel::dragTo(qreal x, qreal y, qreal z)
 void GarmentSceneModel::dropPiece()
 {
     emit dropRequested();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML with a point picked on a piece, in the coordinates its geometry is in: where that point is
+/// in the flat piece, in cm, taken from the nearest point of the piece's mesh as it is shown. Nothing for a piece the
+/// scene doesn't show.
+QVariant GarmentSceneModel::restPoint(int id, const QVector3D& point) const
+{
+    for (const Row& row : m_rows)
+    {
+        if (row.id != static_cast<quint32>(id) || row.mesh.triangleCount() == 0)
+        {
+            continue;
+        }
+
+        const QVector<QVector3D> placed = PieceGeometry::placedPositions(row.mesh, row.positions);
+        float nearest = std::numeric_limits<float>::max();
+        QPointF rest;
+        for (int i = 0; i + 2 < row.mesh.indices.size(); i += 3)
+        {
+            const int a = static_cast<int>(row.mesh.indices.at(i));
+            const int b = static_cast<int>(row.mesh.indices.at(i + 1));
+            const int c = static_cast<int>(row.mesh.indices.at(i + 2));
+            const QVector3D weights = nearestWeights(point, placed.at(a), placed.at(b), placed.at(c));
+            const QVector3D on_mesh = placed.at(a) * weights.x() + placed.at(b) * weights.y()
+                                      + placed.at(c) * weights.z();
+            const float distance = (on_mesh - point).lengthSquared();
+            if (distance < nearest)
+            {
+                nearest = distance;
+                rest = row.mesh.rest_positions.at(a) * weights.x() + row.mesh.rest_positions.at(b) * weights.y()
+                       + row.mesh.rest_positions.at(c) * weights.z();
+            }
+        }
+        return rest;
+    }
+    return QVariant();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -582,4 +731,12 @@ void GarmentSceneModel::updateSceneBounds()
     m_scene_center = (minimum + maximum) / 2.0f;
     m_scene_radius = static_cast<qreal>((maximum - minimum).length()) / 2.0;
     emit sceneBoundsChanged();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Lays the row's topstitching, and the stitches an edge under the mouse would get, onto its mesh as it is shown.
+void GarmentSceneModel::showStitches(const Row& row) const
+{
+    row.stitch_geometry->setStitches(row.mesh, row.stitches, row.positions);
+    row.preview_geometry->setStitches(row.mesh, row.preview, row.positions, preview_scale);
 }

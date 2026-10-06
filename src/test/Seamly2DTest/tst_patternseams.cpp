@@ -38,6 +38,7 @@
 #include "../vtools/undocommands/save_arrangements.h"
 #include "../vtools/undocommands/save_fabrics.h"
 #include "../vtools/undocommands/save_seams.h"
+#include "../vtools/undocommands/save_topstitches.h"
 
 namespace
 {
@@ -265,11 +266,15 @@ void TST_PatternSeams::arrangementsAreReadBack() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Whichever is made first, the seams come before the arrangements, those before the fabrics, and all before the
-// draft blocks. Pieces can be arranged on every part of the body.
+// Whichever is made first, the seams come before the arrangements, those before the fabrics, those before the
+// topstitching, and all before the draft blocks. Pieces can be arranged on every part of the body.
 void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
 {
     SeamsPattern pattern;
+    VTopstitches topstitches;
+    topstitches.all = true;
+    topstitches.segments = {{10, 1, 2, false}, {20, 3, 4, false}};
+    pattern.setTopstitches(topstitches);
     VGarmentFabrics fabrics;
     fabrics.garment = QStringLiteral("denim");
     fabrics.pieces = {{20, QStringLiteral("chiffon")}};
@@ -284,7 +289,8 @@ void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
     QCOMPARE(childTags(pattern.documentElement()),
              QStringList({QStringLiteral("version"), QStringLiteral("unit"), QStringLiteral("measurements"),
                           QStringLiteral("finalMeasurements"), QStringLiteral("seams"), QStringLiteral("arrangements"),
-                          QStringLiteral("fabrics"), QStringLiteral("draftBlock"), QStringLiteral("draftBlock")}));
+                          QStringLiteral("fabrics"), QStringLiteral("topstitches"), QStringLiteral("draftBlock"),
+                          QStringLiteral("draftBlock")}));
 
     QTemporaryDir folder;
     QVERIFY(folder.isValid());
@@ -354,5 +360,50 @@ void TST_PatternSeams::undoRestoresFabrics() const
 
     stack.undo();
     QCOMPARE(pattern.getFabrics(), before);
+    QCOMPARE(changes.count(), 2);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A segment is stitched as its own entry says, or as the whole garment is; with nothing stitched, nothing is stored.
+void TST_PatternSeams::topstitchesAreReadBack() const
+{
+    SeamsPattern pattern;
+    VTopstitches topstitches;
+    topstitches.segments = {{10, 1, 2, true}, {10, 2, 3, false}};
+    pattern.setTopstitches(topstitches);
+
+    QCOMPARE(pattern.getTopstitches(), topstitches);
+    QVERIFY(pattern.getTopstitches().isStitched(10, 1, 2));
+    QVERIFY(!pattern.getTopstitches().isStitched(10, 2, 3));
+    QVERIFY(!pattern.getTopstitches().isStitched(10, 3, 4));
+
+    topstitches.all = true;
+    pattern.setTopstitches(topstitches);
+    QCOMPARE(pattern.getTopstitches(), topstitches);
+    QVERIFY(pattern.getTopstitches().isStitched(10, 3, 4));
+    QVERIFY(!pattern.getTopstitches().isStitched(10, 2, 3));
+
+    pattern.setTopstitches(VTopstitches());
+    QVERIFY(pattern.documentElement().firstChildElement(QStringLiteral("topstitches")).isNull());
+    QCOMPARE(pattern.getTopstitches(), VTopstitches());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_PatternSeams::undoRestoresTopstitches() const
+{
+    SeamsPattern pattern;
+    VTopstitches before;
+    before.segments = {{10, 1, 2, true}};
+    VTopstitches after = before;
+    after.all = true;
+    pattern.setTopstitches(before);
+
+    QSignalSpy changes(&pattern, &VAbstractPattern::topstitchesChanged);
+    QUndoStack stack;
+    stack.push(new SaveTopstitches(QStringLiteral("topstitch"), before, after, &pattern));
+    QCOMPARE(pattern.getTopstitches(), after);
+
+    stack.undo();
+    QCOMPARE(pattern.getTopstitches(), before);
     QCOMPARE(changes.count(), 2);
 }

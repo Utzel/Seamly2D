@@ -160,6 +160,29 @@ struct VGarmentFabrics
     QString               of(quint32 piece_id) const;
 };
 
+/// A segment of a piece's seam line, from one point of the piece's path to the next, topstitched in the 3D View or,
+/// with the garment stitched all over, left without.
+struct VTopstitch
+{
+    quint32 piece_id {NULL_ID};
+    quint32 start_node {NULL_ID};
+    quint32 end_node {NULL_ID};
+    bool    stitched {true};
+
+    bool    operator==(const VTopstitch& other) const;
+};
+
+/// Topstitching for the 3D View: along every segment of every piece, or along none, but for the segments that say
+/// otherwise.
+struct VTopstitches
+{
+    bool                all {false};
+    QVector<VTopstitch> segments {};
+
+    bool                operator==(const VTopstitches& other) const;
+    bool                isStitched(quint32 piece_id, quint32 start_node, quint32 end_node) const;
+};
+
 struct GroupAttributes
 {
    QString  name;
@@ -195,6 +218,9 @@ public:
 
     VGarmentFabrics                getFabrics() const;
     void                           setFabrics(const VGarmentFabrics& fabrics);
+
+    VTopstitches                   getTopstitches() const;
+    void                           setTopstitches(const VTopstitches& topstitches);
     bool                           isVariableUsed(const QStringList &variable_names) const;
 
     virtual void                   CreateEmptyFile()=0;
@@ -380,6 +406,8 @@ public:
     static const QString TagArrangement;
     static const QString TagFabrics;
     static const QString TagFabric;
+    static const QString TagTopstitches;
+    static const QString TagTopstitch;
     static const QString TagDraftBlock;
     static const QString TagGroups;
     static const QString TagGroup;
@@ -474,6 +502,7 @@ public:
     static const QString AttrPiece;
     static const QString AttrPart;
     static const QString AttrDefault;
+    static const QString AttrStitched;
 
     static const QString AttrAll;
 
@@ -590,6 +619,7 @@ signals:
     void           seamsChanged();
     void           arrangementsChanged();
     void           fabricsChanged();
+    void           topstitchesChanged();
     void           setCurrentDraftBlock(const QString &draftblock);
     void           patternHasGroups(bool value);
     void           updateGroups();

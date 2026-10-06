@@ -104,6 +104,8 @@ const QString VAbstractPattern::TagArrangements         = QStringLiteral("arrang
 const QString VAbstractPattern::TagArrangement          = QStringLiteral("arrangement");
 const QString VAbstractPattern::TagFabrics              = QStringLiteral("fabrics");
 const QString VAbstractPattern::TagFabric               = QStringLiteral("fabric");
+const QString VAbstractPattern::TagTopstitches          = QStringLiteral("topstitches");
+const QString VAbstractPattern::TagTopstitch            = QStringLiteral("topstitch");
 const QString VAbstractPattern::TagDraftBlock           = QStringLiteral("draftBlock");
 const QString VAbstractPattern::TagGroups               = QStringLiteral("groups");
 const QString VAbstractPattern::TagGroup                = QStringLiteral("group");
@@ -198,6 +200,7 @@ const QString VAbstractPattern::AttrSecondEnd           = QStringLiteral("second
 const QString VAbstractPattern::AttrPiece               = QStringLiteral("piece");
 const QString VAbstractPattern::AttrPart                = QStringLiteral("part");
 const QString VAbstractPattern::AttrDefault             = QStringLiteral("default");
+const QString VAbstractPattern::AttrStitched            = QStringLiteral("stitched");
 
 const QString VAbstractPattern::AttrAll                 = QStringLiteral("all");
 
@@ -2220,6 +2223,35 @@ QString VGarmentFabrics::of(quint32 piece_id) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+bool VTopstitch::operator==(const VTopstitch& other) const
+{
+    return piece_id == other.piece_id && start_node == other.start_node && end_node == other.end_node
+           && stitched == other.stitched;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool VTopstitches::operator==(const VTopstitches& other) const
+{
+    return all == other.all && segments == other.segments;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Whether the segment of the piece from one path point to the next is topstitched: as it says if it has an
+/// entry of its own, else as the whole garment is.
+bool VTopstitches::isStitched(quint32 piece_id, quint32 start_node, quint32 end_node) const
+{
+    bool stitched = all;
+    for (const VTopstitch& segment : segments)
+    {
+        if (segment.piece_id == piece_id && segment.start_node == start_node && segment.end_node == end_node)
+        {
+            stitched = segment.stitched;
+        }
+    }
+    return stitched;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief The seams sewing the pieces together, in the order they were made.
 ///
 /// A seam can name a piece or point that is gone, after the piece was deleted or its path edited. Such seams are
@@ -2416,11 +2448,75 @@ void VAbstractPattern::setFabrics(const VGarmentFabrics& fabrics)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Adds an empty element for the 3D garment's data where the schema wants it: the seams, the arrangements, then the
-// fabrics, all before the draft blocks, which are added at the end.
+/// @brief The garment's topstitching.
+VTopstitches VAbstractPattern::getTopstitches() const
+{
+    VTopstitches topstitches;
+    const QDomElement topstitches_element = documentElement().firstChildElement(TagTopstitches);
+    topstitches.all = !topstitches_element.isNull()
+                      && getParameterBool(topstitches_element, AttrAll, falseStr);
+    QDomElement element = topstitches_element.firstChildElement(TagTopstitch);
+    while (!element.isNull())
+    {
+        VTopstitch segment;
+        segment.piece_id = GetParametrUInt(element, AttrPiece, NULL_ID_STR);
+        segment.start_node = GetParametrUInt(element, AttrStart, NULL_ID_STR);
+        segment.end_node = GetParametrUInt(element, AttrEnd, NULL_ID_STR);
+        segment.stitched = getParameterBool(element, AttrStitched, trueStr);
+        topstitches.segments.append(segment);
+
+        element = element.nextSiblingElement(TagTopstitch);
+    }
+    return topstitches;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Replaces the topstitching, one entry per segment at most. Meant to be called by the SaveTopstitches undo
+/// command.
+void VAbstractPattern::setTopstitches(const VTopstitches& topstitches)
+{
+    QDomElement pattern = documentElement();
+    QDomElement element = pattern.firstChildElement(TagTopstitches);
+
+    if (!topstitches.all && topstitches.segments.isEmpty())
+    {
+        if (!element.isNull())
+        {
+            pattern.removeChild(element);
+        }
+    }
+    else
+    {
+        if (element.isNull())
+        {
+            element = createGarmentElement(TagTopstitches);
+        }
+        else
+        {
+            RemoveAllChildren(element);
+        }
+
+        SetAttribute(element, AttrAll, topstitches.all);
+        for (const VTopstitch& segment : topstitches.segments)
+        {
+            QDomElement tag = createElement(TagTopstitch);
+            SetAttribute(tag, AttrPiece, segment.piece_id);
+            SetAttribute(tag, AttrStart, segment.start_node);
+            SetAttribute(tag, AttrEnd, segment.end_node);
+            SetAttribute(tag, AttrStitched, segment.stitched);
+            element.appendChild(tag);
+        }
+    }
+
+    emit topstitchesChanged();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Adds an empty element for the 3D garment's data where the schema wants it: the seams, the arrangements, the fabrics,
+// then the topstitching, all before the draft blocks, which are added at the end.
 QDomElement VAbstractPattern::createGarmentElement(const QString& tag)
 {
-    const QStringList order = {TagSeams, TagArrangements, TagFabrics, TagDraftBlock};
+    const QStringList order = {TagSeams, TagArrangements, TagFabrics, TagTopstitches, TagDraftBlock};
     QDomElement pattern = documentElement();
 
     QDomElement before;

@@ -55,6 +55,9 @@ public:
     static qreal       fullStrain();
     static QVector<QColor> strainColors();
 
+    static QVector<QVector3D> placedPositions(const GarmentMesh& mesh, const QVector<QVector3D>& positions);
+    static QVector<QVector3D> vertexNormals(const GarmentMesh& mesh, const QVector<QVector3D>& placed);
+
 private:
     Q_DISABLE_COPY(PieceGeometry)
 };

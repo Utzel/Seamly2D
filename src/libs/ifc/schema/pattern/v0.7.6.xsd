@@ -196,6 +196,27 @@
             <xs:field xpath="@piece"/>
           </xs:unique>
         </xs:element>
+        <xs:element name="topstitches" minOccurs="0" maxOccurs="1">
+          <xs:complexType>
+            <xs:sequence minOccurs="0" maxOccurs="unbounded">
+              <xs:element name="topstitch" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="piece" type="xs:unsignedInt" use="required"/>
+                  <xs:attribute name="start" type="xs:unsignedInt" use="required"/>
+                  <xs:attribute name="end" type="xs:unsignedInt" use="required"/>
+                  <xs:attribute name="stitched" type="xs:boolean" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="all" type="xs:boolean"/>
+          </xs:complexType>
+          <xs:unique name="topstitchSegment">
+            <xs:selector xpath="topstitch"/>
+            <xs:field xpath="@piece"/>
+            <xs:field xpath="@start"/>
+            <xs:field xpath="@end"/>
+          </xs:unique>
+        </xs:element>
         <xs:element name="draftBlock" minOccurs="1" maxOccurs="unbounded">
           <xs:complexType>
             <xs:sequence>

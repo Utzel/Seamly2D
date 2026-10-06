@@ -53,11 +53,13 @@ class QLabel;
 class QQuickView;
 class QTimer;
 class SeamEditor;
+class StitchEditor;
 class VAbstractPattern;
 class VContainer;
 struct VPieceArrangement;
 struct VSeam;
 struct VSeamSide;
+struct VTopstitches;
 
 /// @brief Content of the 3D View dock: the pattern's pieces and an avatar fitted to the pattern's measurements, in a
 /// 3D scene that follows every edit, and the seams that sew the pieces together.
@@ -109,6 +111,11 @@ private slots:
     void               setSimulating(bool simulating);
     void               resetDrape();
     void               setFine(bool fine);
+    void               setStitching(bool stitching);
+    void               stitchEveryEdge(bool every);
+    void               updateTopstitches();
+    void               showStitches();
+    void               showStitchPreview();
     void               exportDrape();
     void               drapeFrame(int generation, const QVector<QVector3D>& positions);
     void               drapeSettled(int generation);
@@ -183,9 +190,12 @@ private:
     VAbstractPattern*          m_doc;
     GarmentSceneModel*         m_scene_model;
     SeamEditor*                m_seam_editor;
+    StitchEditor*              m_stitch_editor;
     QAction*                   m_sew_action;
     QAction*                   m_flip_action;
     QAction*                   m_remove_action;
+    QAction*                   m_topstitch_action;
+    QAction*                   m_every_edge_action;
     QAction*                   m_cancel_action;
     QAction*                   m_arrange_action;
     QAction*                   m_simulate_action;
@@ -227,6 +237,8 @@ private:
     void               sewSeam(const VSeam& seam);
     void               saveSeams(const QString& text, const QVector<VSeam>& seams);
     void               saveArrangements(const QString& text, const QVector<VPieceArrangement>& arrangements);
+    void               saveTopstitches(const VTopstitches& topstitches, const QString& text);
+    QVector<QVector<QPointF>> stitchedPaths(const VPiece& piece) const;
     void               storeArrangement(quint32 piece, const PieceArrangement& wanted, const QString& text);
     void               showArrangement(quint32 piece, const PieceArrangement& arrangement);
     void               callOffDrag();

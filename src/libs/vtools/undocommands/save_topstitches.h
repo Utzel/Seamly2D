@@ -1,7 +1,7 @@
 //---------------------------------------------------------------------------------------------------------------------
-//  @file   tst_patternseams.h
+//  @file   save_topstitches.h
 //  @author Julius
-//  @date   5 Oct, 2026
+//  @date   6 Oct, 2026
 //
 //  @copyright
 //  Copyright (C)  2026 Seamly, LLC
@@ -22,33 +22,32 @@
 //  along with Seamly2D. If not, see <http://www.gnu.org/licenses/>.
 //---------------------------------------------------------------------------------------------------------------------
 
-#ifndef TST_PATTERNSEAMS_H
-#define TST_PATTERNSEAMS_H
+#ifndef SAVE_TOPSTITCHES_H
+#define SAVE_TOPSTITCHES_H
 
-#include <QObject>
+#include <QString>
 
-class TST_PatternSeams : public QObject
+#include "vundocommand.h"
+
+/// @brief Replaces the garment's topstitching.
+class SaveTopstitches : public VUndoCommand
 {
     Q_OBJECT
 public:
-    explicit TST_PatternSeams(QObject* parent = nullptr);
+                               SaveTopstitches(const QString& text, const VTopstitches& old_topstitches,
+                                               const VTopstitches& new_topstitches, VAbstractPattern* doc,
+                                               QUndoCommand* parent = nullptr);
+    virtual                   ~SaveTopstitches() = default;
 
-private slots:
-    void seamsAreReadBack() const;
-    void seamsFollowTheSchema() const;
-    void noSeamsLeaveNoElement() const;
-    void undoRestoresSeams() const;
-    void olderPatternsAreConverted() const;
-    void arrangementsAreReadBack() const;
-    void garmentDataKeepsSchemaOrder() const;
-    void undoRestoresArrangements() const;
-    void fabricsAreReadBack() const;
-    void undoRestoresFabrics() const;
-    void topstitchesAreReadBack() const;
-    void undoRestoresTopstitches() const;
+    virtual void               undo() override;
+    virtual void               redo() override;
+    virtual int                id() const override;
 
 private:
-    Q_DISABLE_COPY(TST_PatternSeams)
+    Q_DISABLE_COPY(SaveTopstitches)
+
+    VTopstitches               m_old_topstitches;
+    VTopstitches               m_new_topstitches;
 };
 
-#endif // TST_PATTERNSEAMS_H
+#endif // SAVE_TOPSTITCHES_H

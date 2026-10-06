@@ -35,9 +35,11 @@
 #include <QVector>
 
 #include "../vgarment/garment_mesh.h"
+#include "../vgarment/topstitch.h"
 
 class AvatarGeometry;
 class PieceGeometry;
+class StitchGeometry;
 
 /// @brief What the 3D scene shows, for the scene's QML: the pieces, one row each, and the avatar.
 ///
@@ -71,6 +73,8 @@ public:
         PieceColorRole,
         PieceGeometryRole,
         PieceOutlineRole,
+        PieceStitchesRole,
+        PieceStitchPreviewRole,
         SelectedRole,
         PlacedRole
     };
@@ -83,6 +87,8 @@ public:
         GarmentMesh        mesh;
         QVector<QVector3D> positions;  ///< where the piece is put, in scene coordinates; none for the board
         qreal              grain_angle = 90.0;  ///< degrees anticlockwise from the piece's x axis
+        QVector<ThreadStitch> stitches;       ///< its topstitching, on its mesh
+        QVector<ThreadStitch> preview;        ///< the topstitching an edge under the mouse would get
     };
 
     explicit               GarmentSceneModel(QObject* parent = nullptr);
@@ -93,6 +99,8 @@ public:
 
     void                   setPieces(const QVector<Piece>& pieces);
     void                   setPiecePositions(quint32 id, const QVector<QVector3D>& positions);
+    void                   setStitches(const QHash<quint32, QVector<ThreadStitch>>& stitches);
+    void                   setStitchPreview(const QHash<quint32, QVector<ThreadStitch>>& preview);
     bool                   isPlaced(quint32 id) const;
     QVector<Piece>         placedPieces() const;
     void                   clear();
@@ -131,6 +139,7 @@ public:
     Q_INVOKABLE bool       grabPiece(int id, qreal x, qreal y, qreal z);
     Q_INVOKABLE void       dragTo(qreal x, qreal y, qreal z);
     Q_INVOKABLE void       dropPiece();
+    Q_INVOKABLE QVariant   restPoint(int id, const QVector3D& point) const;
 
 signals:
     void                   pieceCountChanged();
@@ -160,8 +169,12 @@ private:
         QVector<QVector3D> positions;
         qreal          grain_angle = 90.0;
         bool           placed = false;
+        QVector<ThreadStitch> stitches;
+        QVector<ThreadStitch> preview;
         PieceGeometry* geometry = nullptr;
         PieceGeometry* outline = nullptr;
+        StitchGeometry* stitch_geometry = nullptr;
+        StitchGeometry* preview_geometry = nullptr;
     };
 
     QVector<Row>           m_rows;
@@ -181,6 +194,7 @@ private:
     bool                   m_checks_shown;
 
     void                   updateSceneBounds();
+    void                   showStitches(const Row& row) const;
 };
 
 #endif // GARMENT_SCENE_MODEL_H

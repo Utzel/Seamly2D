@@ -8,7 +8,9 @@ SOURCES += \
     $$PWD/garment_view_widget.cpp \
     $$PWD/piece_geometry.cpp \
     $$PWD/seam_editor.cpp \
-    $$PWD/seam_geometry.cpp
+    $$PWD/seam_geometry.cpp \
+    $$PWD/stitch_editor.cpp \
+    $$PWD/stitch_geometry.cpp
 
 HEADERS += \
     $$PWD/avatar_geometry.h \
@@ -17,7 +19,9 @@ HEADERS += \
     $$PWD/garment_view_widget.h \
     $$PWD/piece_geometry.h \
     $$PWD/seam_editor.h \
-    $$PWD/seam_geometry.h
+    $$PWD/seam_geometry.h \
+    $$PWD/stitch_editor.h \
+    $$PWD/stitch_geometry.h
 
 RESOURCES += \
     $$PWD/garment3d.qrc

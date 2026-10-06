@@ -22,8 +22,8 @@
 //  along with Seamly2D. If not, see <http://www.gnu.org/licenses/>.
 //---------------------------------------------------------------------------------------------------------------------
 
-// The 3D View dock's scene. All logic lives in C++ (GarmentViewWidget, GarmentSceneModel, SeamEditor); this file only
-// draws what it is given, moves the camera and reports where the mouse is. Units are cm, y points up.
+// The 3D View dock's scene. All logic lives in C++ (GarmentViewWidget, GarmentSceneModel, SeamEditor, StitchEditor);
+// this file only draws what it is given, moves the camera and reports where the mouse is. Units are cm, y points up.
 
 import QtQuick
 import QtQuick3D
@@ -34,6 +34,7 @@ Rectangle {
 
     required property var sceneModel
     required property var seamEditor
+    required property var stitchEditor
     required property string emptyText
     required property string hintText
     required property color backgroundColor
@@ -66,6 +67,22 @@ Rectangle {
     function boardTolerance(x, y, point) {
         const beside = root.boardPoint(x + root.pickDistance, y)
         return beside === undefined ? 1 : beside.minus(point).length()
+    }
+
+    // The piece under a point of the view, on the board or on the avatar: its id, where the point is in the flat
+    // piece, and how far pickDistance pixels reach there, in cm. Undefined over the avatar or nothing at all.
+    function pieceSpot(x, y) {
+        const result = view.pick(x, y)
+        const target = result.objectHit
+        if (!target || target.pieceId === undefined) {
+            return undefined
+        }
+        const flat = root.sceneModel.restPoint(target.pieceId, result.position)
+        if (flat === undefined) {
+            return undefined
+        }
+        const across = 2 * result.distance * Math.tan(camera.fieldOfView * Math.PI / 360) / Math.max(view.height, 1)
+        return { piece: target.pieceId, x: flat.x, y: flat.y, tolerance: root.pickDistance * across }
     }
 
     // Set while framing waits for the view to get a size, which its window only gives it after the scene has loaded.
@@ -160,13 +177,14 @@ Rectangle {
         }
 
         // The avatar, fitted to the pattern's measurements, in a plain grey like a dress form. While sewing it fades,
-        // so the board behind it can be seen; while arranging it can be clicked to put pieces on.
+        // so the board behind it can be seen; while arranging it can be clicked to put pieces on, and while
+        // topstitching it keeps clicks off the board behind it.
         Model {
             readonly property bool isAvatar: true
 
             visible: root.sceneModel.hasAvatar
             opacity: root.seamEditor.sewing ? 0.25 : 1.0
-            pickable: root.sceneModel.arranging
+            pickable: root.sceneModel.arranging || root.stitchEditor.stitching
             geometry: root.sceneModel.avatarGeometry
 
             materials: PrincipledMaterial {
@@ -208,6 +226,8 @@ Rectangle {
                     required property color pieceColor
                     required property Geometry pieceGeometry
                     required property Geometry pieceOutline
+                    required property Geometry pieceStitches
+                    required property Geometry pieceStitchPreview
                     required property bool selected
                     required property bool placed
 
@@ -216,27 +236,57 @@ Rectangle {
                     // With the strain shown, the vertex colors take the place of the piece's own.
                     readonly property color ownColor: root.sceneModel.strainShown ? "white" : pieceColor
 
+                    // While a piece is selected the others step back, so the selection reads whatever the colors are.
+                    readonly property color clothColor: selected
+                                                        ? Qt.tint(ownColor, Qt.rgba(root.highlightColor.r,
+                                                                                    root.highlightColor.g,
+                                                                                    root.highlightColor.b, 0.35))
+                                                        : root.sceneModel.selectedPiece !== 0 ? Qt.darker(ownColor, 1.8)
+                                                                                              : ownColor
+
+                    // Topstitching stands out from the cloth a little, as a darker thread on light cloth and a lighter
+                    // one on dark.
+                    readonly property color threadColor: Qt.tint(pieceColor, pieceColor.hslLightness > 0.5
+                                                                             ? "#8c000000" : "#8cffffff")
+
                     Model {
                         readonly property int pieceId: piece_node.pieceId
 
                         geometry: piece_node.pieceGeometry
                         pickable: true
 
-                        // While a piece is selected the others step back, so the selection reads whatever the
-                        // colors are.
                         materials: PrincipledMaterial {
-                            baseColor: piece_node.selected
-                                       ? Qt.tint(piece_node.ownColor, Qt.rgba(root.highlightColor.r,
-                                                                              root.highlightColor.g,
-                                                                              root.highlightColor.b, 0.35))
-                                       : root.sceneModel.selectedPiece !== 0 ? Qt.darker(piece_node.ownColor, 1.8)
-                                                                             : piece_node.ownColor
+                            baseColor: piece_node.clothColor
                             vertexColorsEnabled: root.sceneModel.strainShown
                             baseColorMap: root.sceneModel.checksShown && !root.sceneModel.strainShown
                                           ? checks_texture : null
                             roughness: 0.85
                             metalness: 0.0
                             cullMode: Material.NoCulling
+                        }
+                    }
+
+                    // The topstitching, on both faces of the cloth.
+                    Model {
+                        visible: piece_node.pieceStitches.stitchCount > 0
+                        geometry: piece_node.pieceStitches
+
+                        materials: PrincipledMaterial {
+                            baseColor: root.sceneModel.selectedPiece !== 0 && !piece_node.selected
+                                       ? Qt.darker(piece_node.threadColor, 1.8) : piece_node.threadColor
+                            roughness: 0.6
+                            metalness: 0.0
+                        }
+                    }
+
+                    // The topstitching the edge under the mouse would get, over any already there.
+                    Model {
+                        visible: piece_node.pieceStitchPreview.stitchCount > 0
+                        geometry: piece_node.pieceStitchPreview
+
+                        materials: PrincipledMaterial {
+                            lighting: PrincipledMaterial.NoLighting
+                            baseColor: root.highlightColor
                         }
                     }
 
@@ -334,12 +384,19 @@ Rectangle {
             }
         }
 
-        // While arranging, a click on the avatar places the selected piece there. Otherwise seams get the click
-        // first, and what they leave selects a piece.
+        // While arranging, a click on the avatar places the selected piece there; while topstitching, a click near an
+        // edge stitches it. Otherwise seams get the click first, and what they leave selects a piece.
         TapHandler {
             onTapped: (event_point) => {
                 const x = event_point.position.x
                 const y = event_point.position.y
+                if (root.stitchEditor.stitching) {
+                    const spot = root.pieceSpot(x, y)
+                    if (spot !== undefined) {
+                        root.stitchEditor.click(spot.piece, spot.x, spot.y, spot.tolerance)
+                    }
+                    return
+                }
                 if (root.sceneModel.arranging) {
                     const result = view.pick(x, y)
                     const target = result.objectHit
@@ -365,11 +422,20 @@ Rectangle {
 
         HoverHandler {
             id: hover_handler
-            cursorShape: root.seamEditor.sewing ? Qt.CrossCursor : Qt.ArrowCursor
+            cursorShape: root.seamEditor.sewing || root.stitchEditor.stitching ? Qt.CrossCursor : Qt.ArrowCursor
 
             onPointChanged: {
                 const x = hover_handler.point.position.x
                 const y = hover_handler.point.position.y
+                if (root.stitchEditor.stitching) {
+                    const spot = root.pieceSpot(x, y)
+                    if (spot === undefined) {
+                        root.stitchEditor.leave()
+                    } else {
+                        root.stitchEditor.hover(spot.piece, spot.x, spot.y, spot.tolerance)
+                    }
+                    return
+                }
                 const point = root.boardPoint(x, y)
                 if (point === undefined) {
                     root.seamEditor.leave()
@@ -380,6 +446,7 @@ Rectangle {
             onHoveredChanged: {
                 if (!hover_handler.hovered) {
                     root.seamEditor.leave()
+                    root.stitchEditor.leave()
                 }
             }
         }
@@ -401,7 +468,9 @@ Rectangle {
         anchors.bottom: parent.bottom
         anchors.margins: 6
         visible: root.sceneModel.pieceCount > 0 || root.sceneModel.hasAvatar
-        readonly property string task: root.sceneModel.hint !== "" ? root.sceneModel.hint : root.seamEditor.hint
+        readonly property string task: root.sceneModel.hint !== "" ? root.sceneModel.hint
+                                       : root.stitchEditor.hint !== "" ? root.stitchEditor.hint
+                                                                       : root.seamEditor.hint
 
         text: task !== "" ? task : root.hintText
         color: root.textColor

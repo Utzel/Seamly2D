@@ -64,24 +64,6 @@ QVector3D strainColor(qreal strain)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// The given positions, or with none the piece lying flat on the board, facing the camera.
-QVector<QVector3D> positionsOrFlat(const GarmentMesh& mesh, const QVector<QVector3D>& positions)
-{
-    if (positions.size() == mesh.vertexCount())
-    {
-        return positions;
-    }
-
-    QVector<QVector3D> flat;
-    flat.reserve(mesh.vertexCount());
-    for (const QPointF& point : mesh.rest_positions)
-    {
-        flat.append(QVector3D(static_cast<float>(point.x()), static_cast<float>(-point.y()), 0.0f));
-    }
-    return flat;
-}
-
-//---------------------------------------------------------------------------------------------------------------------
 void bounds(const QVector<QVector3D>& positions, QVector3D* minimum, QVector3D* maximum)
 {
     const float largest = std::numeric_limits<float>::max();
@@ -116,27 +98,17 @@ PieceGeometry::PieceGeometry(QQuick3DObject* parent)
 void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions, bool strain_shown,
                             qreal grain_angle)
 {
-    const QVector<QVector3D> placed = positionsOrFlat(mesh, positions);
+    const QVector<QVector3D> placed = placedPositions(mesh, positions);
     const QVector<qreal> strain = strain_shown ? mesh.strain(placed) : QVector<qreal>();
+    const QVector<QVector3D> normals = vertexNormals(mesh, placed);
 
     // The piece scene's y axis points down, the 3D scene's up, which turns every triangle around; swapping two
-    // corners turns them back to face outwards. The normals follow that turned-back order.
+    // corners turns them back to face outwards.
     QVector<quint32> corners;
     corners.reserve(mesh.indices.size());
-    QVector<QVector3D> normals(placed.size());
     for (int i = 0; i + 2 < mesh.indices.size(); i += 3)
     {
-        const quint32 a = mesh.indices.at(i);
-        const quint32 b = mesh.indices.at(i + 2);
-        const quint32 c = mesh.indices.at(i + 1);
-        corners << a << b << c;
-
-        const QVector3D& pa = placed.at(static_cast<int>(a));
-        const QVector3D face = QVector3D::crossProduct(placed.at(static_cast<int>(b)) - pa,
-                                                       placed.at(static_cast<int>(c)) - pa);
-        normals[static_cast<int>(a)] += face;
-        normals[static_cast<int>(b)] += face;
-        normals[static_cast<int>(c)] += face;
+        corners << mesh.indices.at(i) << mesh.indices.at(i + 2) << mesh.indices.at(i + 1);
     }
 
     // Along the grain (the warp) and across it (the weft), in the piece scene's coordinates, whose y points down.
@@ -151,7 +123,7 @@ void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& p
     for (int i = 0; i < mesh.vertexCount(); ++i)
     {
         const QVector3D& position = placed.at(i);
-        const QVector3D normal = normals.at(i).isNull() ? QVector3D(0, 0, 1) : normals.at(i).normalized();
+        const QVector3D& normal = normals.at(i);
         const QPointF& rest = mesh.rest_positions.at(i);
         *vertex++ = position.x();
         *vertex++ = position.y();
@@ -214,11 +186,57 @@ QVector<QColor> PieceGeometry::strainColors()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief The given positions, or with none the piece lying flat on the board, facing the camera.
+QVector<QVector3D> PieceGeometry::placedPositions(const GarmentMesh& mesh, const QVector<QVector3D>& positions)
+{
+    if (positions.size() == mesh.vertexCount())
+    {
+        return positions;
+    }
+
+    QVector<QVector3D> flat;
+    flat.reserve(mesh.vertexCount());
+    for (const QPointF& point : mesh.rest_positions)
+    {
+        flat.append(QVector3D(static_cast<float>(point.x()), static_cast<float>(-point.y()), 0.0f));
+    }
+    return flat;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The mesh's normals of unit length at the given positions, smoothed over the triangles around each vertex,
+/// on the side the piece faces in the 3D scene: towards the camera on the board.
+QVector<QVector3D> PieceGeometry::vertexNormals(const GarmentMesh& mesh, const QVector<QVector3D>& placed)
+{
+    // The piece scene's y axis points down, the 3D scene's up, which turns every triangle around; the normals follow
+    // the triangles turned back.
+    QVector<QVector3D> normals(placed.size());
+    for (int i = 0; i + 2 < mesh.indices.size(); i += 3)
+    {
+        const int a = static_cast<int>(mesh.indices.at(i));
+        const int b = static_cast<int>(mesh.indices.at(i + 2));
+        const int c = static_cast<int>(mesh.indices.at(i + 1));
+        if (a < placed.size() && b < placed.size() && c < placed.size())
+        {
+            const QVector3D face = QVector3D::crossProduct(placed.at(b) - placed.at(a), placed.at(c) - placed.at(a));
+            normals[a] += face;
+            normals[b] += face;
+            normals[c] += face;
+        }
+    }
+    for (QVector3D& normal : normals)
+    {
+        normal = normal.isNull() ? QVector3D(0, 0, 1) : normal.normalized();
+    }
+    return normals;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief Replaces the geometry with the mesh's seam line, as line segments, at the given positions or flat on the
 /// board, so overlapping pieces of the same color can still be told apart.
 void PieceGeometry::setOutline(const GarmentMesh& mesh, const QVector<QVector3D>& positions)
 {
-    const QVector<QVector3D> placed = positionsOrFlat(mesh, positions);
+    const QVector<QVector3D> placed = placedPositions(mesh, positions);
     const int vertex_bytes = 3 * static_cast<int>(sizeof(float));
     const int point_count = static_cast<int>(mesh.boundary.size());
 

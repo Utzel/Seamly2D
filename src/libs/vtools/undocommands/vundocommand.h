@@ -87,7 +87,8 @@ enum class UndoCommand: char { AddDraftBlock,
                                SetPieceColor,
                                SaveSeams,
                                SaveArrangements,
-                               SaveFabrics
+                               SaveFabrics,
+                               SaveTopstitches
                              };
 
 class VPattern;

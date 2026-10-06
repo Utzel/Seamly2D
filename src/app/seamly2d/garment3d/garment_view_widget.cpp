@@ -37,6 +37,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineF>
+#include <QMenu>
 #include <QMessageBox>
 #include <QList>
 #include <QPalette>
@@ -48,6 +49,7 @@
 #include <QStringList>
 #include <QTimer>
 #include <QToolBar>
+#include <QToolButton>
 #include <QUndoStack>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -75,14 +77,17 @@
 #include "../vpatterndb/variables/vinternalvariable.h"
 #include "../vpatterndb/vcontainer.h"
 #include "../vpatterndb/vpiece.h"
+#include "../vpatterndb/vpiecepath.h"
 #include "../vgarment/cloth_solver.h"
 #include "../vgarment/fabric.h"
 #include "../vtools/undocommands/save_arrangements.h"
 #include "../vtools/undocommands/save_fabrics.h"
 #include "../vtools/undocommands/save_seams.h"
+#include "../vtools/undocommands/save_topstitches.h"
 #include "drape_runner.h"
 #include "garment_scene_model.h"
 #include "seam_editor.h"
+#include "stitch_editor.h"
 
 namespace
 {
@@ -172,9 +177,12 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_doc(doc)
     , m_scene_model(new GarmentSceneModel(this))
     , m_seam_editor(new SeamEditor(this))
+    , m_stitch_editor(new StitchEditor(this))
     , m_sew_action(nullptr)
     , m_flip_action(nullptr)
     , m_remove_action(nullptr)
+    , m_topstitch_action(nullptr)
+    , m_every_edge_action(nullptr)
     , m_cancel_action(nullptr)
     , m_arrange_action(nullptr)
     , m_simulate_action(nullptr)
@@ -231,6 +239,11 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     connect(m_seam_editor, &SeamEditor::selectedSeamChanged, this, &GarmentViewWidget::updateActions);
     connect(m_doc, &VAbstractPattern::arrangementsChanged, this, &GarmentViewWidget::updateArrangements);
     connect(m_doc, &VAbstractPattern::fabricsChanged, this, &GarmentViewWidget::updateFabrics);
+    connect(m_doc, &VAbstractPattern::topstitchesChanged, this, &GarmentViewWidget::updateTopstitches);
+    connect(m_stitch_editor, &StitchEditor::topstitchesEdited, this, &GarmentViewWidget::saveTopstitches);
+    connect(m_stitch_editor, &StitchEditor::stitchingChanged, this, &GarmentViewWidget::updateActions);
+    connect(m_stitch_editor, &StitchEditor::stitchesChanged, this, &GarmentViewWidget::showStitches);
+    connect(m_stitch_editor, &StitchEditor::previewChanged, this, &GarmentViewWidget::showStitchPreview);
     connect(m_scene_model, &GarmentSceneModel::placeRequested, this, &GarmentViewWidget::placePiece);
     connect(m_scene_model, &GarmentSceneModel::grabRequested, this, &GarmentViewWidget::grabPiece);
     connect(m_scene_model, &GarmentSceneModel::dragRequested, this, &GarmentViewWidget::dragPiece);
@@ -294,6 +307,8 @@ void GarmentViewWidget::clear()
     m_seam_editor->setSewing(false);
     m_seam_editor->setSeams(QVector<VSeam>());
     m_seam_editor->setPieces(QVector<SeamEditor::Piece>());
+    m_stitch_editor->setStitching(false);
+    m_stitch_editor->setPieces(QVector<StitchEditor::Piece>(), VTopstitches());
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -426,6 +441,7 @@ void GarmentViewWidget::rebuildScene()
 
     QVector<GarmentSceneModel::Piece> scene_pieces;
     QVector<SeamEditor::Piece> seam_pieces;
+    QVector<StitchEditor::Piece> stitch_pieces;
     m_garment_pieces.clear();
     for (const quint32 id : ids)
     {
@@ -442,9 +458,22 @@ void GarmentViewWidget::rebuildScene()
             const qreal grain_angle = grainAngle(piece);
             scene_piece.grain_angle = grain_angle;
 
+            StitchEditor::Piece stitch_piece;
+            stitch_piece.id = id;
+            stitch_piece.outline = cached.outline;
+            if (cached.symmetry == PieceSymmetry::Fold)
+            {
+                stitch_piece.fold_start = cached.fold_start;
+                stitch_piece.fold_end = cached.fold_end;
+            }
+            stitch_piece.paths = stitchedPaths(piece);
+
             const bool placed = !m_wrap.isNull() && m_arrangements.contains(id) && !cached.garment_mesh.isEmpty();
             if (placed)
             {
+                const bool unfolded = cached.symmetry == PieceSymmetry::Fold;
+                stitch_piece.shown.append({id, cached.garment_mesh,
+                                           unfolded ? StitchEditor::Layout::Unfolded : StitchEditor::Layout::Drafted});
                 scene_piece.mesh = cached.garment_mesh;
                 scene_piece.positions = piecePositions(id, cached.garment_mesh);
                 scene_pieces.append(scene_piece);
@@ -458,6 +487,7 @@ void GarmentViewWidget::rebuildScene()
                     mirror_piece.positions = piecePositions(mirror_piece.id, cached.mirror_mesh);
                     mirror_piece.grain_angle = 180.0 - grain_angle;
                     scene_pieces.append(mirror_piece);
+                    stitch_piece.shown.append({mirror_piece.id, cached.mirror_mesh, StitchEditor::Layout::Mirrored});
                     m_garment_pieces.append({mirror_piece.id, cached.mirror_mesh, 180.0 - grain_angle});
                 }
             }
@@ -466,6 +496,7 @@ void GarmentViewWidget::rebuildScene()
                 // Pieces lie on the board as drafted, and seams are sewn there.
                 scene_piece.mesh = cached.mesh;
                 scene_pieces.append(scene_piece);
+                stitch_piece.shown.append({id, cached.mesh, StitchEditor::Layout::Drafted});
 
                 SeamEditor::Piece seam_piece;
                 seam_piece.id = id;
@@ -473,7 +504,18 @@ void GarmentViewWidget::rebuildScene()
                 seam_piece.mirrored = cached.symmetry == PieceSymmetry::Pair;
                 seam_pieces.append(seam_piece);
             }
+            stitch_pieces.append(stitch_piece);
         }
+    }
+
+    // The topstitching goes onto the new meshes with them.
+    m_stitch_editor->setPieces(stitch_pieces, m_doc->getTopstitches());
+    const QHash<quint32, QVector<ThreadStitch>> stitches = m_stitch_editor->stitches();
+    const QHash<quint32, QVector<ThreadStitch>> preview = m_stitch_editor->preview();
+    for (GarmentSceneModel::Piece& scene_piece : scene_pieces)
+    {
+        scene_piece.stitches = stitches.value(scene_piece.id);
+        scene_piece.preview = preview.value(scene_piece.id);
     }
 
     m_scene_model->setPieces(scene_pieces);
@@ -899,6 +941,10 @@ void GarmentViewWidget::cancel()
     {
         m_arrange_action->setChecked(false);
     }
+    else if (m_stitch_editor->isStitching())
+    {
+        m_stitch_editor->cancel();
+    }
     else
     {
         m_seam_editor->cancel();
@@ -906,13 +952,14 @@ void GarmentViewWidget::cancel()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// While arranging, a click on a piece picks it and a click on the avatar puts it there. Sewing and arranging take
-// turns.
+// While arranging, a click on a piece picks it and a click on the avatar puts it there. Sewing, topstitching and
+// arranging take turns.
 void GarmentViewWidget::setArranging(bool arranging)
 {
     if (arranging)
     {
         m_sew_action->setChecked(false);
+        m_topstitch_action->setChecked(false);
     }
     m_scene_model->setArranging(arranging);
     updateActions();
@@ -1195,6 +1242,13 @@ void GarmentViewWidget::updateActions()
     {
         m_arrange_action->setChecked(false);
     }
+    if (m_seam_editor->isSewing() && m_stitch_editor->isStitching())
+    {
+        m_stitch_editor->setStitching(false);
+    }
+    const QSignalBlocker stitch_blocker(m_topstitch_action);
+    m_topstitch_action->setChecked(m_stitch_editor->isStitching());
+    m_every_edge_action->setChecked(m_doc->getTopstitches().all);
 
     const bool seam_selected = m_seam_editor->selectedSeam() >= 0;
     const bool placed_selected = m_scene_model->isArranging()
@@ -1209,9 +1263,11 @@ void GarmentViewWidget::updateActions()
     m_export_action->setEnabled(has_avatar && !m_scene_model->placedPieces().isEmpty());
 
     // With nothing to step back from, Esc is left to the main window.
-    m_cancel_action->setEnabled(m_seam_editor->isSewing() || seam_selected || m_scene_model->isArranging());
+    const bool stitching = m_stitch_editor->isStitching();
+    m_cancel_action->setEnabled(m_seam_editor->isSewing() || seam_selected || m_scene_model->isArranging()
+                                || stitching);
 
-    if ((m_seam_editor->isSewing() || m_scene_model->isArranging()) && m_view_container != nullptr)
+    if ((m_seam_editor->isSewing() || m_scene_model->isArranging() || stitching) && m_view_container != nullptr)
     {
         m_view_container->setFocus();
     }
@@ -1309,6 +1365,90 @@ void GarmentViewWidget::setFine(bool fine)
 {
     m_mesher.setEdgeLength(fine ? fine_edge_length : PieceMesher::defaultEdgeLength());
     rebuildScene();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// While topstitching, a click near a piece's edge stitches it or takes its stitches out. Topstitching, sewing and
+// arranging take turns.
+void GarmentViewWidget::setStitching(bool stitching)
+{
+    if (stitching)
+    {
+        m_sew_action->setChecked(false);
+        m_arrange_action->setChecked(false);
+    }
+    m_stitch_editor->setStitching(stitching);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Topstitches the whole garment along every edge but folds, or none but those stitched one by one; edges clicked to
+// differ from the rest keep doing so.
+void GarmentViewWidget::stitchEveryEdge(bool every)
+{
+    VTopstitches topstitches = m_doc->getTopstitches();
+    if (topstitches.all != every)
+    {
+        topstitches.all = every;
+        saveTopstitches(topstitches, every ? tr("topstitch every edge") : tr("stop topstitching every edge"));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The topstitching was changed, here or by undo.
+void GarmentViewWidget::updateTopstitches()
+{
+    m_stitch_editor->setTopstitches(m_doc->getTopstitches());
+    updateActions();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::showStitches()
+{
+    m_scene_model->setStitches(m_stitch_editor->stitches());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::showStitchPreview()
+{
+    m_scene_model->setStitchPreview(m_stitch_editor->preview());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The piece's internal paths drawn dashed or dotted, which stand for stitching drawn on the pattern, in cm at the
+// piece's place in the piece scene, as its outline is. Paths that reach to the cutting line stop at the seam line.
+QVector<QVector<QPointF>> GarmentViewWidget::stitchedPaths(const VPiece& piece) const
+{
+    QVector<QVector<QPointF>> paths;
+    try
+    {
+        const QVector<QPointF> seam_line = piece.mainPathPoints(m_data);
+        for (const quint32 path_id : piece.getInternalPaths())
+        {
+            const VPiecePath path = m_data->getPiecePath(path_id);
+            const Qt::PenStyle style = path.getLineType();
+            if (path.getType() != PiecePathType::InternalPath || path.isCutPath() || style == Qt::SolidLine
+                || style == Qt::NoPen)
+            {
+                continue;
+            }
+
+            QVector<QPointF> points;
+            for (const QPointF& point : path.PathPoints(m_data, seam_line))
+            {
+                points.append(QPointF(FromPixel(point.x() + piece.GetMx(), Unit::Cm),
+                                      FromPixel(point.y() + piece.GetMy(), Unit::Cm)));
+            }
+            if (points.size() > 1)
+            {
+                paths.append(points);
+            }
+        }
+    }
+    catch (const VException&)
+    {
+        // The piece scene already shows what is wrong with a path whose points can't be found.
+    }
+    return paths;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1443,6 +1583,7 @@ void GarmentViewWidget::createScene()
     QVariantMap properties;
     properties.insert(QStringLiteral("sceneModel"), QVariant::fromValue(m_scene_model));
     properties.insert(QStringLiteral("seamEditor"), QVariant::fromValue(m_seam_editor));
+    properties.insert(QStringLiteral("stitchEditor"), QVariant::fromValue(m_stitch_editor));
     properties.insert(QStringLiteral("emptyText"), tr("Pieces included in the layout show up here."));
     properties.insert(QStringLiteral("hintText"),
                       tr("Drag to turn, Ctrl+drag to move, scroll to zoom, double-click to fit"));
@@ -1484,6 +1625,26 @@ void GarmentViewWidget::createToolBar()
     m_remove_action->setShortcut(QKeySequence::Delete);
     m_remove_action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
     connect(m_remove_action, &QAction::triggered, this, &GarmentViewWidget::removeSelected);
+
+    m_topstitch_action = tool_bar->addAction(tr("Topstitch"));
+    m_topstitch_action->setCheckable(true);
+    m_topstitch_action->setToolTip(tr("Topstitch the garment: click near an edge of a piece, on the board or on the "
+                                      "avatar, to stitch along it, or to take its stitches out. Internal paths drawn "
+                                      "dashed or dotted show as stitching too."));
+    connect(m_topstitch_action, &QAction::toggled, this, &GarmentViewWidget::setStitching);
+
+    QMenu* stitch_menu = new QMenu(this);
+    stitch_menu->setToolTipsVisible(true);
+    m_every_edge_action = stitch_menu->addAction(tr("Topstitch Every Edge"));
+    m_every_edge_action->setCheckable(true);
+    m_every_edge_action->setToolTip(tr("Topstitch along every edge of every piece but folds, except edges clicked to "
+                                       "take their stitches out"));
+    connect(m_every_edge_action, &QAction::triggered, this, &GarmentViewWidget::stitchEveryEdge);
+    m_topstitch_action->setMenu(stitch_menu);
+    if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_topstitch_action)))
+    {
+        button->setPopupMode(QToolButton::MenuButtonPopup);
+    }
 
     tool_bar->addSeparator();
 
@@ -1559,6 +1720,7 @@ void GarmentViewWidget::updateIcons()
         m_sew_action->setIcon(toolIcon(QStringLiteral("sew")));
         m_flip_action->setIcon(toolIcon(QStringLiteral("flip")));
         m_remove_action->setIcon(toolIcon(QStringLiteral("remove")));
+        m_topstitch_action->setIcon(toolIcon(QStringLiteral("topstitch")));
         m_arrange_action->setIcon(toolIcon(QStringLiteral("arrange")));
         m_simulate_action->setIcon(toolIcon(QStringLiteral("simulate")));
         m_reset_action->setIcon(toolIcon(QStringLiteral("reset")));
@@ -1614,6 +1776,12 @@ void GarmentViewWidget::saveSeams(const QString& text, const QVector<VSeam>& sea
 void GarmentViewWidget::saveArrangements(const QString& text, const QVector<VPieceArrangement>& arrangements)
 {
     qApp->getUndoStack()->push(new SaveArrangements(text, m_doc->getArrangements(), arrangements, m_doc));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::saveTopstitches(const VTopstitches& topstitches, const QString& text)
+{
+    qApp->getUndoStack()->push(new SaveTopstitches(text, m_doc->getTopstitches(), topstitches, m_doc));
 }
 
 //---------------------------------------------------------------------------------------------------------------------
