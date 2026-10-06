@@ -9,6 +9,7 @@ SOURCES += \
     $$PWD/body_model.cpp \
     $$PWD/body_wrap.cpp \
     $$PWD/cloth_solver.cpp \
+    $$PWD/fabric.cpp \
     $$PWD/garment_mesh.cpp \
     $$PWD/garment_symmetry.cpp \
     $$PWD/limb_line.cpp \
@@ -26,6 +27,7 @@ HEADERS += \
     $$PWD/body_model.h \
     $$PWD/body_wrap.h \
     $$PWD/cloth_solver.h \
+    $$PWD/fabric.h \
     $$PWD/garment_mesh.h \
     $$PWD/garment_symmetry.h \
     $$PWD/limb_line.h \

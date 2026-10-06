@@ -388,18 +388,19 @@ void TST_ClothSolver::foldedClothKeepsItsLayers() const
         solver.step(frame);
     }
 
-    // Away from the fold, the folded over half lies on the other.
+    // Away from the fold, which cloth that resists bending turns in a loop a few cm wide, the folded over half lies on
+    // the other.
     const QVector<QVector3D> positions = solver.positions();
     float upper_lowest = std::numeric_limits<float>::max();
     float lower_highest = -std::numeric_limits<float>::max();
     for (int i = 0; i < strip.vertexCount(); ++i)
     {
         const qreal x = strip.rest_positions.at(i).x();
-        if (x > 24)
+        if (x > 30)
         {
             upper_lowest = qMin(upper_lowest, positions.at(i).y());
         }
-        else if (x < 16)
+        else if (x < 10)
         {
             lower_highest = qMax(lower_highest, positions.at(i).y());
         }
@@ -448,4 +449,106 @@ void TST_ClothSolver::seamsCloseDespiteSelfContact() const
     QVERIFY2(widest[0] < 0.1f && widest[0] < widest[1] + 0.01f,
              qUtf8Printable(QStringLiteral("a stitch is %1 cm open with self contact, %2 cm without")
                  .arg(widest[0]).arg(widest[1])));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Two strips of the same fabric hang from their top edge, one cut along the grain, the other on the bias. A fabric
+// that hardly gives on the bias stretches far more there under its own weight.
+void TST_ClothSolver::biasGivesMoreThanGrain() const
+{
+    Fabric fabric;
+    fabric.weight = 400;
+    fabric.warp_stiffness = 100;
+    fabric.weft_stiffness = 100;
+    fabric.bias_stiffness = 5;
+
+    const GarmentMesh strip = PieceMesher().meshOutline(rectangle(0, 0, 6, 40, 1));
+    auto hang = [&strip, &fabric](qreal grain_angle)
+    {
+        ClothSettings settings;
+        settings.floor = false;
+        ClothSolver solver(settings);
+        solver.addMesh(strip, standing(strip), fabric, grain_angle);
+        for (int i = 0; i < strip.vertexCount(); ++i)
+        {
+            solver.setPinned(static_cast<quint32>(i), qAbs(strip.rest_positions.at(i).y()) < 1e-9);
+        }
+        for (int i = 0; i < 300; ++i)
+        {
+            solver.step(frame);
+        }
+        float lowest = std::numeric_limits<float>::max();
+        for (const QVector3D& position : solver.positions())
+        {
+            lowest = qMin(lowest, position.y());
+        }
+        return -lowest;
+    };
+
+    const float on_grain = hang(90);
+    const float on_bias = hang(45);
+    QVERIFY2(on_grain > 40.0f && on_grain < 41.0f,
+             qUtf8Printable(QStringLiteral("the strip cut on the grain hangs %1 cm long").arg(on_grain)));
+    QVERIFY2(on_bias > on_grain + 3.0f,
+             qUtf8Printable(QStringLiteral("the strip cut on the bias hangs %1 cm long, on the grain %2 cm")
+                                .arg(on_bias).arg(on_grain)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Strips held level along one end droop under their own weight: chiffon hangs nearly straight down, denim still
+// reaches out.
+void TST_ClothSolver::stifferFabricBendsLess() const
+{
+    const GarmentMesh strip = PieceMesher().meshOutline(rectangle(0, 0, 7, 8, 1));
+    auto tip = [&strip](const QString& fabric_name)
+    {
+        ClothSettings settings;
+        settings.floor = false;
+        ClothSolver solver(settings);
+        solver.addMesh(strip, lyingFlat(strip, 0), Fabric::preset(fabric_name));
+        for (int i = 0; i < strip.vertexCount(); ++i)
+        {
+            solver.setPinned(static_cast<quint32>(i), strip.rest_positions.at(i).x() < 2.5);
+        }
+        for (int i = 0; i < 300; ++i)
+        {
+            solver.step(frame);
+        }
+        // The middle of the free end.
+        const QVector<QVector3D> positions = solver.positions();
+        int end = 0;
+        for (int i = 0; i < strip.vertexCount(); ++i)
+        {
+            end = QLineF(strip.rest_positions.at(i), QPointF(7, 4)).length()
+                          < QLineF(strip.rest_positions.at(end), QPointF(7, 4)).length() ? i : end;
+        }
+        return positions.at(end);
+    };
+
+    const QVector3D denim = tip(QStringLiteral("denim"));
+    const QVector3D chiffon = tip(QStringLiteral("chiffon"));
+    QVERIFY2(chiffon.y() < -3.5f && denim.x() > chiffon.x() + 1.5f,
+             qUtf8Printable(QStringLiteral("the denim's tip is at (%1, %2) cm, the chiffon's at (%3, %4) cm")
+                                .arg(denim.x()).arg(denim.y()).arg(chiffon.x()).arg(chiffon.y())));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Pulled on the bias, a woven's threads turn rather than stretch: its shear stiffness follows from its bias
+// stiffness, and never comes out harder than stretching across the grain.
+void TST_ClothSolver::shearFollowsFromBias() const
+{
+    Fabric fabric;
+    fabric.warp_stiffness = 2000;
+    fabric.weft_stiffness = 1200;
+    fabric.bias_stiffness = 150;
+    QVERIFY2(qAbs(fabric.shearStiffness() - 1.0 / (4.0 / 150 - 1.0 / 2000 - 1.0 / 1200)) < 1e-9,
+             qUtf8Printable(QStringLiteral("shear stiffness %1 N/m").arg(fabric.shearStiffness())));
+
+    fabric.bias_stiffness = 2000;
+    QCOMPARE(fabric.shearStiffness(), 1200.0);
+
+    QVERIFY(Fabric::presets().size() >= 5);
+    QCOMPARE(Fabric::presets().first().name, Fabric::defaultName());
+    QCOMPARE(Fabric::preset(QStringLiteral("denim")).name, QStringLiteral("denim"));
+    QCOMPARE(Fabric::preset(QStringLiteral("no such fabric")).name, Fabric::defaultName());
 }

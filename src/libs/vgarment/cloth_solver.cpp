@@ -25,7 +25,6 @@
 #include "cloth_solver.h"
 
 #include <QHash>
-#include <QLineF>
 #include <QtConcurrent/QtConcurrentMap>
 #include <QtMath>
 
@@ -37,6 +36,15 @@ namespace
 {
 // A vertex moves at most this far, in cm, in one sweep, so a bad start can't throw it across the scene.
 const double max_move = 2.0;
+
+// What fabrics are given in, in the solver's cm, g and s: g per square metre, N/m and micro newton metres.
+const double per_square_metre = 1.0e-4;
+const double newton_per_metre = 1.0e3;
+const double micro_newton_metre = 10.0;
+
+// Cloth stiffer to stretch than this, in N/m, a step's sweeps can't keep up with, and it never comes to rest; cloth
+// this stiff hardly stretches under its own weight anyway, so stiffer cloth is taken to be this stiff.
+const qreal stiffest_stretch = 300.0;
 
 // Below this, in cm, a tangential move is taken as resting, so friction can hold the cloth still.
 const double friction_rest = 0.01;
@@ -198,6 +206,27 @@ void store(QVector<double>& values, int vertex, const Vec3& value)
     values[3 * vertex] = value.x;
     values[3 * vertex + 1] = value.y;
     values[3 * vertex + 2] = value.z;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Where a vertex heading from the start of the step to somewhere may go: no further than the body was searched around
+// it, or it could pass through the body unseen, nor further than the cloth near it allows (the conservative bounds of
+// Chen et al.). Says whether the cloth stopped it.
+Vec3 withinReach(const Vec3& start, const Vec3& heading_to, double body_reach, double cloth_bound, bool* stopped)
+{
+    Vec3 moved_to = heading_to;
+    double travelled = (moved_to - start).length();
+    if (travelled > body_reach)
+    {
+        moved_to = start + (moved_to - start) * (body_reach / travelled);
+        travelled = body_reach;
+    }
+    *stopped = travelled > cloth_bound;
+    if (*stopped)
+    {
+        moved_to = start + (moved_to - start) * (cloth_bound / travelled);
+    }
+    return moved_to;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -528,7 +557,6 @@ quint64 edgeKey(quint32 a, quint32 b)
 ClothSolver::ClothSolver(const ClothSettings& settings)
     : m_settings(settings)
     , m_prepared(false)
-    , m_stepped(false)
 {}
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -560,9 +588,12 @@ void ClothSolver::setSelfContact(bool self_contact)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-/// @brief Adds a piece of cloth: its flat mesh, which gives its rest shape, and where its vertices start out in cm.
-/// Returns the number of its first vertex; stitches and pins count vertices over all pieces.
-quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions)
+/// @brief Adds a piece of cloth: its flat mesh, which gives its rest shape, where its vertices start out in cm, its
+/// fabric and the direction of its grain in the flat piece, in degrees anticlockwise from the piece's x axis, as
+/// the piece scene shows it. Returns the number of its first vertex; stitches and pins count vertices over all
+/// pieces.
+quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions, const Fabric& fabric,
+                             qreal grain_angle)
 {
     const int offset = vertexCount();
     const int count = mesh.vertexCount();
@@ -577,27 +608,64 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
         const QVector3D start = i < positions.size() ? positions.at(i) : QVector3D();
         m_position << start.x() << start.y() << start.z();
         m_velocity << 0.0 << 0.0 << 0.0;
-        m_last_velocity << 0.0 << 0.0 << 0.0;
         m_mass << 0.0;
         m_pinned << false;
         m_pieces << piece;
         m_rest << mesh.rest_positions.at(i);
     }
 
-    // A third of each triangle's weight goes to each corner. Each edge resists stretching; across each inner
-    // edge the two opposite corners resist bending.
+    // The fabric's own directions in the flat piece, whose y axis points down: the grain, or warp, and across it the
+    // weft. Each triangle's corners in them make its deformation gradient.
+    const double grain = qDegreesToRadians(grain_angle);
+    const QPointF warp_direction(qCos(grain), -qSin(grain));
+    const QPointF weft_direction(-warp_direction.y(), warp_direction.x());
+    auto in_fabric = [&mesh, &warp_direction, &weft_direction](quint32 vertex)
+    {
+        const QPointF& point = mesh.rest_positions.at(static_cast<int>(vertex));
+        return QPointF(QPointF::dotProduct(point, weft_direction), QPointF::dotProduct(point, warp_direction));
+    };
+    const double density = fabric.weight * per_square_metre;
+    Fabric stretch = fabric;
+    stretch.warp_stiffness = qMin(fabric.warp_stiffness, stiffest_stretch);
+    stretch.weft_stiffness = qMin(fabric.weft_stiffness, stiffest_stretch);
+    stretch.bias_stiffness = qMin(fabric.bias_stiffness, stiffest_stretch);
+
+    // A third of each triangle's weight goes to each corner.
     QHash<quint64, QVector<int>> edge_opposites;
     for (int t = 0; t + 2 < mesh.indices.size(); t += 3)
     {
         const quint32 corners[3] = {mesh.indices.at(t), mesh.indices.at(t + 1), mesh.indices.at(t + 2)};
-        const QPointF& a = mesh.rest_positions.at(static_cast<int>(corners[0]));
-        const QPointF& b = mesh.rest_positions.at(static_cast<int>(corners[1]));
-        const QPointF& c = mesh.rest_positions.at(static_cast<int>(corners[2]));
-        const double area = qAbs((b.x() - a.x()) * (c.y() - a.y()) - (c.x() - a.x()) * (b.y() - a.y())) / 2.0;
+        const QPointF a = in_fabric(corners[0]);
+        const QPointF b = in_fabric(corners[1]);
+        const QPointF c = in_fabric(corners[2]);
+        const double determinant = (b.x() - a.x()) * (c.y() - a.y()) - (c.x() - a.x()) * (b.y() - a.y());
+        const double area = qAbs(determinant) / 2.0;
         for (int k = 0; k < 3; ++k)
         {
-            m_mass[offset + static_cast<int>(corners[k])] += m_settings.density * area / 3.0;
+            m_mass[offset + static_cast<int>(corners[k])] += density * area / 3.0;
             edge_opposites[edgeKey(corners[k], corners[(k + 1) % 3])].append(static_cast<int>(corners[(k + 2) % 3]));
+        }
+
+        if (area > tiny)
+        {
+            // The deformation gradient is the sum over the corners of position times shape: the rows of the inverse
+            // of the drafted sides' matrix for the second and third corner, less both for the first.
+            Membrane membrane;
+            for (int k = 0; k < 3; ++k)
+            {
+                membrane.vertices[k] = offset + static_cast<int>(corners[k]);
+            }
+            membrane.area = area;
+            membrane.shape[1][0] = (c.y() - a.y()) / determinant;
+            membrane.shape[1][1] = -(c.x() - a.x()) / determinant;
+            membrane.shape[2][0] = -(b.y() - a.y()) / determinant;
+            membrane.shape[2][1] = (b.x() - a.x()) / determinant;
+            membrane.shape[0][0] = -membrane.shape[1][0] - membrane.shape[2][0];
+            membrane.shape[0][1] = -membrane.shape[1][1] - membrane.shape[2][1];
+            membrane.weft = stretch.weft_stiffness * newton_per_metre;
+            membrane.warp = stretch.warp_stiffness * newton_per_metre;
+            membrane.shear = stretch.shearStiffness() * newton_per_metre;
+            m_membranes.append(membrane);
         }
     }
     for (int i = offset; i < m_mass.size(); ++i)
@@ -609,10 +677,23 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
         m_faces.append(offset + static_cast<int>(index));
     }
 
-    auto rest_distance = [&mesh](int a, int b)
+    // Across each inner edge the cloth resists bending. The weights are the cotangent ones of Bergou et al.; spread
+    // over the two triangles' area, they make bending as stiff as the fabric's rigidity, to within a few percent.
+    auto cotangent = [&mesh](int corner, int first, int second)
     {
-        return QLineF(mesh.rest_positions.at(a), mesh.rest_positions.at(b)).length();
+        const QPointF u = mesh.rest_positions.at(first) - mesh.rest_positions.at(corner);
+        const QPointF v = mesh.rest_positions.at(second) - mesh.rest_positions.at(corner);
+        const double cross = qAbs(u.x() * v.y() - u.y() * v.x());
+        return cross > tiny ? QPointF::dotProduct(u, v) / cross : 0.0;
     };
+    auto triangle_area = [&mesh](int a, int b, int c)
+    {
+        const QPointF u = mesh.rest_positions.at(b) - mesh.rest_positions.at(a);
+        const QPointF v = mesh.rest_positions.at(c) - mesh.rest_positions.at(a);
+        return qAbs(u.x() * v.y() - u.y() * v.x()) / 2.0;
+    };
+    const double rigidity = fabric.bending * micro_newton_metre;
+
     // In the order of the edges, not of the hash, so the same cloth always drapes the same way.
     QList<quint64> edges = edge_opposites.keys();
     std::sort(edges.begin(), edges.end());
@@ -620,15 +701,29 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
     {
         const int a = static_cast<int>(edge >> 32);
         const int b = static_cast<int>(edge & 0xffffffffu);
-        m_springs.append({offset + a, offset + b, rest_distance(a, b), m_settings.stretch_stiffness});
         m_edges << offset + a << offset + b;
 
         const QVector<int> opposite = edge_opposites.value(edge);
-        if (opposite.size() == 2)
+        const double areas = opposite.size() == 2 ? triangle_area(a, b, opposite.at(0))
+                                                    + triangle_area(a, b, opposite.at(1)) : 0.0;
+        if (areas > tiny)
         {
-            m_springs.append({offset + opposite.at(0), offset + opposite.at(1), rest_distance(opposite.at(0),
-                                                                                              opposite.at(1)),
-                              m_settings.bend_stiffness});
+            const int c = opposite.at(0);
+            const int d = opposite.at(1);
+            const double at_a_c = cotangent(a, b, c);
+            const double at_a_d = cotangent(a, b, d);
+            const double at_b_c = cotangent(b, a, c);
+            const double at_b_d = cotangent(b, a, d);
+            Hinge hinge;
+            const int corners[4] = {a, b, c, d};
+            const double weights[4] = {at_b_c + at_b_d, at_a_c + at_a_d, -at_a_c - at_b_c, -at_a_d - at_b_d};
+            for (int k = 0; k < 4; ++k)
+            {
+                hinge.vertices[k] = offset + corners[k];
+                hinge.weights[k] = weights[k];
+            }
+            hinge.stiffness = rigidity / areas;
+            m_hinges.append(hinge);
         }
     }
 
@@ -738,11 +833,10 @@ void ClothSolver::step(qreal time_step)
     const double h = time_step;
     const Vec3 gravity{m_settings.gravity.x(), m_settings.gravity.y(), m_settings.gravity.z()};
 
-    // Where each vertex would go if nothing but gravity acted on it. The first guess of where it ends up adds only as
-    // much of gravity as the vertex was last pulled by (Chen et al.'s adaptive initialization): cloth that hangs or
-    // rests then starts where it is, instead of below, where the few sweeps per step couldn't quite lift it back.
-    const double gravity_length = gravity.length();
-    const Vec3 down = gravity_length > 0 ? gravity * (1.0 / gravity_length) : Vec3();
+    // Where each vertex would go if nothing but gravity acted on it. The first guess of where it ends up goes on as
+    // it was going, without gravity: cloth that hangs or rests then starts where it is, instead of below, where the
+    // few sweeps per step couldn't quite lift it back. Chen et al.'s adaptive initialization, which adds as much of
+    // gravity as a vertex was last pulled by, keeps stiff cloth swinging for ever.
     m_previous = m_position;
     m_inertial = m_position;
     for (int i = 0; i < vertexCount(); ++i)
@@ -752,15 +846,9 @@ void ClothSolver::step(qreal time_step)
             const Vec3 position = load(m_position, i);
             const Vec3 velocity = load(m_velocity, i);
             store(m_inertial, i, position + velocity * h + gravity * (h * h));
-
-            // Before the first step nothing is known yet, so everything is taken to be falling.
-            const Vec3 acceleration = (velocity - load(m_last_velocity, i)) * (1.0 / h);
-            const double pulled = m_stepped ? qBound(0.0, acceleration.dot(down), gravity_length) : gravity_length;
-            store(m_position, i, position + velocity * h + down * (pulled * h * h));
+            store(m_position, i, position + velocity * h);
         }
     }
-    m_last_velocity = m_velocity;
-    m_stepped = true;
 
     findContacts();
     findSelfContacts();
@@ -775,10 +863,13 @@ void ClothSolver::step(qreal time_step)
         }
     }
 
-    // Vertices of one colour share no spring or stitch, so they can move at the same time. Each writes only its own
-    // position, which mustn't be shared with another list then. Cloth touching itself can bring vertices of one colour
-    // together, so they see each other where they were when the colour started.
+    // Vertices of one colour share no membrane, hinge or stitch, so they can move at the same time. Each writes only
+    // its own position, which mustn't be shared with another list then. Cloth touching itself can bring vertices of
+    // one colour together, so they see each other where they were when the colour started.
     m_position.detach();
+    QVector<double> two_sweeps_ago = m_position;
+    QVector<double> one_sweep_ago = m_position;
+    double weight = 1.0;
     for (int iteration = 0; iteration < m_settings.iterations; ++iteration)
     {
         for (QVector<int>& color : m_colors)
@@ -806,6 +897,36 @@ void ClothSolver::step(qreal time_step)
                 }
             }
         }
+
+        // Each sweep from the second on is carried on from where the vertices were two sweeps before, by a weight that
+        // grows towards a limit set by the spectral radius. It mustn't take a vertex further than a sweep may.
+        if (m_settings.acceleration > 0)
+        {
+            const double infinity = std::numeric_limits<double>::infinity();
+            const double radius = m_settings.acceleration * m_settings.acceleration;
+            weight = iteration == 0 ? 1.0 : 4.0 / (4.0 - radius * (iteration == 1 ? 2.0 : weight));
+            if (iteration > 0)
+            {
+                for (int i = 0; i < vertexCount(); ++i)
+                {
+                    if (!m_pinned.at(i))
+                    {
+                        const Vec3 earlier = load(two_sweeps_ago, i);
+                        bool stopped = false;
+                        store(m_position, i, withinReach(load(m_previous, i),
+                                                         earlier + (load(m_position, i) - earlier) * weight,
+                                                         bodyReach(i), m_self_bound.value(i, infinity), &stopped));
+                        if (stopped && i < m_stopped.size())
+                        {
+                            m_stopped[i] = 1;
+                        }
+                    }
+                }
+            }
+            two_sweeps_ago = one_sweep_ago;
+            one_sweep_ago = m_position;
+            one_sweep_ago.detach();
+        }
     }
 
     const double kept = qMax(0.0, 1.0 - m_settings.air_damping * h);
@@ -817,22 +938,35 @@ void ClothSolver::step(qreal time_step)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Lists which springs and stitches each vertex takes part in, and colours the vertices so no two that share a spring
-// or a stitch have the same colour: those of one colour can then all move at once.
+// Lists which membranes, hinges and stitches each vertex takes part in, and colours the vertices so no two that share
+// one have the same colour: those of one colour can then all move at once.
 void ClothSolver::prepare()
 {
     const int count = vertexCount();
-    m_vertex_springs = QVector<QVector<int>>(count);
+    m_vertex_membranes = QVector<QVector<Role>>(count);
+    m_vertex_hinges = QVector<QVector<Role>>(count);
     m_vertex_stitches = QVector<QVector<StitchRole>>(count);
     QVector<QVector<int>> neighbours(count);
 
-    for (int s = 0; s < m_springs.size(); ++s)
+    for (int m = 0; m < m_membranes.size(); ++m)
     {
-        const Spring& spring = m_springs.at(s);
-        m_vertex_springs[spring.a].append(s);
-        m_vertex_springs[spring.b].append(s);
-        neighbours[spring.a].append(spring.b);
-        neighbours[spring.b].append(spring.a);
+        const Membrane& membrane = m_membranes.at(m);
+        for (int k = 0; k < 3; ++k)
+        {
+            m_vertex_membranes[membrane.vertices[k]].append({m, k});
+            neighbours[membrane.vertices[k]].append(membrane.vertices[(k + 1) % 3]);
+            neighbours[membrane.vertices[k]].append(membrane.vertices[(k + 2) % 3]);
+        }
+    }
+    for (int h = 0; h < m_hinges.size(); ++h)
+    {
+        const Hinge& hinge = m_hinges.at(h);
+        for (int k = 0; k < 4; ++k)
+        {
+            m_vertex_hinges[hinge.vertices[k]].append({h, k});
+        }
+        neighbours[hinge.vertices[2]].append(hinge.vertices[3]);
+        neighbours[hinge.vertices[3]].append(hinge.vertices[2]);
     }
 
     m_stitched = QVector<QVector<int>>(count);
@@ -987,6 +1121,14 @@ void ClothSolver::findContacts()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// How far a vertex may move from where it started the step: the body was only searched so far around it.
+double ClothSolver::bodyReach(int vertex) const
+{
+    return m_collider.isEmpty() ? std::numeric_limits<double>::infinity()
+                                : contact_margin + (load(m_inertial, vertex) - load(m_previous, vertex)).length();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Moves one vertex to where its forces balance, holding all others still: one Newton step on its own energy.
 void ClothSolver::solveVertex(int vertex, double time_step, const QVector<double>& others)
 {
@@ -1001,29 +1143,70 @@ void ClothSolver::solveVertex(int vertex, double time_step, const QVector<double
     hessian.addIdentity(inertia);
 
     const double damping = m_settings.damping / h;
-    for (const int s : m_vertex_springs.at(vertex))
+    for (const Role& role : m_vertex_membranes.at(vertex))
     {
-        const Spring& spring = m_springs.at(s);
-        const int other = spring.a == vertex ? spring.b : spring.a;
-        const Vec3 offset = position - load(m_position, other);
-        const double length = offset.length();
-        if (length > 1e-9)
+        const Membrane& membrane = m_membranes.at(role.term);
+
+        // The deformation gradient's columns, where the weft and the warp went, and how fast they are changing.
+        Vec3 weft;
+        Vec3 warp;
+        Vec3 weft_rate;
+        Vec3 warp_rate;
+        for (int k = 0; k < 3; ++k)
         {
-            const Vec3 direction = offset * (1.0 / length);
-            const double k = spring.stiffness;
-            force -= direction * (k * (length - spring.rest_length));
-
-            // Shortened springs give no sideways stiffness, which keeps the Hessian positive.
-            hessian.addOuter(direction, k);
-            const double sideways = k * qMax(0.0, 1.0 - spring.rest_length / length);
-            hessian.addIdentity(sideways);
-            hessian.addOuter(direction, -sideways);
-
-            // Damping slows the spring's stretching, not the cloth moving or turning as a whole.
-            const Vec3 relative = moved - (load(m_position, other) - load(m_previous, other));
-            force -= direction * (damping * k * direction.dot(relative));
-            hessian.addOuter(direction, damping * k);
+            const int corner = membrane.vertices[k];
+            const Vec3 at = k == role.corner ? position : load(m_position, corner);
+            const Vec3 change = k == role.corner ? moved : at - load(m_previous, corner);
+            weft += at * membrane.shape[k][0];
+            warp += at * membrane.shape[k][1];
+            weft_rate += change * membrane.shape[k][0];
+            warp_rate += change * membrane.shape[k][1];
         }
+
+        // Green strain and its rate, and the stress they make, damping slowing the cloth's straining.
+        const double strain_weft = (weft.dot(weft) - 1.0) / 2.0;
+        const double strain_warp = (warp.dot(warp) - 1.0) / 2.0;
+        const double strain_shear = weft.dot(warp) / 2.0;
+        const double rate_weft = weft.dot(weft_rate);
+        const double rate_warp = warp.dot(warp_rate);
+        const double rate_shear = (weft.dot(warp_rate) + warp.dot(weft_rate)) / 2.0;
+        const double stress_weft = membrane.weft * (strain_weft + damping * rate_weft);
+        const double stress_warp = membrane.warp * (strain_warp + damping * rate_warp);
+        const double stress_shear = 2.0 * membrane.shear * (strain_shear + damping * rate_shear);
+
+        const double along_weft = membrane.shape[role.corner][0];
+        const double along_warp = membrane.shape[role.corner][1];
+        const double area = membrane.area;
+        force -= (weft * (stress_weft * along_weft + stress_shear * along_warp)
+                  + warp * (stress_shear * along_weft + stress_warp * along_warp)) * area;
+
+        // The material part of the Hessian, with damping's share, and the geometric part where the cloth is
+        // stretched; where it is pushed together that part is left out, which keeps the Hessian positive.
+        const double material = area * (1.0 + damping);
+        hessian.addOuter(weft * along_weft, material * membrane.weft);
+        hessian.addOuter(warp * along_warp, material * membrane.warp);
+        hessian.addOuter((warp * along_weft + weft * along_warp) * 0.5, 4.0 * material * membrane.shear);
+        const double geometric = along_weft * along_weft * stress_weft + 2.0 * along_weft * along_warp * stress_shear
+                                 + along_warp * along_warp * stress_warp;
+        hessian.addIdentity(area * qMax(0.0, geometric));
+    }
+
+    // Bending: Bergou et al.'s quadratic energy, which only the cloth leaving its flat shape gives rise to.
+    for (const Role& role : m_vertex_hinges.at(vertex))
+    {
+        const Hinge& hinge = m_hinges.at(role.term);
+        Vec3 bend;
+        Vec3 bend_rate;
+        for (int k = 0; k < 4; ++k)
+        {
+            const int corner = hinge.vertices[k];
+            const Vec3 at = k == role.corner ? position : load(m_position, corner);
+            bend += at * hinge.weights[k];
+            bend_rate += (k == role.corner ? moved : at - load(m_previous, corner)) * hinge.weights[k];
+        }
+        const double weight = hinge.weights[role.corner];
+        force -= (bend + bend_rate * damping) * (hinge.stiffness * weight);
+        hessian.addIdentity(hinge.stiffness * weight * weight * (1.0 + damping));
     }
 
     for (const StitchRole& role : m_vertex_stitches.at(vertex))
@@ -1111,34 +1294,14 @@ void ClothSolver::solveVertex(int vertex, double time_step, const QVector<double
             step = step * (max_move / length);
         }
 
-        // The body was only searched so far around where the vertex started the step; it mustn't go beyond, or it
-        // could pass through the body unseen (the conservative bound of Chen et al.).
-        Vec3 moved_to = position + step;
-        if (!m_collider.isEmpty())
-        {
-            const Vec3 start = load(m_previous, vertex);
-            const double reach = contact_margin + (load(m_inertial, vertex) - start).length();
-            const double travelled = (moved_to - start).length();
-            if (travelled > reach)
-            {
-                moved_to = start + (moved_to - start) * (reach / travelled);
-            }
-        }
-
-        // Nor may it go further towards other cloth than it was searched for.
-        const double bound = m_self_bound.value(vertex, std::numeric_limits<double>::infinity());
-        const Vec3 start = load(m_previous, vertex);
-        const double travelled = (moved_to - start).length();
-        const bool stopped = travelled > bound;
-        if (stopped)
-        {
-            moved_to = start + (moved_to - start) * (bound / travelled);
-        }
+        bool stopped = false;
+        store(m_position, vertex, withinReach(load(m_previous, vertex), position + step, bodyReach(vertex),
+                                              m_self_bound.value(vertex, std::numeric_limits<double>::infinity()),
+                                              &stopped));
         if (vertex < m_stopped.size())
         {
             m_stopped[vertex] = stopped ? 1 : 0;
         }
-        store(m_position, vertex, moved_to);
     }
 }
 

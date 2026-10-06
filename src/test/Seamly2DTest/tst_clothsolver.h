@@ -42,6 +42,9 @@ private slots:
     void clothLandsOnCloth() const;
     void foldedClothKeepsItsLayers() const;
     void seamsCloseDespiteSelfContact() const;
+    void biasGivesMoreThanGrain() const;
+    void stifferFabricBendsLess() const;
+    void shearFollowsFromBias() const;
 
 private:
     Q_DISABLE_COPY(TST_ClothSolver)
