@@ -205,10 +205,13 @@
                   <xs:attribute name="start" type="xs:unsignedInt" use="required"/>
                   <xs:attribute name="end" type="xs:unsignedInt" use="required"/>
                   <xs:attribute name="stitched" type="xs:boolean" use="required"/>
+                  <xs:attribute name="style" type="xs:string"/>
                 </xs:complexType>
               </xs:element>
             </xs:sequence>
             <xs:attribute name="all" type="xs:boolean"/>
+            <xs:attribute name="style" type="xs:string"/>
+            <xs:attribute name="color" type="xs:string"/>
           </xs:complexType>
           <xs:unique name="topstitchSegment">
             <xs:selector xpath="topstitch"/>

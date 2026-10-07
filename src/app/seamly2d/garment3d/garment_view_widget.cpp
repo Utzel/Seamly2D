@@ -25,7 +25,9 @@
 #include "garment_view_widget.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QColor>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QDir>
 #include <QEvent>
@@ -86,6 +88,7 @@
 #include "../vtools/undocommands/save_topstitches.h"
 #include "drape_runner.h"
 #include "garment_scene_model.h"
+#include "piece_geometry.h"
 #include "seam_editor.h"
 #include "stitch_editor.h"
 
@@ -137,6 +140,10 @@ const qreal fine_edge_length = 1.0;
 // The avatar's grey, as garment_scene.qml draws it.
 const char* const avatar_color = "#b9b4ad";
 
+// Thread colors the Topstitch menu offers besides thread matching the cloth: white, black, the gold of jeans' stitching
+// and red.
+const char* const thread_colors[] = {"#f2f0eb", "#202020", "#c8962d", "#b3261e"};
+
 // A palette whose windows are darker than this lightness is dark; icon pixels darker than this in every channel are
 // outline.
 const int dark_lightness = 128;
@@ -183,6 +190,9 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_remove_action(nullptr)
     , m_topstitch_action(nullptr)
     , m_every_edge_action(nullptr)
+    , m_stitch_styles(nullptr)
+    , m_threads(nullptr)
+    , m_other_thread_action(nullptr)
     , m_cancel_action(nullptr)
     , m_arrange_action(nullptr)
     , m_simulate_action(nullptr)
@@ -509,7 +519,9 @@ void GarmentViewWidget::rebuildScene()
     }
 
     // The topstitching goes onto the new meshes with them.
-    m_stitch_editor->setPieces(stitch_pieces, m_doc->getTopstitches());
+    const VTopstitches topstitches = m_doc->getTopstitches();
+    m_stitch_editor->setPieces(stitch_pieces, topstitches);
+    m_scene_model->setThreadColor(QColor(topstitches.color));
     const QHash<quint32, QVector<ThreadStitch>> stitches = m_stitch_editor->stitches();
     const QHash<quint32, QVector<ThreadStitch>> preview = m_stitch_editor->preview();
     for (GarmentSceneModel::Piece& scene_piece : scene_pieces)
@@ -1248,7 +1260,22 @@ void GarmentViewWidget::updateActions()
     }
     const QSignalBlocker stitch_blocker(m_topstitch_action);
     m_topstitch_action->setChecked(m_stitch_editor->isStitching());
-    m_every_edge_action->setChecked(m_doc->getTopstitches().all);
+    const VTopstitches topstitches = m_doc->getTopstitches();
+    m_every_edge_action->setChecked(topstitches.all);
+    const QString chosen_style = TopstitchStyle::preset(topstitches.style).name;
+    for (QAction* style : m_stitch_styles->actions())
+    {
+        style->setChecked(style->data().toString() == chosen_style);
+    }
+    const QColor thread(topstitches.color);
+    bool known_thread = false;
+    for (QAction* color : m_threads->actions())
+    {
+        const bool same = color->data().toString() == (thread.isValid() ? thread.name() : QString());
+        color->setChecked(same && color != m_other_thread_action);
+        known_thread = known_thread || (same && color != m_other_thread_action);
+    }
+    m_other_thread_action->setChecked(!known_thread);
 
     const bool seam_selected = m_seam_editor->selectedSeam() >= 0;
     const bool placed_selected = m_scene_model->isArranging()
@@ -1394,10 +1421,49 @@ void GarmentViewWidget::stitchEveryEdge(bool every)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// A style was chosen in the Topstitch menu: edges clicked from now on are stitched in it, and so is the garment where
+// it is stitched all over; edges stitched one by one keep their style.
+void GarmentViewWidget::chooseStitchStyle(QAction* action)
+{
+    VTopstitches topstitches = m_doc->getTopstitches();
+    const QString chosen = action->data().toString();
+    const QString style = chosen == TopstitchStyle::defaultName() ? QString() : chosen;
+    if (style != topstitches.style)
+    {
+        topstitches.style = style;
+        saveTopstitches(topstitches, tr("change topstitch style"));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A thread was chosen in the Topstitch menu: one matching the cloth, one of the colors offered, or any other.
+void GarmentViewWidget::chooseThread(QAction* action)
+{
+    VTopstitches topstitches = m_doc->getTopstitches();
+    QString color = action->data().toString();
+    if (action == m_other_thread_action)
+    {
+        const QColor current(topstitches.color);
+        const QColor picked = QColorDialog::getColor(current.isValid() ? current : QColor(Qt::white), this,
+                                                     tr("Thread Color"),
+                                                     qApp->Settings()->getUseNativeColorDialogs());
+        color = picked.isValid() ? picked.name() : topstitches.color;
+    }
+    if (color != topstitches.color)
+    {
+        topstitches.color = color;
+        saveTopstitches(topstitches, tr("change thread color"));
+    }
+    updateActions();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // The topstitching was changed, here or by undo.
 void GarmentViewWidget::updateTopstitches()
 {
-    m_stitch_editor->setTopstitches(m_doc->getTopstitches());
+    const VTopstitches topstitches = m_doc->getTopstitches();
+    m_stitch_editor->setTopstitches(topstitches);
+    m_scene_model->setThreadColor(QColor(topstitches.color));
     updateActions();
 }
 
@@ -1505,6 +1571,18 @@ QVector<ExportMesh> GarmentViewWidget::exportMeshes() const
         mesh.flat = piece.mesh.rest_positions;
         mesh.indices = piece.mesh.indices;
         meshes.append(mesh);
+
+        if (!piece.stitches.isEmpty())
+        {
+            const ThreadMesh thread = Topstitching::threadMesh(
+                piece.stitches, piece.positions, PieceGeometry::vertexNormals(piece.mesh, piece.positions));
+            ExportMesh stitches;
+            stitches.name = tr("%1 topstitching").arg(piece.name);
+            stitches.color = m_scene_model->threadColor(piece.color);
+            stitches.positions = thread.positions;
+            stitches.indices = thread.indices;
+            meshes.append(stitches);
+        }
     }
     if (!m_collider.isEmpty())
     {
@@ -1527,6 +1605,17 @@ QString GarmentViewWidget::fabricTitle(const QString& fabric) const
                                             {QStringLiteral("woolSuiting"), tr("Wool suiting")},
                                             {QStringLiteral("chiffon"), tr("Chiffon")}};
     return titles.value(fabric, fabric);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QString GarmentViewWidget::stitchStyleTitle(const TopstitchStyle& style) const
+{
+    const QHash<QString, QString> titles = {{QStringLiteral("single"), tr("Single")},
+                                            {QStringLiteral("edge"), tr("Edge Stitch")},
+                                            {QStringLiteral("double"), tr("Edge and Single")},
+                                            {QStringLiteral("twinNeedle"), tr("Twin Needle")},
+                                            {QStringLiteral("jeans"), tr("Jeans, Heavy Thread")}};
+    return titles.value(style.name, style.name);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1640,6 +1729,48 @@ void GarmentViewWidget::createToolBar()
     m_every_edge_action->setToolTip(tr("Topstitch along every edge of every piece but folds, except edges clicked to "
                                        "take their stitches out"));
     connect(m_every_edge_action, &QAction::triggered, this, &GarmentViewWidget::stitchEveryEdge);
+
+    // The styles, as CLO's topstitch styles: the one chosen is the one edges clicked get.
+    stitch_menu->addSection(tr("Style"));
+    m_stitch_styles = new QActionGroup(this);
+    for (const TopstitchStyle& style : TopstitchStyle::presets())
+    {
+        QStringList rows;
+        for (const qreal distance : style.distances)
+        {
+            rows.append(QString::number(distance * 10.0));
+        }
+        QAction* action = stitch_menu->addAction(stitchStyleTitle(style));
+        action->setCheckable(true);
+        action->setData(style.name);
+        action->setToolTip(tr("%n row(s) %1 mm inside the edge, in stitches %2 mm long", "", style.distances.size())
+                               .arg(rows.join(QStringLiteral(", "))).arg(style.stitch_length * 10.0));
+        m_stitch_styles->addAction(action);
+    }
+    connect(m_stitch_styles, &QActionGroup::triggered, this, &GarmentViewWidget::chooseStitchStyle);
+
+    QMenu* thread_menu = stitch_menu->addMenu(tr("Thread Color"));
+    m_threads = new QActionGroup(this);
+    const QStringList thread_names = {tr("White"), tr("Black"), tr("Gold"), tr("Red")};
+    QAction* matching = thread_menu->addAction(tr("Matching the Cloth"));
+    matching->setData(QString());
+    m_threads->addAction(matching);
+    for (int i = 0; i < thread_names.size(); ++i)
+    {
+        QPixmap swatch(icon_size / 2, icon_size / 2);
+        swatch.fill(QColor(thread_colors[i]));
+        QAction* action = thread_menu->addAction(QIcon(swatch), thread_names.at(i));
+        action->setData(QColor(thread_colors[i]).name());
+        m_threads->addAction(action);
+    }
+    m_other_thread_action = thread_menu->addAction(tr("Other..."));
+    m_threads->addAction(m_other_thread_action);
+    for (QAction* action : m_threads->actions())
+    {
+        action->setCheckable(true);
+    }
+    connect(m_threads, &QActionGroup::triggered, this, &GarmentViewWidget::chooseThread);
+
     m_topstitch_action->setMenu(stitch_menu);
     if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_topstitch_action)))
     {

@@ -201,6 +201,7 @@ const QString VAbstractPattern::AttrPiece               = QStringLiteral("piece"
 const QString VAbstractPattern::AttrPart                = QStringLiteral("part");
 const QString VAbstractPattern::AttrDefault             = QStringLiteral("default");
 const QString VAbstractPattern::AttrStitched            = QStringLiteral("stitched");
+const QString VAbstractPattern::AttrStyle               = QStringLiteral("style");
 
 const QString VAbstractPattern::AttrAll                 = QStringLiteral("all");
 
@@ -2226,13 +2227,13 @@ QString VGarmentFabrics::of(quint32 piece_id) const
 bool VTopstitch::operator==(const VTopstitch& other) const
 {
     return piece_id == other.piece_id && start_node == other.start_node && end_node == other.end_node
-           && stitched == other.stitched;
+           && stitched == other.stitched && style == other.style;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 bool VTopstitches::operator==(const VTopstitches& other) const
 {
-    return all == other.all && segments == other.segments;
+    return all == other.all && style == other.style && color == other.color && segments == other.segments;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2249,6 +2250,23 @@ bool VTopstitches::isStitched(quint32 piece_id, quint32 start_node, quint32 end_
         }
     }
     return stitched;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The style the segment is topstitched in: its own, if its entry has one, else the garment's; empty for the
+/// 3D View's default.
+QString VTopstitches::styleOf(quint32 piece_id, quint32 start_node, quint32 end_node) const
+{
+    QString found = style;
+    for (const VTopstitch& segment : segments)
+    {
+        if (segment.piece_id == piece_id && segment.start_node == start_node && segment.end_node == end_node
+            && !segment.style.isEmpty())
+        {
+            found = segment.style;
+        }
+    }
+    return found;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2455,6 +2473,11 @@ VTopstitches VAbstractPattern::getTopstitches() const
     const QDomElement topstitches_element = documentElement().firstChildElement(TagTopstitches);
     topstitches.all = !topstitches_element.isNull()
                       && getParameterBool(topstitches_element, AttrAll, falseStr);
+    if (!topstitches_element.isNull())
+    {
+        topstitches.style = GetParametrEmptyString(topstitches_element, AttrStyle);
+        topstitches.color = GetParametrEmptyString(topstitches_element, AttrColor);
+    }
     QDomElement element = topstitches_element.firstChildElement(TagTopstitch);
     while (!element.isNull())
     {
@@ -2463,6 +2486,7 @@ VTopstitches VAbstractPattern::getTopstitches() const
         segment.start_node = GetParametrUInt(element, AttrStart, NULL_ID_STR);
         segment.end_node = GetParametrUInt(element, AttrEnd, NULL_ID_STR);
         segment.stitched = getParameterBool(element, AttrStitched, trueStr);
+        segment.style = GetParametrEmptyString(element, AttrStyle);
         topstitches.segments.append(segment);
 
         element = element.nextSiblingElement(TagTopstitch);
@@ -2478,7 +2502,7 @@ void VAbstractPattern::setTopstitches(const VTopstitches& topstitches)
     QDomElement pattern = documentElement();
     QDomElement element = pattern.firstChildElement(TagTopstitches);
 
-    if (!topstitches.all && topstitches.segments.isEmpty())
+    if (topstitches == VTopstitches())
     {
         if (!element.isNull())
         {
@@ -2496,7 +2520,21 @@ void VAbstractPattern::setTopstitches(const VTopstitches& topstitches)
             RemoveAllChildren(element);
         }
 
+        // Style and color are left out where they are the 3D View's defaults.
+        auto set_or_leave_out = [this](QDomElement& tag, const QString& name, const QString& value)
+        {
+            if (value.isEmpty())
+            {
+                tag.removeAttribute(name);
+            }
+            else
+            {
+                SetAttribute(tag, name, value);
+            }
+        };
         SetAttribute(element, AttrAll, topstitches.all);
+        set_or_leave_out(element, AttrStyle, topstitches.style);
+        set_or_leave_out(element, AttrColor, topstitches.color);
         for (const VTopstitch& segment : topstitches.segments)
         {
             QDomElement tag = createElement(TagTopstitch);
@@ -2504,6 +2542,7 @@ void VAbstractPattern::setTopstitches(const VTopstitches& topstitches)
             SetAttribute(tag, AttrStart, segment.start_node);
             SetAttribute(tag, AttrEnd, segment.end_node);
             SetAttribute(tag, AttrStitched, segment.stitched);
+            set_or_leave_out(tag, AttrStyle, segment.style);
             element.appendChild(tag);
         }
     }

@@ -228,6 +228,7 @@ Rectangle {
                     required property Geometry pieceOutline
                     required property Geometry pieceStitches
                     required property Geometry pieceStitchPreview
+                    required property color pieceThreadColor
                     required property bool selected
                     required property bool placed
 
@@ -243,11 +244,6 @@ Rectangle {
                                                                                     root.highlightColor.b, 0.35))
                                                         : root.sceneModel.selectedPiece !== 0 ? Qt.darker(ownColor, 1.8)
                                                                                               : ownColor
-
-                    // Topstitching stands out from the cloth a little, as a darker thread on light cloth and a lighter
-                    // one on dark.
-                    readonly property color threadColor: Qt.tint(pieceColor, pieceColor.hslLightness > 0.5
-                                                                             ? "#8c000000" : "#8cffffff")
 
                     Model {
                         readonly property int pieceId: piece_node.pieceId
@@ -273,7 +269,7 @@ Rectangle {
 
                         materials: PrincipledMaterial {
                             baseColor: root.sceneModel.selectedPiece !== 0 && !piece_node.selected
-                                       ? Qt.darker(piece_node.threadColor, 1.8) : piece_node.threadColor
+                                       ? Qt.darker(piece_node.pieceThreadColor, 1.8) : piece_node.pieceThreadColor
                             roughness: 0.6
                             metalness: 0.0
                         }

@@ -160,27 +160,31 @@ struct VGarmentFabrics
     QString               of(quint32 piece_id) const;
 };
 
-/// A segment of a piece's seam line, from one point of the piece's path to the next, topstitched in the 3D View or,
-/// with the garment stitched all over, left without.
+/// A segment of a piece's seam line, from one point of the piece's path to the next, topstitched in the 3D View in a
+/// style of its own or the garment's, or, with the garment stitched all over, left without.
 struct VTopstitch
 {
     quint32 piece_id {NULL_ID};
     quint32 start_node {NULL_ID};
     quint32 end_node {NULL_ID};
     bool    stitched {true};
+    QString style {};  ///< the name of one of the 3D View's topstitch styles; empty for the garment's
 
     bool    operator==(const VTopstitch& other) const;
 };
 
 /// Topstitching for the 3D View: along every segment of every piece, or along none, but for the segments that say
-/// otherwise.
+/// otherwise; in the garment's style unless a segment has its own, and in one thread color.
 struct VTopstitches
 {
     bool                all {false};
+    QString             style {};  ///< the garment's topstitch style; empty for the 3D View's default
+    QString             color {};  ///< the thread's color as #rrggbb; empty for thread matching the cloth
     QVector<VTopstitch> segments {};
 
     bool                operator==(const VTopstitches& other) const;
     bool                isStitched(quint32 piece_id, quint32 start_node, quint32 end_node) const;
+    QString             styleOf(quint32 piece_id, quint32 start_node, quint32 end_node) const;
 };
 
 struct GroupAttributes
@@ -503,6 +507,7 @@ public:
     static const QString AttrPart;
     static const QString AttrDefault;
     static const QString AttrStitched;
+    static const QString AttrStyle;
 
     static const QString AttrAll;
 

@@ -43,10 +43,12 @@
 #include "../vgarment/garment_symmetry.h"
 #include "../vgarment/piece_mesher.h"
 #include "../vgarment/piece_outline.h"
+#include "../vgarment/topstitch.h"
 
 class DrapeRunner;
 class GarmentSceneModel;
 class QAction;
+class QActionGroup;
 class QComboBox;
 class QIcon;
 class QLabel;
@@ -113,6 +115,8 @@ private slots:
     void               setFine(bool fine);
     void               setStitching(bool stitching);
     void               stitchEveryEdge(bool every);
+    void               chooseStitchStyle(QAction* action);
+    void               chooseThread(QAction* action);
     void               updateTopstitches();
     void               showStitches();
     void               showStitchPreview();
@@ -196,6 +200,9 @@ private:
     QAction*                   m_remove_action;
     QAction*                   m_topstitch_action;
     QAction*                   m_every_edge_action;
+    QActionGroup*              m_stitch_styles;
+    QActionGroup*              m_threads;
+    QAction*                   m_other_thread_action;
     QAction*                   m_cancel_action;
     QAction*                   m_arrange_action;
     QAction*                   m_simulate_action;
@@ -247,6 +254,7 @@ private:
     qreal              grainAngle(const VPiece& piece) const;
     bool               carryDrape(quint32 id, const GarmentMesh& before, const GarmentMesh& after);
     QString            fabricTitle(const QString& fabric) const;
+    QString            stitchStyleTitle(const TopstitchStyle& style) const;
     QVector<ExportMesh> exportMeshes() const;
     QVector<QVector3D> piecePositions(quint32 id, const GarmentMesh& mesh) const;
     QSet<quint32>      turnedPairs() const;

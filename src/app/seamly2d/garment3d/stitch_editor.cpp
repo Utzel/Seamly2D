@@ -109,7 +109,7 @@ void StitchEditor::setPieces(const QVector<Piece>& pieces, const VTopstitches& t
     m_topstitches = topstitches;
 
     // A piece that was edited may have lost the segment the mouse is over.
-    const Piece* hovered = std::find_if(m_pieces.cbegin(), m_pieces.cend(), [this](const Piece& piece)
+    const auto hovered = std::find_if(m_pieces.cbegin(), m_pieces.cend(), [this](const Piece& piece)
     {
         return piece.id == m_hovered.piece_id;
     });
@@ -124,14 +124,16 @@ void StitchEditor::setPieces(const QVector<Piece>& pieces, const VTopstitches& t
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-/// @brief The pattern's topstitching.
+/// @brief The pattern's topstitching. Its style is the one edges clicked are stitched in.
 void StitchEditor::setTopstitches(const VTopstitches& topstitches)
 {
     if (!(topstitches == m_topstitches))
     {
         m_topstitches = topstitches;
         workOutStitches();
+        workOutPreview();
         emit stitchesChanged();
+        emit previewChanged();
         emit hintChanged();
     }
 }
@@ -162,20 +164,28 @@ QString StitchEditor::hint() const
     QString text;
     if (m_stitching && m_hovered.isValid())
     {
-        const Piece* piece = std::find_if(m_pieces.cbegin(), m_pieces.cend(), [this](const Piece& candidate)
+        const auto piece = std::find_if(m_pieces.cbegin(), m_pieces.cend(), [this](const Piece& candidate)
         {
             return candidate.id == m_hovered.piece_id;
         });
-        const bool stitched = piece != m_pieces.cend()
-                              && m_topstitches.isStitched(piece->id, piece->outline.segmentStart(m_hovered.segment),
-                                                          piece->outline.segmentEnd(m_hovered.segment));
-        text = stitched ? tr("Click to take the stitches out of this edge. Esc stops topstitching.")
-                        : tr("Click to topstitch along this edge. Esc stops topstitching.");
+        const QString style = piece != m_pieces.cend() ? segmentStyles(*piece).value(m_hovered.segment) : QString();
+        if (style.isEmpty())
+        {
+            text = tr("Click to topstitch along this edge. Esc stops topstitching.");
+        }
+        else if (style == chosenStyle().name)
+        {
+            text = tr("Click to take the stitches out of this edge. Esc stops topstitching.");
+        }
+        else
+        {
+            text = tr("Click to topstitch this edge in the chosen style instead. Esc stops topstitching.");
+        }
     }
     else if (m_stitching)
     {
-        text = tr("Click near an edge of a piece to topstitch along it, or to take its stitches out. Esc stops "
-                  "topstitching.");
+        text = tr("Click near an edge of a piece to topstitch along it in the style chosen in Topstitch's menu, or to "
+                  "take its stitches out. Esc stops topstitching.");
     }
     return text;
 }
@@ -221,12 +231,13 @@ void StitchEditor::leave()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-/// @brief A click on a piece the scene shows. While stitching, a click near an edge stitches it, or takes the
-/// stitches out of a stitched one. Returns whether the click was used.
+/// @brief A click on a piece the scene shows. While stitching, a click near an edge stitches it in the chosen style,
+/// restitches it in the chosen style if it is stitched in another, or takes its stitches out if it is stitched in the
+/// chosen one. Returns whether the click was used.
 bool StitchEditor::click(int id, qreal x, qreal y, qreal tolerance)
 {
     const Edge edge = m_stitching ? edgeAt(static_cast<quint32>(id), QPointF(x, y), tolerance) : Edge();
-    const Piece* piece = std::find_if(m_pieces.cbegin(), m_pieces.cend(), [&edge](const Piece& candidate)
+    const auto piece = std::find_if(m_pieces.cbegin(), m_pieces.cend(), [&edge](const Piece& candidate)
     {
         return candidate.id == edge.piece_id;
     });
@@ -237,21 +248,34 @@ bool StitchEditor::click(int id, qreal x, qreal y, qreal tolerance)
 
     const quint32 start = piece->outline.segmentStart(edge.segment);
     const quint32 end = piece->outline.segmentEnd(edge.segment);
-    const bool stitched = m_topstitches.isStitched(piece->id, start, end);
+    const QString style = segmentStyles(*piece).value(edge.segment);
+    const QString chosen = chosenStyle().name;
 
-    // A segment only keeps an entry of its own where it differs from the rest of the garment.
+    // An edge stitched by the garment keeps no entry of its own, nor one left out where the garment isn't stitched.
+    // Edges stitched one by one keep the style they were stitched in.
     VTopstitches after = m_topstitches;
     after.segments.erase(std::remove_if(after.segments.begin(), after.segments.end(),
                                         [piece, start, end](const VTopstitch& segment)
     {
         return segment.piece_id == piece->id && segment.start_node == start && segment.end_node == end;
     }), after.segments.end());
-    if (stitched == after.all)
+
+    QString text;
+    if (style == chosen)
     {
-        after.segments.append({piece->id, start, end, !stitched});
+        if (after.all)
+        {
+            after.segments.append({piece->id, start, end, false, QString()});
+        }
+        text = tr("take out topstitching");
+    }
+    else
+    {
+        after.segments.append({piece->id, start, end, true, chosen});
+        text = style.isEmpty() ? tr("topstitch edge") : tr("change topstitching");
     }
 
-    emit topstitchesEdited(after, stitched ? tr("take out topstitching") : tr("topstitch edge"));
+    emit topstitchesEdited(after, text);
     return true;
 }
 
@@ -293,17 +317,28 @@ QVector<bool> StitchEditor::foldSegments(const Piece& piece) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Which of the piece's segments are topstitched.
-QVector<bool> StitchEditor::stitchedSegments(const Piece& piece) const
+// The style each of the piece's segments is topstitched in, one of the presets' names; empty where it isn't stitched.
+QVector<QString> StitchEditor::segmentStyles(const Piece& piece) const
 {
-    QVector<bool> stitched = foldSegments(piece);
-    for (int segment = 0; segment < stitched.size(); ++segment)
+    const QVector<bool> fold = foldSegments(piece);
+    QVector<QString> styles(fold.size());
+    for (int segment = 0; segment < fold.size(); ++segment)
     {
-        stitched[segment] = !stitched.at(segment)
-                            && m_topstitches.isStitched(piece.id, piece.outline.segmentStart(segment),
-                                                        piece.outline.segmentEnd(segment));
+        const quint32 start = piece.outline.segmentStart(segment);
+        const quint32 end = piece.outline.segmentEnd(segment);
+        if (!fold.at(segment) && m_topstitches.isStitched(piece.id, start, end))
+        {
+            styles[segment] = TopstitchStyle::preset(m_topstitches.styleOf(piece.id, start, end)).name;
+        }
     }
-    return stitched;
+    return styles;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The style edges clicked are stitched in: the garment's.
+TopstitchStyle StitchEditor::chosenStyle() const
+{
+    return TopstitchStyle::preset(m_topstitches.style);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -368,15 +403,41 @@ void StitchEditor::setHovered(const Edge& edge)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// Each style's rows go along the segments stitched in it, one row per distance; internal paths take the garment's
+// style's stitches.
 void StitchEditor::workOutStitches()
 {
     m_stitches.clear();
+    const TopstitchStyle chosen = chosenStyle();
     for (const Piece& piece : m_pieces)
     {
-        const QVector<QVector<QPointF>> rows = Topstitching::rows(piece.outline, stitchedSegments(piece)) + piece.paths;
+        const QVector<QString> styles = segmentStyles(piece);
+        for (const TopstitchStyle& style : TopstitchStyle::presets())
+        {
+            if (!styles.contains(style.name))
+            {
+                continue;
+            }
+            QVector<bool> stitched(styles.size());
+            for (int segment = 0; segment < styles.size(); ++segment)
+            {
+                stitched[segment] = styles.at(segment) == style.name;
+            }
+            QVector<QVector<QPointF>> rows;
+            for (const qreal distance : style.distances)
+            {
+                rows += Topstitching::rows(piece.outline, stitched, distance);
+            }
+            for (const Shown& shown : piece.shown)
+            {
+                m_stitches[shown.id] += Topstitching::stitches(shown.mesh, laidOut(rows, piece, shown.layout),
+                                                               style.stitch_length, style.thread_width);
+            }
+        }
         for (const Shown& shown : piece.shown)
         {
-            m_stitches.insert(shown.id, Topstitching::stitches(shown.mesh, laidOut(rows, piece, shown.layout)));
+            m_stitches[shown.id] += Topstitching::stitches(shown.mesh, laidOut(piece.paths, piece, shown.layout),
+                                                           chosen.stitch_length, chosen.thread_width);
         }
     }
 }
@@ -391,10 +452,16 @@ void StitchEditor::workOutPreview()
         {
             QVector<bool> stitched(piece.outline.segmentCount(), false);
             stitched[m_hovered.segment] = true;
-            const QVector<QVector<QPointF>> rows = Topstitching::rows(piece.outline, stitched);
+            const TopstitchStyle style = chosenStyle();
+            QVector<QVector<QPointF>> rows;
+            for (const qreal distance : style.distances)
+            {
+                rows += Topstitching::rows(piece.outline, stitched, distance);
+            }
             for (const Shown& shown : piece.shown)
             {
-                m_preview.insert(shown.id, Topstitching::stitches(shown.mesh, laidOut(rows, piece, shown.layout)));
+                m_preview.insert(shown.id, Topstitching::stitches(shown.mesh, laidOut(rows, piece, shown.layout),
+                                                                  style.stitch_length, style.thread_width));
             }
         }
     }

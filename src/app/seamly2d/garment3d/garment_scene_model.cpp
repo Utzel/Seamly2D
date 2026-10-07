@@ -46,6 +46,10 @@ const qreal check_repeat = 4.0;
 // Stitches an edge under the mouse would get are drawn this much thicker than stitches, so they show over them.
 const qreal preview_scale = 1.8;
 
+// Thread matching the cloth is this much of the way from the cloth's color to black on light cloth, or to white on
+// dark cloth, so the stitching still shows.
+const qreal matching_thread_share = 0.55;
+
 //---------------------------------------------------------------------------------------------------------------------
 // The pattern piece a row shows, or shows the mirrored copy of.
 quint32 patternPiece(quint32 id)
@@ -140,6 +144,7 @@ GarmentSceneModel::GarmentSceneModel(QObject* parent)
     , m_hint()
     , m_strain_shown(false)
     , m_checks_shown(false)
+    , m_thread_color()
 {}
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -178,6 +183,9 @@ QVariant GarmentSceneModel::data(const QModelIndex& index, int role) const
             case PieceStitchPreviewRole:
                 value = QVariant::fromValue(static_cast<QObject*>(row.preview_geometry));
                 break;
+            case PieceThreadColorRole:
+                value = threadColor(row.color);
+                break;
             case SelectedRole:
                 value = patternPiece(row.id) == m_selected_piece;
                 break;
@@ -201,6 +209,7 @@ QHash<int, QByteArray> GarmentSceneModel::roleNames() const
             {PieceOutlineRole, QByteArrayLiteral("pieceOutline")},
             {PieceStitchesRole, QByteArrayLiteral("pieceStitches")},
             {PieceStitchPreviewRole, QByteArrayLiteral("pieceStitchPreview")},
+            {PieceThreadColorRole, QByteArrayLiteral("pieceThreadColor")},
             {SelectedRole, QByteArrayLiteral("selected")},
             {PlacedRole, QByteArrayLiteral("placed")}};
 }
@@ -238,7 +247,7 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
         if (!m_rows.isEmpty())
         {
             emit dataChanged(index(0), index(static_cast<int>(m_rows.size()) - 1),
-                             {PieceNameRole, PieceColorRole, PlacedRole});
+                             {PieceNameRole, PieceColorRole, PieceThreadColorRole, PlacedRole});
         }
     }
     else
@@ -374,6 +383,7 @@ QVector<GarmentSceneModel::Piece> GarmentSceneModel::placedPieces() const
             piece.mesh = row.mesh;
             piece.positions = row.positions;
             piece.grain_angle = row.grain_angle;
+            piece.stitches = row.stitches;
             pieces.append(piece);
         }
     }
@@ -483,6 +493,35 @@ void GarmentSceneModel::dragTo(qreal x, qreal y, qreal z)
 void GarmentSceneModel::dropPiece()
 {
     emit dropRequested();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The color of the topstitching's thread, or with an invalid color thread matching each piece's cloth.
+void GarmentSceneModel::setThreadColor(const QColor& color)
+{
+    if (color != m_thread_color)
+    {
+        m_thread_color = color;
+        if (!m_rows.isEmpty())
+        {
+            emit dataChanged(index(0), index(static_cast<int>(m_rows.size()) - 1), {PieceThreadColorRole});
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The color the thread is on cloth of the given color: the thread's own, or matching the cloth, a little
+/// darker on light cloth and lighter on dark.
+QColor GarmentSceneModel::threadColor(const QColor& cloth) const
+{
+    if (m_thread_color.isValid())
+    {
+        return m_thread_color;
+    }
+    const qreal target = cloth.lightnessF() > 0.5 ? 0.0 : 1.0;
+    return QColor::fromRgbF(static_cast<float>(cloth.redF() + (target - cloth.redF()) * matching_thread_share),
+                            static_cast<float>(cloth.greenF() + (target - cloth.greenF()) * matching_thread_share),
+                            static_cast<float>(cloth.blueF() + (target - cloth.blueF()) * matching_thread_share));
 }
 
 //---------------------------------------------------------------------------------------------------------------------

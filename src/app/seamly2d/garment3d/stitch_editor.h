@@ -40,14 +40,16 @@
 /// the scene's QML.
 ///
 /// A piece is stitched along the segments of its seam line the pattern's topstitches name, or with the whole garment
-/// stitched along every segment but a fold, and along its internal paths drawn dashed or dotted, which stand for
-/// stitching drawn on the pattern. The stitching is worked out on the piece as drafted and laid onto each mesh the
-/// scene shows of it: the drafted piece on the board, and on the avatar the piece unfolded, or the piece and its
-/// mirrored copy.
+/// stitched along every segment but a fold, each in its own topstitch style or the garment's, and along its internal
+/// paths drawn dashed or dotted, which stand for stitching drawn on the pattern, in the garment's style's stitches.
+/// The stitching is worked out on the piece as drafted and laid onto each mesh the scene shows of it: the drafted piece
+/// on the board, and on the avatar the piece unfolded, or the piece and its mirrored copy.
 ///
-/// While stitching, a click near an edge of a piece, on the board or on the avatar, stitches it or takes its stitches
-/// out. Positions come from QML in the flat coordinates of the mesh clicked. The editor only proposes changes
-/// (topstitchesEdited); they are made through the undo stack and come back with setTopstitches().
+/// While stitching, a click near an edge of a piece, on the board or on the avatar, stitches it in the garment's style,
+/// the style chosen; a click on an edge stitched in another style stitches it in the chosen one instead, and a click on
+/// one stitched in the chosen style takes its stitches out. Positions come from QML in the flat coordinates of the
+/// mesh clicked. The editor only proposes changes (topstitchesEdited); they are made through the undo stack and come
+/// back with setTopstitches().
 class StitchEditor : public QObject
 {
     Q_OBJECT
@@ -126,7 +128,8 @@ private:
 
     const Piece*                   pieceShowing(quint32 id, Layout* layout) const;
     QVector<bool>                  foldSegments(const Piece& piece) const;
-    QVector<bool>                  stitchedSegments(const Piece& piece) const;
+    QVector<QString>               segmentStyles(const Piece& piece) const;
+    TopstitchStyle                 chosenStyle() const;
     QPointF                        drafted(const Piece& piece, Layout layout, const QPointF& point) const;
     Edge                           edgeAt(quint32 id, const QPointF& point, qreal tolerance) const;
     void                           setHovered(const Edge& edge);

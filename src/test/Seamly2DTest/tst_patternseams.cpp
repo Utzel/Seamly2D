@@ -273,7 +273,9 @@ void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
     SeamsPattern pattern;
     VTopstitches topstitches;
     topstitches.all = true;
-    topstitches.segments = {{10, 1, 2, false}, {20, 3, 4, false}};
+    topstitches.style = QStringLiteral("double");
+    topstitches.color = QStringLiteral("#c8962d");
+    topstitches.segments = {{10, 1, 2, false, QString()}, {20, 3, 4, true, QStringLiteral("jeans")}};
     pattern.setTopstitches(topstitches);
     VGarmentFabrics fabrics;
     fabrics.garment = QStringLiteral("denim");
@@ -364,24 +366,40 @@ void TST_PatternSeams::undoRestoresFabrics() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// A segment is stitched as its own entry says, or as the whole garment is; with nothing stitched, nothing is stored.
+// A segment is stitched as its own entry says, or as the whole garment is, in its own style or the garment's; with
+// nothing stitched, nothing is stored.
 void TST_PatternSeams::topstitchesAreReadBack() const
 {
     SeamsPattern pattern;
     VTopstitches topstitches;
-    topstitches.segments = {{10, 1, 2, true}, {10, 2, 3, false}};
+    topstitches.segments = {{10, 1, 2, true, QString()}, {10, 2, 3, false, QString()},
+                            {10, 4, 5, true, QStringLiteral("twinNeedle")}};
     pattern.setTopstitches(topstitches);
 
     QCOMPARE(pattern.getTopstitches(), topstitches);
     QVERIFY(pattern.getTopstitches().isStitched(10, 1, 2));
     QVERIFY(!pattern.getTopstitches().isStitched(10, 2, 3));
     QVERIFY(!pattern.getTopstitches().isStitched(10, 3, 4));
+    QCOMPARE(pattern.getTopstitches().styleOf(10, 1, 2), QString());
+    QCOMPARE(pattern.getTopstitches().styleOf(10, 4, 5), QStringLiteral("twinNeedle"));
 
     topstitches.all = true;
+    topstitches.style = QStringLiteral("edge");
+    topstitches.color = QStringLiteral("#202020");
     pattern.setTopstitches(topstitches);
     QCOMPARE(pattern.getTopstitches(), topstitches);
     QVERIFY(pattern.getTopstitches().isStitched(10, 3, 4));
     QVERIFY(!pattern.getTopstitches().isStitched(10, 2, 3));
+    QCOMPARE(pattern.getTopstitches().styleOf(10, 3, 4), QStringLiteral("edge"));
+    QCOMPARE(pattern.getTopstitches().styleOf(10, 4, 5), QStringLiteral("twinNeedle"));
+
+    // Back to the 3D View's style and thread, they are left out.
+    topstitches.style.clear();
+    topstitches.color.clear();
+    pattern.setTopstitches(topstitches);
+    const QDomElement element = pattern.documentElement().firstChildElement(QStringLiteral("topstitches"));
+    QVERIFY(!element.hasAttribute(QStringLiteral("style")) && !element.hasAttribute(QStringLiteral("color")));
+    QCOMPARE(pattern.getTopstitches(), topstitches);
 
     pattern.setTopstitches(VTopstitches());
     QVERIFY(pattern.documentElement().firstChildElement(QStringLiteral("topstitches")).isNull());
@@ -393,9 +411,10 @@ void TST_PatternSeams::undoRestoresTopstitches() const
 {
     SeamsPattern pattern;
     VTopstitches before;
-    before.segments = {{10, 1, 2, true}};
+    before.segments = {{10, 1, 2, true, QString()}};
     VTopstitches after = before;
     after.all = true;
+    after.style = QStringLiteral("jeans");
     pattern.setTopstitches(before);
 
     QSignalSpy changes(&pattern, &VAbstractPattern::topstitchesChanged);

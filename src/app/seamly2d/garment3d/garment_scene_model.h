@@ -75,6 +75,7 @@ public:
         PieceOutlineRole,
         PieceStitchesRole,
         PieceStitchPreviewRole,
+        PieceThreadColorRole,
         SelectedRole,
         PlacedRole
     };
@@ -101,6 +102,8 @@ public:
     void                   setPiecePositions(quint32 id, const QVector<QVector3D>& positions);
     void                   setStitches(const QHash<quint32, QVector<ThreadStitch>>& stitches);
     void                   setStitchPreview(const QHash<quint32, QVector<ThreadStitch>>& preview);
+    void                   setThreadColor(const QColor& color);
+    QColor                 threadColor(const QColor& cloth) const;
     bool                   isPlaced(quint32 id) const;
     QVector<Piece>         placedPieces() const;
     void                   clear();
@@ -192,6 +195,7 @@ private:
     QString                m_hint;
     bool                   m_strain_shown;
     bool                   m_checks_shown;
+    QColor                 m_thread_color;
 
     void                   updateSceneBounds();
     void                   showStitches(const Row& row) const;
