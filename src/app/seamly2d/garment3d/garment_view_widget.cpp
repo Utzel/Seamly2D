@@ -137,6 +137,9 @@ const int icon_size = 32;
 // Gap between the toolbar's groups side by side, in pixels.
 const int tool_group_spacing = 6;
 
+// Fabrics give their thickness in mm, the scene is in cm.
+const qreal millimetres_per_cm = 10.0;
+
 // Edge length of the triangles in cm for a final drape; CLO recommends 20 mm while editing and 5 to 10 mm for the
 // final drape.
 const qreal fine_edge_length = 1.0;
@@ -460,6 +463,7 @@ void GarmentViewWidget::rebuildScene()
     QVector<GarmentSceneModel::Piece> scene_pieces;
     QVector<ShownPiece> shown_pieces;
     m_garment_pieces.clear();
+    const VGarmentFabrics fabrics = m_doc->getFabrics();
     for (const quint32 id : ids)
     {
         const CachedMesh cached = m_mesh_cache.value(id);
@@ -474,6 +478,7 @@ void GarmentViewWidget::rebuildScene()
             scene_piece.color = color.isValid() ? color : QColor(Qt::white);
             const qreal grain_angle = grainAngle(piece);
             scene_piece.grain_angle = grain_angle;
+            scene_piece.thickness = Fabric::preset(fabrics.of(id)).thickness / millimetres_per_cm;
 
             // What the seams and the topstitching are drawn on: the piece as drafted, and the meshes shown of it.
             ShownPiece shown_piece;
@@ -1317,14 +1322,12 @@ void GarmentViewWidget::updateActions()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// The fabrics were changed, here or by undo. A drape running starts over in them.
+// The fabrics were changed, here or by undo. The pieces show how thick theirs are, and a drape running starts over in
+// them.
 void GarmentViewWidget::updateFabrics()
 {
     updateActions();
-    if (m_runner->isRunning())
-    {
-        startSimulation();
-    }
+    m_rebuild_timer->start();
 }
 
 //---------------------------------------------------------------------------------------------------------------------

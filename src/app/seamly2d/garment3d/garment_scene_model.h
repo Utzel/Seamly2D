@@ -102,6 +102,7 @@ public:
         GarmentMesh        mesh;
         QVector<QVector3D> positions;  ///< where the piece is put, in scene coordinates; none for the board
         qreal              grain_angle = 90.0;  ///< degrees anticlockwise from the piece's x axis
+        qreal              thickness = 0.0;     ///< of its fabric, in cm
         QVector<ThreadStitch> stitches;       ///< its topstitching, on its mesh
         QVector<ThreadStitch> preview;        ///< the topstitching an edge under the mouse would get
     };
@@ -189,6 +190,7 @@ private:
         GarmentMesh    mesh;
         QVector<QVector3D> positions;
         qreal          grain_angle = 90.0;
+        qreal          thickness = 0.0;
         bool           placed = false;
         QVector<ThreadStitch> stitches;
         QVector<ThreadStitch> preview;

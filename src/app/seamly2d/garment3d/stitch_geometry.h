@@ -48,7 +48,8 @@ public:
     explicit           StitchGeometry(QQuick3DObject* parent = nullptr);
 
     void               setStitches(const GarmentMesh& mesh, const QVector<ThreadStitch>& stitches,
-                                   const QVector<QVector3D>& positions = QVector<QVector3D>(), qreal scale = 1.0);
+                                   const QVector<QVector3D>& positions = QVector<QVector3D>(), qreal scale = 1.0,
+                                   qreal thickness = 0.0);
     int                stitchCount() const;
 
 signals:

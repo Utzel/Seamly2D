@@ -329,7 +329,8 @@ Rectangle {
                                           ? checks_texture : null
                             roughness: 0.85
                             metalness: 0.0
-                            cullMode: Material.NoCulling
+                            // The cloth has a front face and a back face, each lit as it faces.
+                            cullMode: Material.BackFaceCulling
                         }
                     }
 

@@ -26,6 +26,7 @@
 
 #include <QByteArray>
 #include <QColor>
+#include <QHash>
 #include <QPointF>
 #include <QVector3D>
 #include <QtMath>
@@ -46,6 +47,12 @@ QVector3D linear(const QColor& color)
 {
     return QVector3D(qPow(static_cast<float>(color.redF()), 2.2f), qPow(static_cast<float>(color.greenF()), 2.2f),
                      qPow(static_cast<float>(color.blueF()), 2.2f));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+quint64 edgeKey(quint32 a, quint32 b)
+{
+    return (static_cast<quint64>(qMin(a, b)) << 32) | qMax(a, b);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -78,21 +85,102 @@ PieceGeometry::PieceGeometry(QQuick3DObject* parent)
 /// @brief Replaces the geometry with the mesh, at the given positions in cm, or flat on the board without them, with a
 /// color for each vertex if there is one for each. Texture coordinates are the flat piece's positions in cm, and where
 /// it lies in the fabric, in cm across and along the grain, which runs at grain_angle degrees anticlockwise from the
-/// piece's x axis, as the piece scene shows it.
+/// piece's x axis, as the piece scene shows it. With a thickness, in cm, the cloth has a front face and a back face
+/// that far apart, joined around its edge.
 void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions,
-                            const QVector<QColor>& colors, qreal grain_angle)
+                            const QVector<QColor>& colors, qreal grain_angle, qreal thickness)
 {
     const QVector<QVector3D> placed = placedPositions(mesh, positions);
     const bool colored = colors.size() == mesh.vertexCount();
     const QVector<QVector3D> normals = vertexNormals(mesh, placed);
+    const int count = mesh.vertexCount();
+    const float half = static_cast<float>(qMax(thickness, 0.0) / 2.0);
 
-    // The piece scene's y axis points down, the 3D scene's up, which turns every triangle around; swapping two
-    // corners turns them back to face outwards.
+    // The corners drawn: where each is, which way it faces, and which of the mesh's vertices it is of.
+    QVector<QVector3D> drawn;
+    QVector<QVector3D> facing;
+    QVector<int> of_vertex;
+    auto add = [&drawn, &facing, &of_vertex](const QVector3D& position, const QVector3D& normal, int vertex)
+    {
+        drawn.append(position);
+        facing.append(normal);
+        of_vertex.append(vertex);
+        return static_cast<quint32>(drawn.size() - 1);
+    };
+
+    // The front face. The piece scene's y axis points down, the 3D scene's up, which turns every triangle around;
+    // swapping two corners turns them back to face outwards.
+    for (int i = 0; i < count; ++i)
+    {
+        add(placed.at(i) + normals.at(i) * half, normals.at(i), i);
+    }
     QVector<quint32> corners;
     corners.reserve(mesh.indices.size());
     for (int i = 0; i + 2 < mesh.indices.size(); i += 3)
     {
         corners << mesh.indices.at(i) << mesh.indices.at(i + 2) << mesh.indices.at(i + 1);
+    }
+
+    if (half > 0)
+    {
+        // The back face, turned over.
+        for (int i = 0; i < count; ++i)
+        {
+            add(placed.at(i) - normals.at(i) * half, -normals.at(i), i);
+        }
+        const int front_corners = static_cast<int>(corners.size());
+        for (int i = 0; i + 2 < front_corners; i += 3)
+        {
+            corners << corners.at(i) + static_cast<quint32>(count) << corners.at(i + 2) + static_cast<quint32>(count)
+                    << corners.at(i + 1) + static_cast<quint32>(count);
+        }
+
+        // Around the edge, a strip from the front face to the back, facing away from the triangle inside it.
+        QHash<quint64, quint32> inside;
+        for (int i = 0; i + 2 < mesh.indices.size(); i += 3)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                inside.insert(edgeKey(mesh.indices.at(i + k), mesh.indices.at(i + (k + 1) % 3)),
+                              mesh.indices.at(i + (k + 2) % 3));
+            }
+        }
+        const int edge_count = static_cast<int>(mesh.boundary.size());
+        for (int k = 0; k < edge_count; ++k)
+        {
+            const quint32 a = mesh.boundary.at(k);
+            const quint32 b = mesh.boundary.at((k + 1) % edge_count);
+            if (!inside.contains(edgeKey(a, b)))
+            {
+                continue;
+            }
+            const QVector3D& at_a = placed.at(static_cast<int>(a));
+            const QVector3D& at_b = placed.at(static_cast<int>(b));
+            const QVector3D along = (at_b - at_a).normalized();
+            const QVector3D normal = (normals.at(static_cast<int>(a)) + normals.at(static_cast<int>(b))).normalized();
+            QVector3D out = (at_a + at_b) / 2.0f - placed.at(static_cast<int>(inside.value(edgeKey(a, b))));
+            out -= along * QVector3D::dotProduct(out, along) + normal * QVector3D::dotProduct(out, normal);
+            if (out.isNull())
+            {
+                continue;
+            }
+            out.normalize();
+            const quint32 front_a = add(at_a + normals.at(static_cast<int>(a)) * half, out, static_cast<int>(a));
+            const quint32 front_b = add(at_b + normals.at(static_cast<int>(b)) * half, out, static_cast<int>(b));
+            const quint32 back_a = add(at_a - normals.at(static_cast<int>(a)) * half, out, static_cast<int>(a));
+            const quint32 back_b = add(at_b - normals.at(static_cast<int>(b)) * half, out, static_cast<int>(b));
+            const QVector3D& corner = drawn.at(static_cast<int>(front_a));
+            const QVector3D turn = QVector3D::crossProduct(drawn.at(static_cast<int>(back_a)) - corner,
+                                                           drawn.at(static_cast<int>(back_b)) - corner);
+            if (QVector3D::dotProduct(turn, out) >= 0)
+            {
+                corners << front_a << back_a << back_b << front_a << back_b << front_b;
+            }
+            else
+            {
+                corners << front_a << back_b << back_a << front_a << front_b << back_b;
+            }
+        }
     }
 
     // Along the grain (the warp) and across it (the weft), in the piece scene's coordinates, whose y points down.
@@ -102,12 +190,13 @@ void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& p
 
     const int vertex_floats = floats_per_vertex + (colored ? floats_per_color : 0);
     const int vertex_bytes = vertex_floats * static_cast<int>(sizeof(float));
-    QByteArray vertex_data(mesh.vertexCount() * vertex_bytes, Qt::Uninitialized);
+    QByteArray vertex_data(static_cast<int>(drawn.size()) * vertex_bytes, Qt::Uninitialized);
     float* vertex = reinterpret_cast<float*>(vertex_data.data());
-    for (int i = 0; i < mesh.vertexCount(); ++i)
+    for (int d = 0; d < drawn.size(); ++d)
     {
-        const QVector3D& position = placed.at(i);
-        const QVector3D& normal = normals.at(i);
+        const int i = of_vertex.at(d);
+        const QVector3D& position = drawn.at(d);
+        const QVector3D& normal = facing.at(d);
         const QPointF& rest = mesh.rest_positions.at(i);
         *vertex++ = position.x();
         *vertex++ = position.y();
@@ -134,7 +223,7 @@ void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& p
 
     QVector3D minimum;
     QVector3D maximum;
-    bounds(placed, &minimum, &maximum);
+    bounds(drawn, &minimum, &maximum);
 
     clear();
     setStride(vertex_bytes);
@@ -203,10 +292,19 @@ QVector<QVector3D> PieceGeometry::vertexNormals(const GarmentMesh& mesh, const Q
 
 //---------------------------------------------------------------------------------------------------------------------
 /// @brief Replaces the geometry with the mesh's seam line, as line segments, at the given positions or flat on the
-/// board, so overlapping pieces of the same color can still be told apart.
-void PieceGeometry::setOutline(const GarmentMesh& mesh, const QVector<QVector3D>& positions)
+/// board, so overlapping pieces of the same color can still be told apart. On cloth with a thickness, in cm, it lies
+/// on the front face.
+void PieceGeometry::setOutline(const GarmentMesh& mesh, const QVector<QVector3D>& positions, qreal thickness)
 {
-    const QVector<QVector3D> placed = placedPositions(mesh, positions);
+    QVector<QVector3D> placed = placedPositions(mesh, positions);
+    if (thickness > 0)
+    {
+        const QVector<QVector3D> normals = vertexNormals(mesh, placed);
+        for (int i = 0; i < placed.size(); ++i)
+        {
+            placed[i] += normals.at(i) * static_cast<float>(thickness / 2.0);
+        }
+    }
     const int vertex_bytes = 3 * static_cast<int>(sizeof(float));
     const int point_count = static_cast<int>(mesh.boundary.size());
 

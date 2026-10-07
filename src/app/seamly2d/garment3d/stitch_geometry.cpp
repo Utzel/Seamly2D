@@ -45,13 +45,14 @@ StitchGeometry::StitchGeometry(QQuick3DObject* parent)
 
 //---------------------------------------------------------------------------------------------------------------------
 /// @brief Replaces the geometry with the stitches on the mesh, at the given positions in cm, or flat on the board
-/// without them. Scale makes the thread thicker and lifts it further, as for stitches shown over others.
+/// without them. Scale makes the thread thicker and lifts it further, as for stitches shown over others. The thread
+/// lies on the faces of cloth of the given thickness, in cm.
 void StitchGeometry::setStitches(const GarmentMesh& mesh, const QVector<ThreadStitch>& stitches,
-                                 const QVector<QVector3D>& positions, qreal scale)
+                                 const QVector<QVector3D>& positions, qreal scale, qreal thickness)
 {
     const QVector<QVector3D> placed = PieceGeometry::placedPositions(mesh, positions);
     const ThreadMesh thread = Topstitching::threadMesh(stitches, placed, PieceGeometry::vertexNormals(mesh, placed),
-                                                       scale);
+                                                       scale, thickness / 2.0);
 
     const int vertex_bytes = floats_per_corner * static_cast<int>(sizeof(float));
     QByteArray vertex_data(static_cast<int>(thread.positions.size()) * vertex_bytes, Qt::Uninitialized);

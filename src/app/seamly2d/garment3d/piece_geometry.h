@@ -40,6 +40,9 @@ struct GarmentMesh;
 ///
 /// Each vertex has two sets of texture coordinates in cm: where it is in the flat piece, and where it is in the
 /// fabric the piece is cut from, across the grain and along it, so a fabric's pattern runs along the grainline.
+///
+/// Cloth with a thickness is drawn as a front face and a back face that far apart, joined around its edge, so its
+/// edges show how thick it is and each face is lit as it faces.
 class PieceGeometry : public QQuick3DGeometry
 {
     Q_OBJECT
@@ -48,9 +51,10 @@ public:
     explicit           PieceGeometry(QQuick3DObject* parent = nullptr);
 
     void               setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions = QVector<QVector3D>(),
-                               const QVector<QColor>& colors = QVector<QColor>(), qreal grain_angle = 90.0);
+                               const QVector<QColor>& colors = QVector<QColor>(), qreal grain_angle = 90.0,
+                               qreal thickness = 0.0);
     void               setOutline(const GarmentMesh& mesh,
-                                  const QVector<QVector3D>& positions = QVector<QVector3D>());
+                                  const QVector<QVector3D>& positions = QVector<QVector3D>(), qreal thickness = 0.0);
 
     static QVector<QVector3D> placedPositions(const GarmentMesh& mesh, const QVector<QVector3D>& positions);
     static QVector<QVector3D> vertexNormals(const GarmentMesh& mesh, const QVector<QVector3D>& placed);

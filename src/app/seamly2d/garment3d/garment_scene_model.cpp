@@ -281,11 +281,12 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.mesh = pieces.at(i).mesh;
             row.positions = pieces.at(i).positions;
             row.grain_angle = pieces.at(i).grain_angle;
+            row.thickness = pieces.at(i).thickness;
             row.placed = !row.positions.isEmpty();
             row.stitches = pieces.at(i).stitches;
             row.preview = pieces.at(i).preview;
             showMesh(row);
-            row.outline->setOutline(row.mesh, row.positions);
+            row.outline->setOutline(row.mesh, row.positions, row.thickness);
             showStitches(row);
         }
         if (!m_rows.isEmpty())
@@ -315,13 +316,14 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.mesh = piece.mesh;
             row.positions = piece.positions;
             row.grain_angle = piece.grain_angle;
+            row.thickness = piece.thickness;
             row.placed = !piece.positions.isEmpty();
             row.geometry = new PieceGeometry();
             row.geometry->setParent(this);
             showMesh(row);
             row.outline = new PieceGeometry();
             row.outline->setParent(this);
-            row.outline->setOutline(piece.mesh, piece.positions);
+            row.outline->setOutline(piece.mesh, piece.positions, piece.thickness);
             row.stitches = piece.stitches;
             row.preview = piece.preview;
             row.stitch_geometry = new StitchGeometry();
@@ -365,7 +367,7 @@ void GarmentSceneModel::setPiecePositions(quint32 id, const QVector<QVector3D>& 
         {
             row.positions = positions;
             showMesh(row);
-            row.outline->setOutline(row.mesh, positions);
+            row.outline->setOutline(row.mesh, positions, row.thickness);
             showStitches(row);
         }
     }
@@ -381,7 +383,7 @@ void GarmentSceneModel::setStitches(const QHash<quint32, QVector<ThreadStitch>>&
         if (wanted != row.stitches)
         {
             row.stitches = wanted;
-            row.stitch_geometry->setStitches(row.mesh, row.stitches, row.positions);
+            row.stitch_geometry->setStitches(row.mesh, row.stitches, row.positions, 1.0, row.thickness);
         }
     }
 }
@@ -396,7 +398,7 @@ void GarmentSceneModel::setStitchPreview(const QHash<quint32, QVector<ThreadStit
         if (wanted != row.preview)
         {
             row.preview = wanted;
-            row.preview_geometry->setStitches(row.mesh, row.preview, row.positions, preview_scale);
+            row.preview_geometry->setStitches(row.mesh, row.preview, row.positions, preview_scale, row.thickness);
         }
     }
 }
@@ -427,6 +429,7 @@ QVector<GarmentSceneModel::Piece> GarmentSceneModel::placedPieces() const
             piece.mesh = row.mesh;
             piece.positions = row.positions;
             piece.grain_angle = row.grain_angle;
+            piece.thickness = row.thickness;
             piece.stitches = row.stitches;
             pieces.append(piece);
         }
@@ -863,7 +866,7 @@ void GarmentSceneModel::updateSceneBounds()
 // Shows the row's mesh where it is, colored by the fit map if one is shown.
 void GarmentSceneModel::showMesh(const Row& row) const
 {
-    row.geometry->setMesh(row.mesh, row.positions, vertexColors(row), row.grain_angle);
+    row.geometry->setMesh(row.mesh, row.positions, vertexColors(row), row.grain_angle, row.thickness);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -912,6 +915,6 @@ QVector<QColor> GarmentSceneModel::vertexColors(const Row& row) const
 // Lays the row's topstitching, and the stitches an edge under the mouse would get, onto its mesh as it is shown.
 void GarmentSceneModel::showStitches(const Row& row) const
 {
-    row.stitch_geometry->setStitches(row.mesh, row.stitches, row.positions);
-    row.preview_geometry->setStitches(row.mesh, row.preview, row.positions, preview_scale);
+    row.stitch_geometry->setStitches(row.mesh, row.stitches, row.positions, 1.0, row.thickness);
+    row.preview_geometry->setStitches(row.mesh, row.preview, row.positions, preview_scale, row.thickness);
 }
