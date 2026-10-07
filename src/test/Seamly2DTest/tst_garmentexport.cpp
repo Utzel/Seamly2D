@@ -24,8 +24,10 @@
 
 #include "tst_garmentexport.h"
 
+#include <QBuffer>
 #include <QDataStream>
 #include <QFile>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -58,6 +60,35 @@ QVector<ExportMesh> sampleMeshes()
     empty.name = QStringLiteral("Nothing");
 
     return {piece, avatar, empty};
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// An image file's bytes: 4 by 2 pixels of the color, in the format.
+QByteArray imageFile(const QColor& color, const char* format)
+{
+    QImage image(4, 2, QImage::Format_RGB32);
+    image.fill(color);
+    QByteArray bytes;
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, format);
+    return bytes;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Three pieces in images of their fabrics, repeating twice across the first and once along it: the first two in the
+// same PNG image, the third in a BMP image.
+QVector<ExportMesh> imageMeshes()
+{
+    ExportMesh piece = sampleMeshes().at(0);
+    piece.image = imageFile(Qt::red, "PNG");
+    piece.image_uv = {QPointF(0, 0), QPointF(2, 0), QPointF(2, 1), QPointF(0, 1)};
+    ExportMesh twin = piece;
+    twin.name = QStringLiteral("Twin");
+    ExportMesh other = piece;
+    other.name = QStringLiteral("Other");
+    other.image = imageFile(Qt::blue, "BMP");
+    return {piece, twin, other};
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -205,4 +236,111 @@ void TST_GarmentExport::glbIsBinaryGltf() const
     float z = 0;
     data >> x >> y >> z;
     QVERIFY(qAbs(x) < 1e-6f && qAbs(y - 1.1f) < 1e-6f && qAbs(z - 0.05f) < 1e-6f);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Each image is written once, next to the OBJ file, a BMP image as PNG, as the diffuse map of the materials of the
+// meshes in it; their texture coordinates are where they are in their images, running up.
+void TST_GarmentExport::objCarriesFabricImages() const
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QString error;
+    const QVector<ExportMesh> meshes = imageMeshes();
+    QVERIFY2(GarmentExport::writeObj(dir.filePath(QStringLiteral("drape.obj")), meshes, &error),
+             qUtf8Printable(error));
+
+    QFile first_image(dir.filePath(QStringLiteral("drape_fabric1.png")));
+    QVERIFY(first_image.open(QIODevice::ReadOnly));
+    QCOMPARE(first_image.readAll(), meshes.at(0).image);
+    QFile second_image(dir.filePath(QStringLiteral("drape_fabric2.png")));
+    QVERIFY(second_image.open(QIODevice::ReadOnly));
+    const QImage converted = QImage::fromData(second_image.readAll(), "PNG");
+    QCOMPARE(converted.size(), QSize(4, 2));
+    QCOMPARE(converted.pixelColor(0, 0), QColor(Qt::blue));
+    QVERIFY(!QFile::exists(dir.filePath(QStringLiteral("drape_fabric3.png"))));
+
+    QFile mtl(dir.filePath(QStringLiteral("drape.mtl")));
+    QVERIFY(mtl.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QStringList materials = QTextStream(&mtl).readAll().split(QLatin1Char('\n'));
+    QCOMPARE(linesStartingWith(materials, QStringLiteral("map_Kd ")),
+             QStringList({QStringLiteral("map_Kd drape_fabric1.png"), QStringLiteral("map_Kd drape_fabric1.png"),
+                          QStringLiteral("map_Kd drape_fabric2.png")}));
+    QCOMPARE(linesStartingWith(materials, QStringLiteral("Kd ")).first(), QStringLiteral("Kd 1.0000 1.0000 1.0000"));
+
+    QFile obj(dir.filePath(QStringLiteral("drape.obj")));
+    QVERIFY(obj.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QStringList lines = QTextStream(&obj).readAll().split(QLatin1Char('\n'));
+    QCOMPARE(linesStartingWith(lines, QStringLiteral("vt ")).size(), 12);
+    QCOMPARE(linesStartingWith(lines, QStringLiteral("vt ")).at(2), QStringLiteral("vt 2.00000 -1.00000"));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Each image is embedded once, a BMP image as PNG, as a texture repeating both ways, the base color of the materials
+// of the meshes in it, on their second texture coordinates: where they are in their images.
+void TST_GarmentExport::glbCarriesFabricImages() const
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("drape.glb"));
+    QString error;
+    const QVector<ExportMesh> meshes = imageMeshes();
+    QVERIFY2(GarmentExport::writeGlb(path, meshes, &error), qUtf8Printable(error));
+
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QByteArray bytes = file.readAll();
+    QDataStream stream(bytes);
+    stream.setByteOrder(QDataStream::LittleEndian);
+    quint32 header[5] = {};
+    stream >> header[0] >> header[1] >> header[2] >> header[3] >> header[4];
+    const int json_length = static_cast<int>(header[3]);
+    const QJsonObject root = QJsonDocument::fromJson(bytes.mid(20, json_length)).object();
+    const QByteArray binary = bytes.mid(20 + json_length + 8);
+
+    const QJsonArray images = root.value(QStringLiteral("images")).toArray();
+    const QJsonArray textures = root.value(QStringLiteral("textures")).toArray();
+    QCOMPARE(images.size(), 2);
+    QCOMPARE(textures.size(), 2);
+    QCOMPARE(images.at(0).toObject().value(QStringLiteral("mimeType")).toString(), QStringLiteral("image/png"));
+    QCOMPARE(images.at(1).toObject().value(QStringLiteral("mimeType")).toString(), QStringLiteral("image/png"));
+    const QJsonObject sampler = root.value(QStringLiteral("samplers")).toArray().at(0).toObject();
+    QCOMPARE(sampler.value(QStringLiteral("wrapS")).toInt(), 10497);
+    QCOMPARE(sampler.value(QStringLiteral("wrapT")).toInt(), 10497);
+
+    const QJsonArray views = root.value(QStringLiteral("bufferViews")).toArray();
+    const QJsonObject image_view = views.at(images.at(0).toObject().value(QStringLiteral("bufferView")).toInt())
+                                       .toObject();
+    QCOMPARE(binary.mid(image_view.value(QStringLiteral("byteOffset")).toInt(),
+                        image_view.value(QStringLiteral("byteLength")).toInt()),
+             meshes.at(0).image);
+
+    const QJsonArray materials = root.value(QStringLiteral("materials")).toArray();
+    QList<int> material_textures;
+    for (const QJsonValue& material : materials)
+    {
+        const QJsonObject color = material.toObject().value(QStringLiteral("pbrMetallicRoughness")).toObject();
+        const QJsonObject texture = color.value(QStringLiteral("baseColorTexture")).toObject();
+        QCOMPARE(texture.value(QStringLiteral("texCoord")).toInt(), 1);
+        QVERIFY(!color.contains(QStringLiteral("baseColorFactor")));
+        material_textures.append(texture.value(QStringLiteral("index")).toInt());
+    }
+    QCOMPARE(material_textures, QList<int>({0, 0, 1}));
+
+    // Where the first mesh's third vertex is in its image: two widths of it across, one height down.
+    const QJsonObject attributes = root.value(QStringLiteral("meshes")).toArray().at(0).toObject()
+                                       .value(QStringLiteral("primitives")).toArray().at(0).toObject()
+                                       .value(QStringLiteral("attributes")).toObject();
+    const QJsonArray accessors = root.value(QStringLiteral("accessors")).toArray();
+    const QJsonObject uv = accessors.at(attributes.value(QStringLiteral("TEXCOORD_1")).toInt()).toObject();
+    QCOMPARE(uv.value(QStringLiteral("count")).toInt(), 4);
+    const QJsonObject uv_view = views.at(uv.value(QStringLiteral("bufferView")).toInt()).toObject();
+    QDataStream data(binary.mid(uv_view.value(QStringLiteral("byteOffset")).toInt() + 16, 8));
+    data.setByteOrder(QDataStream::LittleEndian);
+    data.setFloatingPointPrecision(QDataStream::SinglePrecision);
+    float u = 0;
+    float v = 0;
+    data >> u >> v;
+    QCOMPARE(u, 2.0f);
+    QCOMPARE(v, 1.0f);
 }

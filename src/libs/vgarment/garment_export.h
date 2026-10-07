@@ -25,6 +25,7 @@
 #ifndef GARMENT_EXPORT_H
 #define GARMENT_EXPORT_H
 
+#include <QByteArray>
 #include <QColor>
 #include <QPointF>
 #include <QString>
@@ -40,6 +41,8 @@ struct ExportMesh
     QVector<QVector3D> positions;  ///< in cm
     QVector<QPointF>   flat;       ///< where each vertex is in the flat piece, in cm, y down; none for the avatar
     QVector<quint32>   indices;    ///< three per triangle, anticlockwise seen from outside
+    QByteArray         image;      ///< an image of its fabric, an image file's bytes; empty for none
+    QVector<QPointF>   image_uv;   ///< where each vertex is in the image, in its widths across and heights down
 };
 
 /// @brief Writes a draped garment, and the avatar it drapes on, to files other 3D programs open: Wavefront OBJ, with
@@ -48,6 +51,10 @@ struct ExportMesh
 /// Lengths are in metres, with y up and the avatar facing +z. Each mesh keeps its own vertices, with normals smoothed
 /// over its triangles, and its color as its material. A piece's flat shape gives its texture coordinates, in metres
 /// too, so a fabric texture keeps its scale on every piece and lies on it as the piece lies in the piece scene.
+///
+/// A mesh with an image of its fabric has the image as its material's color instead, repeating as its image_uv say:
+/// in glTF embedded in the file, on the mesh's second texture coordinates; in OBJ as a file next to it, named after the
+/// OBJ file, on the mesh's only texture coordinates. Images other than PNG and JPG are written as PNG.
 class GarmentExport
 {
 public:

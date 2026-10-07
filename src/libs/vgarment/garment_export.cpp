@@ -29,6 +29,8 @@
 #include <QDataStream>
 #include <QDir>
 #include <QFileInfo>
+#include <QHash>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -54,6 +56,9 @@ const int gl_float = 5126;
 const int gl_unsigned_int = 5125;
 const int gl_array_buffer = 34962;
 const int gl_element_array_buffer = 34963;
+const int gl_linear = 9729;
+const int gl_linear_mipmap_linear = 9987;
+const int gl_repeat = 10497;
 
 // Cloth isn't shiny.
 const double cloth_roughness = 0.9;
@@ -106,6 +111,44 @@ double linear(qreal srgb)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// Whether the mesh has an image of its fabric, laid on it.
+bool hasImage(const ExportMesh& mesh)
+{
+    return !mesh.image.isEmpty() && mesh.image_uv.size() == mesh.positions.size();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// An image file as glTF and OBJ readers take it: a PNG or JPG file as it is, any other image as PNG; with its file
+// suffix and media type. Empty if it isn't an image.
+QByteArray portableImage(const QByteArray& image, QString* suffix, QString* media_type)
+{
+    if (image.startsWith(QByteArrayLiteral("\x89PNG")))
+    {
+        *suffix = QStringLiteral("png");
+        *media_type = QStringLiteral("image/png");
+        return image;
+    }
+    if (image.startsWith(QByteArrayLiteral("\xFF\xD8\xFF")))
+    {
+        *suffix = QStringLiteral("jpg");
+        *media_type = QStringLiteral("image/jpeg");
+        return image;
+    }
+
+    QByteArray png;
+    const QImage decoded = QImage::fromData(image);
+    if (!decoded.isNull())
+    {
+        QBuffer buffer(&png);
+        buffer.open(QIODevice::WriteOnly);
+        decoded.save(&buffer, "PNG");
+        *suffix = QStringLiteral("png");
+        *media_type = QStringLiteral("image/png");
+    }
+    return png;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 bool commit(QSaveFile& file, QString* error)
 {
     const bool written = file.commit();
@@ -138,6 +181,34 @@ bool GarmentExport::writeObj(const QString& path, const QVector<ExportMesh>& all
     const QString material_file = info.completeBaseName() + QStringLiteral(".mtl");
     const QStringList names = uniqueNames(meshes);
 
+    // Each image once, as the OBJ file's name with a number.
+    QHash<QByteArray, QString> image_files;
+    QStringList mesh_images;
+    for (const ExportMesh& mesh : meshes)
+    {
+        QString image_file;
+        if (hasImage(mesh))
+        {
+            image_file = image_files.value(mesh.image);
+            QString suffix;
+            QString media_type;
+            const QByteArray image = image_file.isEmpty() ? portableImage(mesh.image, &suffix, &media_type)
+                                                          : QByteArray();
+            if (!image.isEmpty())
+            {
+                image_file = QStringLiteral("%1_fabric%2.%3").arg(info.completeBaseName()).arg(image_files.size() + 1)
+                                 .arg(suffix);
+                QSaveFile written(info.dir().filePath(image_file));
+                if (!open(written, error) || written.write(image) != image.size() || !commit(written, error))
+                {
+                    return false;
+                }
+                image_files.insert(mesh.image, image_file);
+            }
+        }
+        mesh_images.append(image_file);
+    }
+
     QSaveFile materials(info.dir().filePath(material_file));
     if (!open(materials, error))
     {
@@ -149,10 +220,14 @@ bool GarmentExport::writeObj(const QString& path, const QVector<ExportMesh>& all
     material_stream << "# " << QCoreApplication::applicationName() << " 3D View\n";
     for (int i = 0; i < meshes.size(); ++i)
     {
-        const QColor& color = meshes.at(i).color;
+        const QColor color = mesh_images.at(i).isEmpty() ? meshes.at(i).color : QColor(Qt::white);
         material_stream << "\nnewmtl " << names.at(i) << "\n"
                         << "Kd " << color.redF() << ' ' << color.greenF() << ' ' << color.blueF() << "\n"
                         << "Ka 0.0000 0.0000 0.0000\nKs 0.0000 0.0000 0.0000\nd 1.0000\nillum 1\n";
+        if (!mesh_images.at(i).isEmpty())
+        {
+            material_stream << "map_Kd " << mesh_images.at(i) << "\n";
+        }
     }
     material_stream.flush();
 
@@ -172,17 +247,34 @@ bool GarmentExport::writeObj(const QString& path, const QVector<ExportMesh>& all
     int first_flat = 1;
     for (int i = 0; i < meshes.size(); ++i)
     {
+        // OBJ has one set of texture coordinates, which run up: where the mesh is in its image if it has one,
+        // otherwise its flat shape.
         const ExportMesh& mesh = meshes.at(i);
-        const bool textured = mesh.flat.size() == mesh.positions.size();
+        QVector<QPointF> texture;
+        if (!mesh_images.at(i).isEmpty())
+        {
+            for (const QPointF& point : mesh.image_uv)
+            {
+                texture.append(QPointF(point.x(), -point.y()));
+            }
+        }
+        else if (mesh.flat.size() == mesh.positions.size())
+        {
+            for (const QPointF& point : mesh.flat)
+            {
+                texture.append(QPointF(point.x() * metres_per_cm, -point.y() * metres_per_cm));
+            }
+        }
+        const bool textured = !texture.isEmpty();
         stream << "\no " << names.at(i) << "\n";
         for (const QVector3D& position : mesh.positions)
         {
             const QVector3D metres = position * metres_per_cm;
             stream << "v " << metres.x() << ' ' << metres.y() << ' ' << metres.z() << "\n";
         }
-        for (const QPointF& point : textured ? mesh.flat : QVector<QPointF>())
+        for (const QPointF& point : texture)
         {
-            stream << "vt " << point.x() * metres_per_cm << ' ' << -point.y() * metres_per_cm << "\n";
+            stream << "vt " << point.x() << ' ' << point.y() << "\n";
         }
         for (const QVector3D& normal : normals(mesh.positions, mesh.indices))
         {
@@ -205,7 +297,7 @@ bool GarmentExport::writeObj(const QString& path, const QVector<ExportMesh>& all
             stream << "\n";
         }
         first_vertex += mesh.positions.size();
-        first_flat += textured ? mesh.flat.size() : 0;
+        first_flat += texture.size();
     }
     stream.flush();
 
@@ -251,6 +343,49 @@ bool GarmentExport::writeGlb(const QString& path, const QVector<ExportMesh>& all
         accessor.insert(QStringLiteral("type"), type);
         accessors.append(accessor);
         return accessors.size() - 1;
+    };
+
+    // Each image once, in the binary chunk, as a texture repeating both ways.
+    QJsonArray images;
+    QJsonArray textures;
+    QHash<QByteArray, int> image_textures;
+    auto add_texture = [&binary_buffer, &data, &buffer_views, &images, &textures,
+                        &image_textures](const QByteArray& file_bytes)
+    {
+        if (image_textures.contains(file_bytes))
+        {
+            return image_textures.value(file_bytes);
+        }
+        QString suffix;
+        QString media_type;
+        const QByteArray image = portableImage(file_bytes, &suffix, &media_type);
+        int index = -1;
+        if (!image.isEmpty())
+        {
+            const qint64 start = binary_buffer.pos();
+            data.writeRawData(image.constData(), static_cast<int>(image.size()));
+            QJsonObject view;
+            view.insert(QStringLiteral("buffer"), 0);
+            view.insert(QStringLiteral("byteOffset"), start);
+            view.insert(QStringLiteral("byteLength"), image.size());
+            buffer_views.append(view);
+            while (binary_buffer.pos() % 4 != 0)
+            {
+                data << static_cast<quint8>(0);
+            }
+
+            QJsonObject gltf_image;
+            gltf_image.insert(QStringLiteral("bufferView"), buffer_views.size() - 1);
+            gltf_image.insert(QStringLiteral("mimeType"), media_type);
+            images.append(gltf_image);
+            QJsonObject texture;
+            texture.insert(QStringLiteral("source"), images.size() - 1);
+            texture.insert(QStringLiteral("sampler"), 0);
+            textures.append(texture);
+            index = static_cast<int>(textures.size()) - 1;
+        }
+        image_textures.insert(file_bytes, index);
+        return index;
     };
 
     QJsonArray nodes;
@@ -307,6 +442,20 @@ bool GarmentExport::writeGlb(const QString& path, const QVector<ExportMesh>& all
                                            QStringLiteral("VEC2")));
         }
 
+        const int texture = hasImage(mesh) ? add_texture(mesh.image) : -1;
+        if (texture >= 0)
+        {
+            start = binary_buffer.pos();
+            for (const QPointF& point : mesh.image_uv)
+            {
+                data << static_cast<float>(point.x()) << static_cast<float>(point.y());
+            }
+            attributes.insert(attributes.contains(QStringLiteral("TEXCOORD_0")) ? QStringLiteral("TEXCOORD_1")
+                                                                                : QStringLiteral("TEXCOORD_0"),
+                              add_accessor(start, gl_array_buffer, gl_float, static_cast<int>(mesh.image_uv.size()),
+                                           QStringLiteral("VEC2")));
+        }
+
         start = binary_buffer.pos();
         for (const quint32 index : mesh.indices)
         {
@@ -316,9 +465,19 @@ bool GarmentExport::writeGlb(const QString& path, const QVector<ExportMesh>& all
                                                 static_cast<int>(mesh.indices.size()), QStringLiteral("SCALAR"));
 
         QJsonObject color;
-        color.insert(QStringLiteral("baseColorFactor"),
-                     QJsonArray{linear(mesh.color.redF()), linear(mesh.color.greenF()), linear(mesh.color.blueF()),
-                                1.0});
+        if (texture >= 0)
+        {
+            QJsonObject texture_info;
+            texture_info.insert(QStringLiteral("index"), texture);
+            texture_info.insert(QStringLiteral("texCoord"), attributes.contains(QStringLiteral("TEXCOORD_1")) ? 1 : 0);
+            color.insert(QStringLiteral("baseColorTexture"), texture_info);
+        }
+        else
+        {
+            color.insert(QStringLiteral("baseColorFactor"),
+                         QJsonArray{linear(mesh.color.redF()), linear(mesh.color.greenF()), linear(mesh.color.blueF()),
+                                    1.0});
+        }
         color.insert(QStringLiteral("metallicFactor"), 0.0);
         color.insert(QStringLiteral("roughnessFactor"), cloth_roughness);
         QJsonObject material;
@@ -359,6 +518,17 @@ bool GarmentExport::writeGlb(const QString& path, const QVector<ExportMesh>& all
     root.insert(QStringLiteral("nodes"), nodes);
     root.insert(QStringLiteral("meshes"), gltf_meshes);
     root.insert(QStringLiteral("materials"), materials);
+    if (!textures.isEmpty())
+    {
+        QJsonObject sampler;
+        sampler.insert(QStringLiteral("magFilter"), gl_linear);
+        sampler.insert(QStringLiteral("minFilter"), gl_linear_mipmap_linear);
+        sampler.insert(QStringLiteral("wrapS"), gl_repeat);
+        sampler.insert(QStringLiteral("wrapT"), gl_repeat);
+        root.insert(QStringLiteral("samplers"), QJsonArray{sampler});
+        root.insert(QStringLiteral("textures"), textures);
+        root.insert(QStringLiteral("images"), images);
+    }
     root.insert(QStringLiteral("accessors"), accessors);
     root.insert(QStringLiteral("bufferViews"), buffer_views);
     if (!binary.isEmpty())

@@ -37,6 +37,8 @@ private slots:
     void normalsPointOutOfTheFront() const;
     void objHoldsEveryMesh() const;
     void glbIsBinaryGltf() const;
+    void objCarriesFabricImages() const;
+    void glbCarriesFabricImages() const;
 
 private:
     Q_DISABLE_COPY(TST_GarmentExport)
