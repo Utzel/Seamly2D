@@ -150,10 +150,18 @@ Rectangle {
             }
         }
 
+        // Ambient occlusion darkens the cloth in its folds and where it lies close to the body, as daylight does, and
+        // filmic tone mapping keeps light cloth from washing out to white.
         environment: SceneEnvironment {
             backgroundMode: SceneEnvironment.Transparent
             antialiasingMode: SceneEnvironment.MSAA
             antialiasingQuality: SceneEnvironment.High
+            aoEnabled: true
+            aoStrength: 90
+            aoDistance: 6
+            aoSoftness: 60
+            aoSampleRate: 3
+            tonemapMode: SceneEnvironment.TonemapModeFilmic
         }
 
         Node {
@@ -165,15 +173,40 @@ Rectangle {
             }
         }
 
-        // Key light from the front, fill light from behind so the back of a turned piece isn't black.
+        // Key light from above the front, casting soft shadows, with a little ambient light so nothing in shadow goes
+        // black; fill light from behind so the back of a turned piece isn't dark.
         DirectionalLight {
-            eulerRotation: Qt.vector3d(-20, -25, 0)
-            brightness: 1.0
+            eulerRotation: Qt.vector3d(-40, -25, 0)
+            brightness: 1.5
+            castsShadow: true
+            shadowMapQuality: Light.ShadowMapQualityVeryHigh
+            softShadowQuality: Light.PCF16
+            pcfFactor: 3
+            shadowFactor: 45
+            shadowBias: 0.3
+            shadowMapFar: Math.max(root.sceneModel.sceneRadius * 6, 500)
+            ambientColor: Qt.rgba(0.3, 0.3, 0.3, 1)
         }
 
         DirectionalLight {
             eulerRotation: Qt.vector3d(20, 155, 0)
             brightness: 0.6
+        }
+
+        // The floor the avatar stands on, a shade off the background, for its shadow and the garment's to fall on.
+        Model {
+            visible: root.sceneModel.hasAvatar
+            source: "#Cylinder"
+            position: root.sceneModel.avatarFloor.minus(Qt.vector3d(0, 0.1, 0))
+            scale: Qt.vector3d(root.sceneModel.avatarReach / 50, 0.002, root.sceneModel.avatarReach / 50)
+            castsShadows: false
+            pickable: false
+
+            materials: PrincipledMaterial {
+                baseColor: Qt.darker(root.backgroundColor, root.backgroundColor.hslLightness > 0.5 ? 1.08 : 0.8)
+                roughness: 1.0
+                metalness: 0.0
+            }
         }
 
         // The avatar, fitted to the pattern's measurements, in a plain grey like a dress form. While sewing it fades,
@@ -210,21 +243,25 @@ Rectangle {
             Model {
                 geometry: root.seamEditor.garmentSeams
                 materials: garment_seam_material
+                castsShadows: false
             }
 
             Model {
                 geometry: root.seamEditor.garmentLines
                 materials: garment_seam_material
+                castsShadows: false
             }
 
             Model {
                 geometry: root.seamEditor.garmentPreview
                 materials: garment_seam_material
+                castsShadows: false
             }
 
             Model {
                 geometry: root.seamEditor.garmentPreviewLines
                 materials: garment_seam_material
+                castsShadows: false
             }
         }
 
@@ -313,6 +350,7 @@ Rectangle {
                     Model {
                         visible: piece_node.pieceStitchPreview.stitchCount > 0
                         geometry: piece_node.pieceStitchPreview
+                        castsShadows: false
 
                         materials: PrincipledMaterial {
                             lighting: PrincipledMaterial.NoLighting
@@ -324,6 +362,7 @@ Rectangle {
                     Model {
                         z: 0.02
                         geometry: piece_node.pieceOutline
+                        castsShadows: false
 
                         materials: PrincipledMaterial {
                             lighting: PrincipledMaterial.NoLighting
@@ -348,24 +387,28 @@ Rectangle {
                 Model {
                     geometry: root.seamEditor.seamBands
                     materials: seam_material
+                    castsShadows: false
                 }
 
                 Model {
                     z: 0.01
                     geometry: root.seamEditor.seamLines
                     materials: seam_material
+                    castsShadows: false
                 }
 
                 Model {
                     z: 0.02
                     geometry: root.seamEditor.previewBands
                     materials: seam_material
+                    castsShadows: false
                 }
 
                 Model {
                     z: 0.03
                     geometry: root.seamEditor.previewLines
                     materials: seam_material
+                    castsShadows: false
                 }
             }
         }

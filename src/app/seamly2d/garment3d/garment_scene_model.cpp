@@ -808,6 +808,21 @@ QString GarmentSceneModel::avatarNote() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief Where the avatar stands: the point of the floor under its middle.
+QVector3D GarmentSceneModel::avatarFloor() const
+{
+    const QVector3D middle = (m_avatar_minimum + m_avatar_maximum) / 2.0f;
+    return m_has_avatar ? QVector3D(middle.x(), m_avatar_minimum.y(), middle.z()) : QVector3D();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief How far the avatar reaches out from its middle, arms and all, in cm.
+qreal GarmentSceneModel::avatarReach() const
+{
+    return m_has_avatar ? static_cast<qreal>((m_avatar_maximum - m_avatar_minimum).length()) / 2.0 : 0.0;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Places the board of pieces and works out what the camera has to see. In 3D the pieces' y axis points up, so their
 // rectangle is flipped.
 void GarmentSceneModel::updateSceneBounds()

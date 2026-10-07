@@ -59,6 +59,8 @@ class GarmentSceneModel : public QAbstractListModel
     Q_PROPERTY(bool hasAvatar READ hasAvatar NOTIFY avatarChanged)
     Q_PROPERTY(QObject* avatarGeometry READ avatarGeometry NOTIFY avatarChanged)
     Q_PROPERTY(QString avatarNote READ avatarNote NOTIFY avatarChanged)
+    Q_PROPERTY(QVector3D avatarFloor READ avatarFloor NOTIFY avatarChanged)
+    Q_PROPERTY(qreal avatarReach READ avatarReach NOTIFY avatarChanged)
     Q_PROPERTY(bool arranging READ isArranging NOTIFY arrangingChanged)
     Q_PROPERTY(QString hint READ hint NOTIFY hintChanged)
     Q_PROPERTY(bool fitMapShown READ isFitMapShown NOTIFY fitMapChanged)
@@ -134,6 +136,8 @@ public:
     bool                   hasAvatar() const;
     QObject*               avatarGeometry() const;
     QString                avatarNote() const;
+    QVector3D              avatarFloor() const;
+    qreal                  avatarReach() const;
 
     bool                   isArranging() const;
     void                   setArranging(bool arranging);
