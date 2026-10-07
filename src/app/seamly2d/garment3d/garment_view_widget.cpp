@@ -26,15 +26,19 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QBuffer>
 #include <QColor>
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDir>
 #include <QEvent>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QIcon>
 #include <QImage>
+#include <QImageReader>
+#include <QInputDialog>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
@@ -140,6 +144,15 @@ const int tool_group_spacing = 6;
 // Fabrics give their thickness in mm, the scene is in cm.
 const qreal millimetres_per_cm = 10.0;
 
+// How wide the cloth an image of a fabric shows is taken to be until said otherwise, and how narrow and how wide it
+// can be said to be, in cm.
+const qreal default_image_width = 10.0;
+const qreal narrowest_image_width = 0.5;
+const qreal widest_image_width = 500.0;
+
+// Images of fabrics are kept in the pattern at most this many pixels across and along; larger ones are scaled down.
+const int kept_image_limit = 2048;
+
 // Edge length of the triangles in cm for a final drape; CLO recommends 20 mm while editing and 5 to 10 mm for the
 // final drape.
 const qreal fine_edge_length = 1.0;
@@ -155,6 +168,49 @@ const char* const thread_colors[] = {"#f2f0eb", "#202020", "#c8962d", "#b3261e"}
 // outline.
 const int dark_lightness = 128;
 const int black_level = 60;
+
+//---------------------------------------------------------------------------------------------------------------------
+// The image file as an image of a fabric to keep in the pattern: a PNG or JPG file as it is, any other image, and any
+// larger than kept_image_limit pixels across or along, scaled down to that and saved as PNG, or JPG for a JPG. Its
+// width is left to be said. Null for a file that isn't an image.
+VFabricTexture readFabricImage(const QString& path)
+{
+    VFabricTexture texture;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        return texture;
+    }
+    QByteArray bytes = file.readAll();
+    QImage image = QImage::fromData(bytes);
+    if (image.isNull())
+    {
+        return texture;
+    }
+
+    QBuffer read(&bytes);
+    read.open(QIODevice::ReadOnly);
+    const QByteArray format = QImageReader::imageFormat(&read);
+    const bool jpg = format == "jpeg" || format == "jpg";
+    const bool fits = image.width() <= kept_image_limit && image.height() <= kept_image_limit;
+    texture.extension = jpg ? QStringLiteral("JPG") : QStringLiteral("PNG");
+    if (fits && (jpg || format == "png"))
+    {
+        texture.image = bytes;
+    }
+    else
+    {
+        if (!fits)
+        {
+            image = image.scaled(kept_image_limit, kept_image_limit, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        }
+        QBuffer written;
+        written.open(QIODevice::WriteOnly);
+        image.save(&written, jpg ? "JPG" : "PNG");
+        texture.image = written.data();
+    }
+    return texture;
+}
 } // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -211,6 +267,9 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_checks_action(nullptr)
     , m_export_action(nullptr)
     , m_fabric_box(nullptr)
+    , m_image_action(nullptr)
+    , m_image_width_action(nullptr)
+    , m_remove_image_action(nullptr)
     , m_quick_view(nullptr)
     , m_view_container(nullptr)
     , m_message_label(new QLabel(this))
@@ -479,6 +538,9 @@ void GarmentViewWidget::rebuildScene()
             const qreal grain_angle = grainAngle(piece);
             scene_piece.grain_angle = grain_angle;
             scene_piece.thickness = Fabric::preset(fabrics.of(id)).thickness / millimetres_per_cm;
+            const VFabricTexture texture = fabrics.textureOf(id);
+            scene_piece.texture = texture.image;
+            scene_piece.texture_width = texture.width;
 
             // What the seams and the topstitching are drawn on: the piece as drafted, and the meshes shown of it.
             ShownPiece shown_piece;
@@ -1319,6 +1381,10 @@ void GarmentViewWidget::updateActions()
     const QString fabric = selected != 0 ? fabrics.of(selected) : fabrics.garment;
     const int index = m_fabric_box->findData(fabric.isEmpty() ? Fabric::defaultName() : fabric);
     m_fabric_box->setCurrentIndex(qMax(index, 0));
+
+    const bool own_image = !ownFabricImage().isNull();
+    m_image_width_action->setEnabled(own_image);
+    m_remove_image_action->setEnabled(own_image);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1332,7 +1398,7 @@ void GarmentViewWidget::updateFabrics()
 
 //---------------------------------------------------------------------------------------------------------------------
 // A fabric was picked: for the selected piece, or for the whole garment when no piece is selected. A piece cut from
-// the garment's fabric doesn't keep a fabric of its own.
+// the garment's fabric doesn't keep a fabric of its own, but keeps an image of its own.
 void GarmentViewWidget::chooseFabric(int index)
 {
     const QString chosen = m_fabric_box->itemData(index).toString();
@@ -1341,15 +1407,26 @@ void GarmentViewWidget::chooseFabric(int index)
     const quint32 selected = m_scene_model->selectedPiece();
     if (selected != 0)
     {
-        auto own = [selected](const VPieceFabric& piece)
+        const QString garment = after.garment.isEmpty() ? Fabric::defaultName() : after.garment;
+        const QString fabric = chosen != garment ? chosen : QString();
+        auto own = std::find_if(after.pieces.begin(), after.pieces.end(), [selected](const VPieceFabric& piece)
         {
             return piece.piece_id == selected;
-        };
-        after.pieces.erase(std::remove_if(after.pieces.begin(), after.pieces.end(), own), after.pieces.end());
-        const QString garment = after.garment.isEmpty() ? Fabric::defaultName() : after.garment;
-        if (chosen != garment)
+        });
+        if (own == after.pieces.end())
         {
-            after.pieces.append({selected, chosen});
+            if (!fabric.isEmpty())
+            {
+                after.pieces.append({selected, fabric, VFabricTexture()});
+            }
+        }
+        else if (fabric.isEmpty() && own->texture.isNull())
+        {
+            after.pieces.erase(own);
+        }
+        else
+        {
+            own->fabric = fabric;
         }
     }
     else
@@ -1360,6 +1437,128 @@ void GarmentViewWidget::chooseFabric(int index)
     if (!(after == before))
     {
         qApp->getUndoStack()->push(new SaveFabrics(tr("change fabric"), before, after, m_doc));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// An image of the fabric was asked for: for the selected piece, or for the whole garment when no piece is selected.
+// It is kept in the pattern, and repeats as often across the grain as the cloth it shows is said to be wide.
+void GarmentViewWidget::chooseFabricImage()
+{
+    const QString pattern = qApp->getFilePath();
+    const QString folder = pattern.isEmpty() ? QDir::homePath() : QFileInfo(pattern).absolutePath();
+    const QString path = QFileDialog::getOpenFileName(this, tr("Fabric Image"), folder,
+                                                      tr("Images (*.png *.jpg *.jpeg *.bmp)"), nullptr,
+                                                      qApp->Settings()->getUseNativeFileDialogs());
+    if (path.isEmpty())
+    {
+        return;
+    }
+
+    VFabricTexture texture = readFabricImage(path);
+    if (texture.isNull())
+    {
+        QMessageBox::warning(this, tr("Fabric Image"),
+                             tr("%1 could not be read as an image.").arg(QDir::toNativeSeparators(path)));
+        return;
+    }
+
+    const VFabricTexture own = ownFabricImage();
+    bool chosen = false;
+    texture.width = QInputDialog::getDouble(this, tr("Fabric Image"), tr("How wide the cloth in the image is, in cm:"),
+                                            own.isNull() ? default_image_width : own.width, narrowest_image_width,
+                                            widest_image_width, 1, &chosen);
+    if (chosen)
+    {
+        saveFabricImage(texture, tr("change fabric image"));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// How wide the cloth in the image of the fabric is was asked for: the selected piece's image, or the garment's.
+void GarmentViewWidget::changeFabricImageWidth()
+{
+    VFabricTexture texture = ownFabricImage();
+    if (texture.isNull())
+    {
+        return;
+    }
+
+    bool chosen = false;
+    const qreal width = QInputDialog::getDouble(this, tr("Fabric Image"),
+                                                tr("How wide the cloth in the image is, in cm:"), texture.width,
+                                                narrowest_image_width, widest_image_width, 1, &chosen);
+    if (chosen)
+    {
+        texture.width = width;
+        saveFabricImage(texture, tr("change fabric image"));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::removeFabricImage()
+{
+    saveFabricImage(VFabricTexture(), tr("remove fabric image"));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The image of the fabric the selected piece has of its own, or with no piece selected the garment's; null for none.
+VFabricTexture GarmentViewWidget::ownFabricImage() const
+{
+    const VGarmentFabrics fabrics = m_doc->getFabrics();
+    const quint32 selected = m_scene_model->selectedPiece();
+    if (selected == 0)
+    {
+        return fabrics.texture;
+    }
+    for (const VPieceFabric& piece : fabrics.pieces)
+    {
+        if (piece.piece_id == selected)
+        {
+            return piece.texture;
+        }
+    }
+    return VFabricTexture();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Gives the selected piece an image of its fabric of its own, or with no piece selected the garment; a null image
+// takes it away. A piece left with neither a fabric nor an image of its own is cut from the garment's.
+void GarmentViewWidget::saveFabricImage(const VFabricTexture& texture, const QString& text)
+{
+    const VGarmentFabrics before = m_doc->getFabrics();
+    VGarmentFabrics after = before;
+    const quint32 selected = m_scene_model->selectedPiece();
+    if (selected == 0)
+    {
+        after.texture = texture;
+    }
+    else
+    {
+        auto own = std::find_if(after.pieces.begin(), after.pieces.end(), [selected](const VPieceFabric& piece)
+        {
+            return piece.piece_id == selected;
+        });
+        if (own == after.pieces.end())
+        {
+            if (!texture.isNull())
+            {
+                after.pieces.append({selected, QString(), texture});
+            }
+        }
+        else if (own->fabric.isEmpty() && texture.isNull())
+        {
+            after.pieces.erase(own);
+        }
+        else
+        {
+            own->texture = texture;
+        }
+    }
+
+    if (!(after == before))
+    {
+        qApp->getUndoStack()->push(new SaveFabrics(text, before, after, m_doc));
     }
 }
 
@@ -1970,6 +2169,27 @@ void GarmentViewWidget::createToolBar()
     tool_bar->addWidget(m_fabric_box);
     connect(m_fabric_box, QOverload<int>::of(&QComboBox::activated), this, &GarmentViewWidget::chooseFabric);
 
+    // As CLO's fabric textures: an image of the fabric, kept in the pattern, in place of the piece's color.
+    m_image_action = tool_bar->addAction(tr("Fabric Image"));
+    m_image_action->setToolTip(tr("Show the fabric of the selected piece, or of the whole garment when no piece is "
+                                  "selected, as an image of it, repeating across and along the grain. The image is "
+                                  "kept in the pattern."));
+    connect(m_image_action, &QAction::triggered, this, &GarmentViewWidget::chooseFabricImage);
+
+    QMenu* image_menu = new QMenu(this);
+    image_menu->setToolTipsVisible(true);
+    m_image_width_action = image_menu->addAction(tr("Image Width..."));
+    m_image_width_action->setToolTip(tr("How wide the cloth in the image is, which is how often it repeats"));
+    connect(m_image_width_action, &QAction::triggered, this, &GarmentViewWidget::changeFabricImageWidth);
+    m_remove_image_action = image_menu->addAction(tr("Remove Image"));
+    m_remove_image_action->setToolTip(tr("Show the fabric in the piece's color again"));
+    connect(m_remove_image_action, &QAction::triggered, this, &GarmentViewWidget::removeFabricImage);
+    m_image_action->setMenu(image_menu);
+    if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_image_action)))
+    {
+        button->setPopupMode(QToolButton::MenuButtonPopup);
+    }
+
     tool_bar = add_group();
 
     m_export_action = tool_bar->addAction(tr("Export"));
@@ -2003,6 +2223,7 @@ void GarmentViewWidget::updateIcons()
         m_fine_action->setIcon(toolIcon(QStringLiteral("fine")));
         m_fit_action->setIcon(toolIcon(QStringLiteral("strain")));
         m_checks_action->setIcon(toolIcon(QStringLiteral("checks")));
+        m_image_action->setIcon(toolIcon(QStringLiteral("fabric_image")));
         m_export_action->setIcon(toolIcon(QStringLiteral("export")));
     }
 }

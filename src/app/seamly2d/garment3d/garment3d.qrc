@@ -4,6 +4,8 @@
         <file>textures/checks.png</file>
         <file>icons/32x32/checks.png</file>
         <file>icons/32x32/checks@2x.png</file>
+        <file>icons/32x32/fabric_image.png</file>
+        <file>icons/32x32/fabric_image@2x.png</file>
         <file>icons/32x32/sew.png</file>
         <file>icons/32x32/sew@2x.png</file>
         <file>icons/32x32/flip.png</file>

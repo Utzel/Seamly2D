@@ -58,6 +58,7 @@ class SeamEditor;
 class StitchEditor;
 class VAbstractPattern;
 class VContainer;
+struct VFabricTexture;
 struct VPieceArrangement;
 struct VSeam;
 struct VSeamSide;
@@ -102,6 +103,9 @@ private slots:
     void               updateArrangements();
     void               updateFabrics();
     void               chooseFabric(int index);
+    void               chooseFabricImage();
+    void               changeFabricImageWidth();
+    void               removeFabricImage();
     void               flipSeam();
     void               removeSelected();
     void               cancel();
@@ -219,6 +223,9 @@ private:
     QAction*                   m_checks_action;
     QAction*                   m_export_action;
     QComboBox*                 m_fabric_box;
+    QAction*                   m_image_action;
+    QAction*                   m_image_width_action;
+    QAction*                   m_remove_image_action;
     QQuickView*                m_quick_view;
     QWidget*                   m_view_container;
     QLabel*                    m_message_label;
@@ -252,6 +259,8 @@ private:
     void               saveSeams(const QString& text, const QVector<VSeam>& seams);
     void               saveArrangements(const QString& text, const QVector<VPieceArrangement>& arrangements);
     void               saveTopstitches(const VTopstitches& topstitches, const QString& text);
+    VFabricTexture     ownFabricImage() const;
+    void               saveFabricImage(const VFabricTexture& texture, const QString& text);
     QVector<QVector<QPointF>> stitchedPaths(const VPiece& piece) const;
     void               storeArrangement(quint32 piece, const PieceArrangement& wanted, const QString& text);
     void               showArrangement(quint32 piece, const PieceArrangement& arrangement);

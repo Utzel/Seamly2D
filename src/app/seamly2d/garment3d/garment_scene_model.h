@@ -29,6 +29,7 @@
 #include <QColor>
 #include <QHash>
 #include <QRectF>
+#include <QSize>
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
@@ -41,6 +42,7 @@
 
 class AvatarGeometry;
 class PieceGeometry;
+class QQuick3DTextureData;
 class StitchGeometry;
 
 /// @brief What the 3D scene shows, for the scene's QML: the pieces, one row each, and the avatar.
@@ -90,6 +92,8 @@ public:
         PieceStitchesRole,
         PieceStitchPreviewRole,
         PieceThreadColorRole,
+        PieceTextureRole,
+        PieceTextureSizeRole,
         SelectedRole,
         PlacedRole
     };
@@ -103,6 +107,8 @@ public:
         QVector<QVector3D> positions;  ///< where the piece is put, in scene coordinates; none for the board
         qreal              grain_angle = 90.0;  ///< degrees anticlockwise from the piece's x axis
         qreal              thickness = 0.0;     ///< of its fabric, in cm
+        QByteArray         texture;             ///< an image of its fabric, an image file's bytes; empty for none
+        qreal              texture_width = 0.0; ///< how wide the cloth the image shows is, in cm
         QVector<ThreadStitch> stitches;       ///< its topstitching, on its mesh
         QVector<ThreadStitch> preview;        ///< the topstitching an edge under the mouse would get
     };
@@ -182,6 +188,14 @@ signals:
 private:
     Q_DISABLE_COPY(GarmentSceneModel)
 
+    // An image of a fabric as the scene draws it: its pixels, and the color of the cloth seen from afar.
+    struct FabricImage
+    {
+        QQuick3DTextureData* data = nullptr;
+        QSize          size;
+        QColor         color;
+    };
+
     struct Row
     {
         quint32        id = 0;
@@ -191,6 +205,9 @@ private:
         QVector<QVector3D> positions;
         qreal          grain_angle = 90.0;
         qreal          thickness = 0.0;
+        QByteArray     texture;
+        qreal          texture_width = 0.0;
+        FabricImage    image;
         bool           placed = false;
         QVector<ThreadStitch> stitches;
         QVector<ThreadStitch> preview;
@@ -217,8 +234,11 @@ private:
     BodyCollider           m_body;
     bool                   m_checks_shown;
     QColor                 m_thread_color;
+    QHash<QByteArray, FabricImage> m_images;
 
     void                   updateSceneBounds();
+    void                   updateImages();
+    QColor                 clothColor(const Row& row) const;
     void                   showStitches(const Row& row) const;
     void                   showMesh(const Row& row) const;
     QVector<QColor>        vertexColors(const Row& row) const;

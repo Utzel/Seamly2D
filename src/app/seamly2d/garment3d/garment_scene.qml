@@ -301,13 +301,17 @@ Rectangle {
                     required property Geometry pieceStitches
                     required property Geometry pieceStitchPreview
                     required property color pieceThreadColor
+                    required property TextureData pieceTexture
+                    required property size pieceTextureSize
                     required property bool selected
                     required property bool placed
 
                     position: placed ? root.sceneModel.boardOffset.times(-1) : Qt.vector3d(0, 0, index * 0.05)
 
-                    // With a fit map shown, the vertex colors take the place of the piece's own.
-                    readonly property color ownColor: root.sceneModel.fitMapShown ? "white" : pieceColor
+                    // With a fit map shown, the vertex colors take the place of the piece's own; with an image of
+                    // its fabric, the image does.
+                    readonly property color ownColor: root.sceneModel.fitMapShown || pieceTexture ? "white"
+                                                                                                  : pieceColor
 
                     // While a piece is selected the others step back, so the selection reads whatever the colors are.
                     readonly property color clothColor: selected
@@ -316,6 +320,21 @@ Rectangle {
                                                                                     root.highlightColor.b, 0.35))
                                                         : root.sceneModel.selectedPiece !== 0 ? Qt.darker(ownColor, 1.8)
                                                                                               : ownColor
+
+                    // The image of the piece's fabric, in place of the checks: as wide and as long as the cloth it
+                    // shows, repeating across the grain and along it, its top towards where the grainline points.
+                    Texture {
+                        id: fabric_texture
+                        textureData: piece_node.pieceTexture
+                        indexUV: 1
+                        flipV: true
+                        scaleU: 1.0 / Math.max(piece_node.pieceTextureSize.width, 0.1)
+                        scaleV: 1.0 / Math.max(piece_node.pieceTextureSize.height, 0.1)
+                        tilingModeHorizontal: Texture.Repeat
+                        tilingModeVertical: Texture.Repeat
+                        generateMipmaps: true
+                        mipFilter: Texture.Linear
+                    }
 
                     Model {
                         readonly property int pieceId: piece_node.pieceId
@@ -326,8 +345,9 @@ Rectangle {
                         materials: PrincipledMaterial {
                             baseColor: piece_node.clothColor
                             vertexColorsEnabled: root.sceneModel.fitMapShown
-                            baseColorMap: root.sceneModel.checksShown && !root.sceneModel.fitMapShown
-                                          ? checks_texture : null
+                            baseColorMap: root.sceneModel.fitMapShown ? null
+                                          : piece_node.pieceTexture ? fabric_texture
+                                          : root.sceneModel.checksShown ? checks_texture : null
                             roughness: 0.85
                             metalness: 0.0
                             // The cloth has a front face and a back face, each lit as it faces.

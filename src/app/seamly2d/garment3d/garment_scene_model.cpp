@@ -24,8 +24,12 @@
 
 #include "garment_scene_model.h"
 
+#include <QImage>
+#include <QPainter>
 #include <QRectF>
+#include <QSet>
 #include <QtMath>
+#include <QtQuick3D/QQuick3DTextureData>
 
 #include <algorithm>
 #include <limits>
@@ -46,6 +50,9 @@ const qreal check_repeat = 4.0;
 
 // Stitches an edge under the mouse would get are drawn this much thicker than stitches, so they show over them.
 const qreal preview_scale = 1.8;
+
+// The most pixels an image of a fabric is drawn with, across it and along it; larger images are scaled down.
+const int image_limit = 2048;
 
 // The fit maps' colors, at the values they stand for, from the lowest up: strain in percent, green unstretched to
 // dark red twice as stretched as red; ease in cm, red touching the body to blue well off it; pressure in kPa, green
@@ -189,6 +196,7 @@ GarmentSceneModel::GarmentSceneModel(QObject* parent)
     , m_body()
     , m_checks_shown(false)
     , m_thread_color()
+    , m_images()
 {}
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -228,7 +236,21 @@ QVariant GarmentSceneModel::data(const QModelIndex& index, int role) const
                 value = QVariant::fromValue(static_cast<QObject*>(row.preview_geometry));
                 break;
             case PieceThreadColorRole:
-                value = threadColor(row.color);
+                value = threadColor(clothColor(row));
+                break;
+            case PieceTextureRole:
+                value = QVariant::fromValue(static_cast<QObject*>(row.image.data));
+                break;
+            case PieceTextureSizeRole:
+                if (row.image.data != nullptr)
+                {
+                    value = QSizeF(row.texture_width,
+                                   row.texture_width * row.image.size.height() / qMax(row.image.size.width(), 1));
+                }
+                else
+                {
+                    value = QSizeF();
+                }
                 break;
             case SelectedRole:
                 value = patternPiece(row.id) == m_selected_piece;
@@ -254,13 +276,15 @@ QHash<int, QByteArray> GarmentSceneModel::roleNames() const
             {PieceStitchesRole, QByteArrayLiteral("pieceStitches")},
             {PieceStitchPreviewRole, QByteArrayLiteral("pieceStitchPreview")},
             {PieceThreadColorRole, QByteArrayLiteral("pieceThreadColor")},
+            {PieceTextureRole, QByteArrayLiteral("pieceTexture")},
+            {PieceTextureSizeRole, QByteArrayLiteral("pieceTextureSize")},
             {SelectedRole, QByteArrayLiteral("selected")},
             {PlacedRole, QByteArrayLiteral("placed")}};
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-/// @brief Shows these pieces. If they are the same pieces as before, in the same order, only their meshes, names and
-/// colors are updated, so the scene doesn't flicker while the pattern is edited.
+/// @brief Shows these pieces. If they are the same pieces as before, in the same order, only their meshes, names,
+/// colors and images are updated, so the scene doesn't flicker while the pattern is edited.
 void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
 {
     const bool was_empty = m_rows.isEmpty();
@@ -282,6 +306,8 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.positions = pieces.at(i).positions;
             row.grain_angle = pieces.at(i).grain_angle;
             row.thickness = pieces.at(i).thickness;
+            row.texture = pieces.at(i).texture;
+            row.texture_width = pieces.at(i).texture_width;
             row.placed = !row.positions.isEmpty();
             row.stitches = pieces.at(i).stitches;
             row.preview = pieces.at(i).preview;
@@ -289,10 +315,12 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.outline->setOutline(row.mesh, row.positions, row.thickness);
             showStitches(row);
         }
+        updateImages();
         if (!m_rows.isEmpty())
         {
             emit dataChanged(index(0), index(static_cast<int>(m_rows.size()) - 1),
-                             {PieceNameRole, PieceColorRole, PieceThreadColorRole, PlacedRole});
+                             {PieceNameRole, PieceColorRole, PieceThreadColorRole, PieceTextureRole,
+                              PieceTextureSizeRole, PlacedRole});
         }
     }
     else
@@ -317,6 +345,8 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.positions = piece.positions;
             row.grain_angle = piece.grain_angle;
             row.thickness = piece.thickness;
+            row.texture = piece.texture;
+            row.texture_width = piece.texture_width;
             row.placed = !piece.positions.isEmpty();
             row.geometry = new PieceGeometry();
             row.geometry->setParent(this);
@@ -333,6 +363,7 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             showStitches(row);
             m_rows.append(row);
         }
+        updateImages();
         endResetModel();
         emit pieceCountChanged();
 
@@ -430,6 +461,8 @@ QVector<GarmentSceneModel::Piece> GarmentSceneModel::placedPieces() const
             piece.positions = row.positions;
             piece.grain_angle = row.grain_angle;
             piece.thickness = row.thickness;
+            piece.texture = row.texture;
+            piece.texture_width = row.texture_width;
             piece.stitches = row.stitches;
             pieces.append(piece);
         }
@@ -860,6 +893,78 @@ void GarmentSceneModel::updateSceneBounds()
     m_scene_center = (minimum + maximum) / 2.0f;
     m_scene_radius = static_cast<qreal>((maximum - minimum).length()) / 2.0;
     emit sceneBoundsChanged();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Gives each row the image of its fabric, made once for all rows with the same image, and lets go of images no row
+// has any more. An image that can't be read is none.
+void GarmentSceneModel::updateImages()
+{
+    QSet<QByteArray> used;
+    for (Row& row : m_rows)
+    {
+        row.image = FabricImage();
+        if (row.texture.isEmpty() || row.texture_width <= 0)
+        {
+            continue;
+        }
+        used.insert(row.texture);
+
+        auto found = m_images.find(row.texture);
+        if (found == m_images.end())
+        {
+            FabricImage image;
+            QImage pixels = QImage::fromData(row.texture);
+            if (!pixels.isNull())
+            {
+                if (pixels.width() > image_limit || pixels.height() > image_limit)
+                {
+                    pixels = pixels.scaled(image_limit, image_limit, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                }
+
+                // Cloth is drawn solid: what an image leaves see-through is white.
+                QImage opaque(pixels.size(), QImage::Format_RGBA8888);
+                opaque.fill(Qt::white);
+                QPainter painter(&opaque);
+                painter.drawImage(0, 0, pixels);
+                painter.end();
+
+                image.data = new QQuick3DTextureData();
+                image.data->setParent(this);
+                image.data->setSize(opaque.size());
+                image.data->setFormat(QQuick3DTextureData::RGBA8);
+                image.data->setTextureData(QByteArray(reinterpret_cast<const char*>(opaque.constBits()),
+                                                      static_cast<int>(opaque.sizeInBytes())));
+                image.size = opaque.size();
+                image.color = opaque.scaled(1, 1, Qt::IgnoreAspectRatio, Qt::SmoothTransformation).pixelColor(0, 0);
+            }
+            found = m_images.insert(row.texture, image);
+        }
+        row.image = found.value();
+    }
+
+    for (auto image = m_images.begin(); image != m_images.end();)
+    {
+        if (used.contains(image.key()))
+        {
+            ++image;
+        }
+        else
+        {
+            if (image.value().data != nullptr)
+            {
+                image.value().data->deleteLater();
+            }
+            image = m_images.erase(image);
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The color the row's cloth looks from afar: its image's, or its own.
+QColor GarmentSceneModel::clothColor(const Row& row) const
+{
+    return row.image.data != nullptr ? row.image.color : row.color;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
