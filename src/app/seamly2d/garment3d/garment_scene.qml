@@ -150,16 +150,17 @@ Rectangle {
             }
         }
 
-        // Ambient occlusion darkens the cloth in its folds and where it lies close to the body, as daylight does, and
-        // filmic tone mapping keeps light cloth from washing out to white.
+        // Ambient occlusion darkens the cloth in its folds and where it lies close to the body, as daylight does, soft and
+        // wide enough not to pick out the triangles the cloth is made of; filmic tone mapping keeps light cloth from
+        // washing out to white.
         environment: SceneEnvironment {
             backgroundMode: SceneEnvironment.Transparent
             antialiasingMode: SceneEnvironment.MSAA
             antialiasingQuality: SceneEnvironment.High
             aoEnabled: true
-            aoStrength: 90
-            aoDistance: 6
-            aoSoftness: 60
+            aoStrength: 45
+            aoDistance: 12
+            aoSoftness: 100
             aoSampleRate: 3
             tonemapMode: SceneEnvironment.TonemapModeFilmic
         }
