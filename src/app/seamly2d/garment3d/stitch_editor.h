@@ -32,9 +32,8 @@
 #include <QVector>
 
 #include "../ifc/xml/vabstractpattern.h"
-#include "../vgarment/garment_mesh.h"
-#include "../vgarment/piece_outline.h"
 #include "../vgarment/topstitch.h"
+#include "shown_piece.h"
 
 /// @brief Works out the topstitching each piece in the 3D scene shows, and lets edges be stitched with the mouse, for
 /// the scene's QML.
@@ -57,34 +56,9 @@ class StitchEditor : public QObject
     Q_PROPERTY(QString hint READ hint NOTIFY hintChanged)
 
 public:
-    /// How a mesh the scene shows lies over the piece as drafted.
-    enum class Layout
-    {
-        Drafted,   ///< as drafted: the piece on the board, or on the avatar a piece that isn't unfolded
-        Unfolded,  ///< drafted half and its mirror image across the fold line
-        Mirrored   ///< the mirrored copy of a piece cut twice
-    };
-
-    struct Shown
-    {
-        quint32     id = 0;  ///< the scene's id: the piece's, or its mirrored copy's
-        GarmentMesh mesh;
-        Layout      layout = Layout::Drafted;
-    };
-
-    struct Piece
-    {
-        quint32                   id = 0;
-        PieceOutline              outline;         ///< as drafted
-        quint32                   fold_start = 0;  ///< the fold line's ends for a piece cut on the fold, else 0
-        quint32                   fold_end = 0;
-        QVector<QVector<QPointF>> paths;           ///< internal paths drawn as stitching, in cm
-        QVector<Shown>            shown;
-    };
-
     explicit                       StitchEditor(QObject* parent = nullptr);
 
-    void                           setPieces(const QVector<Piece>& pieces, const VTopstitches& topstitches);
+    void                           setPieces(const QVector<ShownPiece>& pieces, const VTopstitches& topstitches);
     void                           setTopstitches(const VTopstitches& topstitches);
 
     bool                           isStitching() const;
@@ -119,25 +93,20 @@ private:
         bool    operator==(const Edge& other) const;
     };
 
-    QVector<Piece>                 m_pieces;
+    QVector<ShownPiece>            m_pieces;
     VTopstitches                   m_topstitches;
     bool                           m_stitching;
     Edge                           m_hovered;
     QHash<quint32, QVector<ThreadStitch>> m_stitches;
     QHash<quint32, QVector<ThreadStitch>> m_preview;
 
-    const Piece*                   pieceShowing(quint32 id, Layout* layout) const;
-    QVector<bool>                  foldSegments(const Piece& piece) const;
-    QVector<QString>               segmentStyles(const Piece& piece) const;
+    const ShownPiece*              pieceShowing(quint32 id, const ShownMesh** shown) const;
+    QVector<QString>               segmentStyles(const ShownPiece& piece) const;
     TopstitchStyle                 chosenStyle() const;
-    QPointF                        drafted(const Piece& piece, Layout layout, const QPointF& point) const;
     Edge                           edgeAt(quint32 id, const QPointF& point, qreal tolerance) const;
     void                           setHovered(const Edge& edge);
     void                           workOutStitches();
     void                           workOutPreview();
-
-    static QVector<QVector<QPointF>> laidOut(const QVector<QVector<QPointF>>& rows, const Piece& piece,
-                                             Layout layout);
 };
 
 #endif // STITCH_EDITOR_H

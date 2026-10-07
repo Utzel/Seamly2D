@@ -120,6 +120,7 @@ private slots:
     void               updateTopstitches();
     void               showStitches();
     void               showStitchPreview();
+    void               showSeamsOnAvatar();
     void               exportDrape();
     void               drapeFrame(int generation, const QVector<QVector3D>& positions);
     void               drapeSettled(int generation);

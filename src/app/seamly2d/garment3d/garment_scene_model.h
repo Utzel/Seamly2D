@@ -104,7 +104,7 @@ public:
     void                   setStitchPreview(const QHash<quint32, QVector<ThreadStitch>>& preview);
     void                   setThreadColor(const QColor& color);
     QColor                 threadColor(const QColor& cloth) const;
-    bool                   isPlaced(quint32 id) const;
+    Q_INVOKABLE bool       isPlaced(quint32 id) const;
     QVector<Piece>         placedPieces() const;
     void                   clear();
 

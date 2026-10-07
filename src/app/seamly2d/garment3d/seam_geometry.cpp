@@ -39,6 +39,9 @@ const int floats_per_vertex = 3 + 4;
 // Where a band turns sharply its corners would shoot far out; they get no further out than this many half widths.
 const qreal longest_miter = 3.0;
 
+// Tubes are drawn with this many sides.
+const int tube_sides = 6;
+
 //---------------------------------------------------------------------------------------------------------------------
 QPointF unit(const QPointF& vector)
 {
@@ -47,11 +50,40 @@ QPointF unit(const QPointF& vector)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+void appendVertex(QVector<float>& vertices, const QVector3D& position, const QColor& color)
+{
+    vertices << position.x() << position.y() << position.z() << static_cast<float>(color.redF())
+             << static_cast<float>(color.greenF()) << static_cast<float>(color.blueF())
+             << static_cast<float>(color.alphaF());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void appendVertex(QVector<float>& vertices, const QPointF& position, const QColor& color)
 {
-    vertices << static_cast<float>(position.x()) << static_cast<float>(position.y()) << 0.0f
-             << static_cast<float>(color.redF()) << static_cast<float>(color.greenF())
-             << static_cast<float>(color.blueF()) << static_cast<float>(color.alphaF());
+    appendVertex(vertices, QVector3D(static_cast<float>(position.x()), static_cast<float>(position.y()), 0.0f), color);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The tube's points without repeats, which have no direction.
+QVector<QVector3D> distinctPoints(const QVector<QVector3D>& points)
+{
+    QVector<QVector3D> distinct;
+    for (const QVector3D& point : points)
+    {
+        if (distinct.isEmpty() || (point - distinct.last()).length() > 1e-6f)
+        {
+            distinct.append(point);
+        }
+    }
+    return distinct;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Any direction square to the given one.
+QVector3D squareTo(const QVector3D& direction)
+{
+    const QVector3D other = qAbs(direction.x()) < 0.9f ? QVector3D(1, 0, 0) : QVector3D(0, 1, 0);
+    return QVector3D::crossProduct(direction, other).normalized();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -133,18 +165,85 @@ void SeamGeometry::setLines(const QVector<Line>& lines)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief Replaces the geometry with tubes of the given radii, in cm, along their points in space. Each ring of a tube
+/// is turned as little as it can from the one before, so the tube doesn't twist.
+void SeamGeometry::setTubes(const QVector<Tube>& tubes)
+{
+    QVector<float> vertices;
+    QVector<quint32> indices;
+    for (const Tube& tube : tubes)
+    {
+        const QVector<QVector3D> points = distinctPoints(tube.points);
+        const int count = static_cast<int>(points.size());
+        if (count < 2)
+        {
+            continue;
+        }
+
+        const quint32 first = static_cast<quint32>(vertices.size() / floats_per_vertex);
+        const float radius = static_cast<float>(tube.radius);
+        QVector3D across;
+        for (int i = 0; i < count; ++i)
+        {
+            const QVector3D incoming = i > 0 ? (points.at(i) - points.at(i - 1)).normalized() : QVector3D();
+            const QVector3D outgoing = i + 1 < count ? (points.at(i + 1) - points.at(i)).normalized() : QVector3D();
+            QVector3D tangent = (incoming + outgoing).normalized();
+            tangent = tangent.isNull() ? (i > 0 ? incoming : outgoing) : tangent;
+
+            across = across.isNull() ? squareTo(tangent) : across - tangent * QVector3D::dotProduct(across, tangent);
+            across = across.isNull() ? squareTo(tangent) : across.normalized();
+            const QVector3D up = QVector3D::crossProduct(tangent, across);
+            for (int side = 0; side < tube_sides; ++side)
+            {
+                const float angle = static_cast<float>(2.0 * M_PI * side / tube_sides);
+                appendVertex(vertices, points.at(i) + (across * qCos(angle) + up * qSin(angle)) * radius, tube.color);
+            }
+        }
+
+        const quint32 ring = static_cast<quint32>(tube_sides);
+        for (int i = 0; i + 1 < count; ++i)
+        {
+            for (int side = 0; side < tube_sides; ++side)
+            {
+                const quint32 a = first + static_cast<quint32>(i * tube_sides + side);
+                const quint32 b = first + static_cast<quint32>(i * tube_sides + (side + 1) % tube_sides);
+                indices << a << b << a + ring << b << b + ring << a + ring;
+            }
+        }
+    }
+    setVertices(vertices, indices, PrimitiveType::Triangles);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Replaces the geometry with thin lines between points in space.
+void SeamGeometry::setSegments(const QVector<Segment>& segments)
+{
+    QVector<float> vertices;
+    QVector<quint32> indices;
+    for (const Segment& segment : segments)
+    {
+        const quint32 from = static_cast<quint32>(vertices.size() / floats_per_vertex);
+        indices << from << from + 1;
+        appendVertex(vertices, segment.from, segment.color);
+        appendVertex(vertices, segment.to, segment.color);
+    }
+    setVertices(vertices, indices, PrimitiveType::Lines);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void SeamGeometry::setVertices(const QVector<float>& vertices, const QVector<quint32>& indices,
                                PrimitiveType primitive_type)
 {
     const float largest = std::numeric_limits<float>::max();
-    QVector3D minimum(largest, largest, 0.0f);
-    QVector3D maximum(-largest, -largest, 0.0f);
-    for (int i = 0; i + 1 < vertices.size(); i += floats_per_vertex)
+    QVector3D minimum(largest, largest, largest);
+    QVector3D maximum(-largest, -largest, -largest);
+    for (int i = 0; i + 2 < vertices.size(); i += floats_per_vertex)
     {
-        minimum.setX(qMin(minimum.x(), vertices.at(i)));
-        minimum.setY(qMin(minimum.y(), vertices.at(i + 1)));
-        maximum.setX(qMax(maximum.x(), vertices.at(i)));
-        maximum.setY(qMax(maximum.y(), vertices.at(i + 1)));
+        const QVector3D position(vertices.at(i), vertices.at(i + 1), vertices.at(i + 2));
+        minimum = QVector3D(qMin(minimum.x(), position.x()), qMin(minimum.y(), position.y()),
+                            qMin(minimum.z(), position.z()));
+        maximum = QVector3D(qMax(maximum.x(), position.x()), qMax(maximum.y(), position.y()),
+                            qMax(maximum.z(), position.z()));
     }
     if (vertices.isEmpty())
     {

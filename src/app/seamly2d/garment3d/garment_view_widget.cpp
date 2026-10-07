@@ -316,9 +316,9 @@ void GarmentViewWidget::clear()
     m_scene_model->clear();
     m_seam_editor->setSewing(false);
     m_seam_editor->setSeams(QVector<VSeam>());
-    m_seam_editor->setPieces(QVector<SeamEditor::Piece>());
+    m_seam_editor->setPieces(QVector<ShownPiece>());
     m_stitch_editor->setStitching(false);
-    m_stitch_editor->setPieces(QVector<StitchEditor::Piece>(), VTopstitches());
+    m_stitch_editor->setPieces(QVector<ShownPiece>(), VTopstitches());
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -450,8 +450,7 @@ void GarmentViewWidget::rebuildScene()
     m_turned_pairs = turnedPairs();
 
     QVector<GarmentSceneModel::Piece> scene_pieces;
-    QVector<SeamEditor::Piece> seam_pieces;
-    QVector<StitchEditor::Piece> stitch_pieces;
+    QVector<ShownPiece> shown_pieces;
     m_garment_pieces.clear();
     for (const quint32 id : ids)
     {
@@ -468,22 +467,24 @@ void GarmentViewWidget::rebuildScene()
             const qreal grain_angle = grainAngle(piece);
             scene_piece.grain_angle = grain_angle;
 
-            StitchEditor::Piece stitch_piece;
-            stitch_piece.id = id;
-            stitch_piece.outline = cached.outline;
+            // What the seams and the topstitching are drawn on: the piece as drafted, and the meshes shown of it.
+            ShownPiece shown_piece;
+            shown_piece.id = id;
+            shown_piece.outline = cached.outline;
+            shown_piece.symmetry = cached.symmetry;
             if (cached.symmetry == PieceSymmetry::Fold)
             {
-                stitch_piece.fold_start = cached.fold_start;
-                stitch_piece.fold_end = cached.fold_end;
+                shown_piece.fold_start = cached.fold_start;
+                shown_piece.fold_end = cached.fold_end;
             }
-            stitch_piece.paths = stitchedPaths(piece);
+            shown_piece.paths = stitchedPaths(piece);
 
             const bool placed = !m_wrap.isNull() && m_arrangements.contains(id) && !cached.garment_mesh.isEmpty();
             if (placed)
             {
                 const bool unfolded = cached.symmetry == PieceSymmetry::Fold;
-                stitch_piece.shown.append({id, cached.garment_mesh,
-                                           unfolded ? StitchEditor::Layout::Unfolded : StitchEditor::Layout::Drafted});
+                shown_piece.shown.append({id, cached.garment_mesh,
+                                          unfolded ? PieceLayout::Unfolded : PieceLayout::Drafted, true});
                 scene_piece.mesh = cached.garment_mesh;
                 scene_piece.positions = piecePositions(id, cached.garment_mesh);
                 scene_pieces.append(scene_piece);
@@ -497,30 +498,24 @@ void GarmentViewWidget::rebuildScene()
                     mirror_piece.positions = piecePositions(mirror_piece.id, cached.mirror_mesh);
                     mirror_piece.grain_angle = 180.0 - grain_angle;
                     scene_pieces.append(mirror_piece);
-                    stitch_piece.shown.append({mirror_piece.id, cached.mirror_mesh, StitchEditor::Layout::Mirrored});
+                    shown_piece.shown.append({mirror_piece.id, cached.mirror_mesh, PieceLayout::Mirrored, true});
                     m_garment_pieces.append({mirror_piece.id, cached.mirror_mesh, 180.0 - grain_angle});
                 }
             }
             else
             {
-                // Pieces lie on the board as drafted, and seams are sewn there.
+                // Pieces lie on the board as drafted.
                 scene_piece.mesh = cached.mesh;
                 scene_pieces.append(scene_piece);
-                stitch_piece.shown.append({id, cached.mesh, StitchEditor::Layout::Drafted});
-
-                SeamEditor::Piece seam_piece;
-                seam_piece.id = id;
-                seam_piece.outline = cached.outline;
-                seam_piece.mirrored = cached.symmetry == PieceSymmetry::Pair;
-                seam_pieces.append(seam_piece);
+                shown_piece.shown.append({id, cached.mesh, PieceLayout::Drafted, false});
             }
-            stitch_pieces.append(stitch_piece);
+            shown_pieces.append(shown_piece);
         }
     }
 
     // The topstitching goes onto the new meshes with them.
     const VTopstitches topstitches = m_doc->getTopstitches();
-    m_stitch_editor->setPieces(stitch_pieces, topstitches);
+    m_stitch_editor->setPieces(shown_pieces, topstitches);
     m_scene_model->setThreadColor(QColor(topstitches.color));
     const QHash<quint32, QVector<ThreadStitch>> stitches = m_stitch_editor->stitches();
     const QHash<quint32, QVector<ThreadStitch>> preview = m_stitch_editor->preview();
@@ -532,7 +527,8 @@ void GarmentViewWidget::rebuildScene()
 
     m_scene_model->setPieces(scene_pieces);
     m_seam_editor->setSeams(m_doc->getSeams());
-    m_seam_editor->setPieces(seam_pieces);
+    m_seam_editor->setPieces(shown_pieces);
+    showSeamsOnAvatar();
 
     updateAvatar();
 
@@ -1092,6 +1088,7 @@ void GarmentViewWidget::showPlaced(quint32 piece)
             m_scene_model->setPiecePositions(copy, piecePositions(copy, mesh));
         }
     }
+    showSeamsOnAvatar();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1230,6 +1227,7 @@ void GarmentViewWidget::drapeFrame(int generation, const QVector<QVector3D>& pos
                 m_scene_model->setPiecePositions(drape_piece.id, piece_positions);
             }
         }
+        showSeamsOnAvatar();
         m_runner->frameShown();
         m_reset_action->setEnabled(true);
     }
@@ -1480,6 +1478,18 @@ void GarmentViewWidget::showStitchPreview()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// The seams on the avatar follow the pieces there, as they are arranged or draped.
+void GarmentViewWidget::showSeamsOnAvatar()
+{
+    QHash<quint32, QVector<QVector3D>> positions;
+    for (const GarmentSceneModel::Piece& piece : m_scene_model->placedPieces())
+    {
+        positions.insert(piece.id, piece.positions);
+    }
+    m_seam_editor->setPositions(positions);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // The piece's internal paths drawn dashed or dotted, which stand for stitching drawn on the pattern, in cm at the
 // piece's place in the piece scene, as its outline is. Paths that reach to the cutting line stop at the seam line.
 QVector<QVector<QPointF>> GarmentViewWidget::stitchedPaths(const VPiece& piece) const
@@ -1700,9 +1710,24 @@ void GarmentViewWidget::createToolBar()
 
     m_sew_action = tool_bar->addAction(tr("Sew"));
     m_sew_action->setCheckable(true);
-    m_sew_action->setToolTip(tr("Sew pieces together: click an edge near the end where the seam starts, then the "
-                                "edge it is sewn to near the end that meets it"));
+    m_sew_action->setToolTip(tr("Sew pieces together, on the board or on the avatar: click an edge near the end where "
+                                "the seam starts, then the edge it is sewn to near the end that meets it"));
     connect(m_sew_action, &QAction::toggled, m_seam_editor, &SeamEditor::setSewing);
+
+    // As CLO's sewing lines: the seams show on the avatar too, unless hidden for a clean look at the garment.
+    QMenu* sew_menu = new QMenu(this);
+    sew_menu->setToolTipsVisible(true);
+    QAction* avatar_seams = sew_menu->addAction(tr("Seams on the Avatar"));
+    avatar_seams->setCheckable(true);
+    avatar_seams->setChecked(m_seam_editor->isGarmentSeamsShown());
+    avatar_seams->setToolTip(tr("Show the seams on the pieces on the avatar, each in its color, with lines between the "
+                                "places that meet while the pieces hang apart"));
+    connect(avatar_seams, &QAction::toggled, m_seam_editor, &SeamEditor::setGarmentSeamsShown);
+    m_sew_action->setMenu(sew_menu);
+    if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_sew_action)))
+    {
+        button->setPopupMode(QToolButton::MenuButtonPopup);
+    }
 
     m_flip_action = tool_bar->addAction(tr("Flip"));
     m_flip_action->setToolTip(tr("Turn the selected seam around, when its lines cross"));

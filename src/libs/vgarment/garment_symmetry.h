@@ -68,6 +68,7 @@ public:
     PieceSymmetry      symmetry(quint32 piece) const;
 
     QVector<GarmentSeam> madeUp(const QVector<GarmentSeam>& seams) const;
+    bool               mirrored(const GarmentSeamSide& side, GarmentSeamSide* mirror, bool* turned) const;
 
 private:
     struct Piece
@@ -78,8 +79,6 @@ private:
     };
 
     QHash<quint32, Piece> m_pieces;
-
-    bool               mirrored(const GarmentSeamSide& side, GarmentSeamSide* mirror, bool* turned) const;
 };
 
 #endif // GARMENT_SYMMETRY_H

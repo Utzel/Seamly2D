@@ -26,24 +26,31 @@
 #define SEAM_EDITOR_H
 
 #include <QColor>
+#include <QHash>
 #include <QObject>
 #include <QPointF>
 #include <QString>
+#include <QVector3D>
 #include <QVector>
 
 #include "../ifc/xml/vabstractpattern.h"
-#include "../vgarment/piece_outline.h"
+#include "../vgarment/garment_symmetry.h"
 #include "../vgarment/seam_stretch.h"
 #include "seam_geometry.h"
+#include "shown_piece.h"
 
-/// @brief Shows the seams on the board of pieces and lets them be sewn with the mouse, for the scene's QML.
+/// @brief Shows the seams on the pieces, on the board and on the avatar, and lets them be sewn with the mouse, for the
+/// scene's QML.
 ///
 /// Sewing works like segment sewing elsewhere: click a segment of a piece's seam line near the end where the seam
-/// starts, then the segment it is sewn to near the end that meets that start. Lines join the places that meet, so a
-/// twisted seam shows as crossing lines. Positions come from QML in the board's coordinates: cm, y up.
+/// starts, then the segment it is sewn to near the end that meets that start. Each seam shows in a color of its own
+/// along both its sides, and lines join the places that meet, so a twisted seam shows as crossing lines. On the avatar
+/// the seams follow the drape, a seam of pieces made up on both sides of the body shows on both, and the lines shrink
+/// away as the seams close. Positions come from QML in the board's coordinates, cm with y up, or, on the avatar, in the
+/// flat coordinates of the mesh clicked.
 ///
-/// A piece cut twice has a mirror image that isn't on the board; sewing one of its segments to itself sews it to the
-/// mirror image, as a centre back seam.
+/// A piece cut twice has a mirror image; sewing one of its segments to itself sews it to the mirror image, as a centre
+/// back seam.
 ///
 /// The editor only proposes seams (seamSewn); they are made through the undo stack and come back with setSeams().
 class SeamEditor : public QObject
@@ -52,22 +59,21 @@ class SeamEditor : public QObject
     Q_PROPERTY(bool sewing READ isSewing NOTIFY sewingChanged)
     Q_PROPERTY(int selectedSeam READ selectedSeam NOTIFY selectedSeamChanged)
     Q_PROPERTY(QString hint READ hint NOTIFY hintChanged)
+    Q_PROPERTY(bool garmentSeamsShown READ isGarmentSeamsShown NOTIFY garmentSeamsShownChanged)
     Q_PROPERTY(QObject* seamBands READ seamBands CONSTANT)
     Q_PROPERTY(QObject* seamLines READ seamLines CONSTANT)
     Q_PROPERTY(QObject* previewBands READ previewBands CONSTANT)
     Q_PROPERTY(QObject* previewLines READ previewLines CONSTANT)
+    Q_PROPERTY(QObject* garmentSeams READ garmentSeams CONSTANT)
+    Q_PROPERTY(QObject* garmentLines READ garmentLines CONSTANT)
+    Q_PROPERTY(QObject* garmentPreview READ garmentPreview CONSTANT)
+    Q_PROPERTY(QObject* garmentPreviewLines READ garmentPreviewLines CONSTANT)
 
 public:
-    struct Piece
-    {
-        quint32      id = 0;
-        PieceOutline outline;
-        bool         mirrored = false;  ///< cut twice, so a side can be sewn to its mirror image
-    };
-
     explicit             SeamEditor(QObject* parent = nullptr);
 
-    void                 setPieces(const QVector<Piece>& pieces);
+    void                 setPieces(const QVector<ShownPiece>& pieces);
+    void                 setPositions(const QHash<quint32, QVector<QVector3D>>& positions);
     void                 setSeams(const QVector<VSeam>& seams);
     void                 setHighlightColor(const QColor& color);
 
@@ -78,25 +84,35 @@ public:
     QString              hint() const;
     bool                 cancel();
 
+    bool                 isGarmentSeamsShown() const;
+    void                 setGarmentSeamsShown(bool shown);
+
     QObject*             seamBands() const;
     QObject*             seamLines() const;
     QObject*             previewBands() const;
     QObject*             previewLines() const;
+    QObject*             garmentSeams() const;
+    QObject*             garmentLines() const;
+    QObject*             garmentPreview() const;
+    QObject*             garmentPreviewLines() const;
 
     Q_INVOKABLE void     hover(qreal x, qreal y, qreal tolerance);
+    Q_INVOKABLE void     hoverPiece(int id, qreal x, qreal y, qreal tolerance);
     Q_INVOKABLE void     leave();
     Q_INVOKABLE bool     click(qreal x, qreal y, qreal tolerance);
+    Q_INVOKABLE bool     clickPiece(int id, qreal x, qreal y, qreal tolerance);
 
 signals:
     void                 sewingChanged();
     void                 selectedSeamChanged();
     void                 hintChanged();
+    void                 garmentSeamsShownChanged();
     void                 seamSewn(const VSeam& seam);
 
 private:
     Q_DISABLE_COPY(SeamEditor)
 
-    // A segment of a shown piece, and which of its ends the seam starts at.
+    // A segment of a piece as drafted, and which of its ends the seam starts at.
     struct Edge
     {
         quint32 piece_id = 0;
@@ -107,7 +123,8 @@ private:
         bool    sameSegment(const Edge& other) const;
     };
 
-    // A seam that can be drawn, its second side turned to run like the first.
+    // A seam of pieces the scene shows, with its sides on the pieces as drafted, the second turned to run like the
+    // first.
     struct ShownSeam
     {
         int         index = -1;
@@ -115,28 +132,57 @@ private:
         SeamStretch second;
     };
 
-    QVector<Piece>       m_pieces;
+    // A stretch of seam line on a piece on the avatar, as the piece's mesh has it, with its vertices where they are
+    // now.
+    struct PlacedStretch
+    {
+        SeamStretch        stretch;
+        QVector<QVector3D> points;
+
+        bool               isEmpty() const;
+        void               reverse();
+        QVector3D          pointAt(qreal distance) const;
+        QVector<QVector3D> startMark() const;
+    };
+
+    QVector<ShownPiece>  m_pieces;
+    QHash<quint32, QVector<QVector3D>> m_positions;
+    GarmentSymmetry      m_symmetry;
     QVector<VSeam>       m_seams;
     QVector<ShownSeam>   m_shown_seams;
     QColor               m_highlight_color;
     bool                 m_sewing;
     int                  m_selected_seam;
+    bool                 m_garment_shown;
     Edge                 m_started;
     Edge                 m_hovered;
     SeamGeometry*        m_seam_bands;
     SeamGeometry*        m_seam_lines;
     SeamGeometry*        m_preview_bands;
     SeamGeometry*        m_preview_lines;
+    SeamGeometry*        m_garment_seams;
+    SeamGeometry*        m_garment_lines;
+    SeamGeometry*        m_garment_preview;
+    SeamGeometry*        m_garment_preview_lines;
 
-    const PieceOutline*  outline(quint32 piece_id) const;
+    const ShownPiece*    piece(quint32 piece_id) const;
+    const ShownPiece*    pieceShowing(quint32 id, const ShownMesh** shown) const;
+    bool                 isOnBoard(quint32 piece_id) const;
     bool                 isMirrored(quint32 piece_id) const;
     Edge                 edgeAt(const QPointF& point, qreal tolerance) const;
+    Edge                 edgeOn(quint32 id, const QPointF& point, qreal tolerance) const;
     SeamStretch          edgeStretch(const Edge& edge) const;
     VSeam                seamBetween(const Edge& first, const Edge& second) const;
     bool                 seamStretches(const VSeam& seam, SeamStretch* first, SeamStretch* second) const;
     bool                 knowsSeam(const VSeam& seam) const;
+    int                  seamNear(const QPointF& point, qreal tolerance, quint32 piece_id) const;
+    QVector<GarmentSeam> garmentSeams(const VSeam& seam) const;
+    PlacedStretch        placedStretch(const GarmentSeamSide& side) const;
+    void                 sewEdge(const Edge& edge);
+    void                 hoverEdge(const Edge& edge);
     void                 updateShownSeams();
     void                 updateSeamGeometry();
+    void                 updateGarmentGeometry();
     void                 updatePreview();
     void                 setStarted(const Edge& edge);
 

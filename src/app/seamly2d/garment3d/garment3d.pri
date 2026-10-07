@@ -9,6 +9,7 @@ SOURCES += \
     $$PWD/piece_geometry.cpp \
     $$PWD/seam_editor.cpp \
     $$PWD/seam_geometry.cpp \
+    $$PWD/shown_piece.cpp \
     $$PWD/stitch_editor.cpp \
     $$PWD/stitch_geometry.cpp
 
@@ -20,6 +21,7 @@ HEADERS += \
     $$PWD/piece_geometry.h \
     $$PWD/seam_editor.h \
     $$PWD/seam_geometry.h \
+    $$PWD/shown_piece.h \
     $$PWD/stitch_editor.h \
     $$PWD/stitch_geometry.h
 

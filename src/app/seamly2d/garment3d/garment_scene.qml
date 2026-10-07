@@ -194,6 +194,40 @@ Rectangle {
             }
         }
 
+        // The seams on the pieces on the avatar, in scene coordinates as the pieces there: tubes along their sides, and
+        // lines between the places that meet while the pieces hang apart. While sewing they always show, with the
+        // segments being sewn over them.
+        Node {
+            visible: root.seamEditor.garmentSeamsShown || root.seamEditor.sewing
+
+            PrincipledMaterial {
+                id: garment_seam_material
+                lighting: PrincipledMaterial.NoLighting
+                vertexColorsEnabled: true
+                cullMode: Material.NoCulling
+            }
+
+            Model {
+                geometry: root.seamEditor.garmentSeams
+                materials: garment_seam_material
+            }
+
+            Model {
+                geometry: root.seamEditor.garmentLines
+                materials: garment_seam_material
+            }
+
+            Model {
+                geometry: root.seamEditor.garmentPreview
+                materials: garment_seam_material
+            }
+
+            Model {
+                geometry: root.seamEditor.garmentPreviewLines
+                materials: garment_seam_material
+            }
+        }
+
         // Checks woven along the grain, the wider stripe along it, repeating every checkRepeat cm; the piece's color
         // tints them. They follow the pieces' second texture coordinates, which run across and along the grain.
         Texture {
@@ -405,9 +439,13 @@ Rectangle {
                     return
                 }
 
+                // A piece on the avatar takes the click itself, the board the click on it.
+                const spot = root.pieceSpot(x, y)
+                const on_avatar = spot !== undefined && root.sceneModel.isPlaced(spot.piece)
                 const point = root.boardPoint(x, y)
-                const used = point !== undefined
-                             && root.seamEditor.click(point.x, point.y, root.boardTolerance(x, y, point))
+                const used = on_avatar ? root.seamEditor.clickPiece(spot.piece, spot.x, spot.y, spot.tolerance)
+                                       : point !== undefined
+                                         && root.seamEditor.click(point.x, point.y, root.boardTolerance(x, y, point))
                 if (!used) {
                     const hit = view.pick(x, y).objectHit
                     root.sceneModel.pickPiece(hit && hit.pieceId !== undefined ? hit.pieceId : 0)
@@ -432,8 +470,14 @@ Rectangle {
                     }
                     return
                 }
+                if (!root.seamEditor.sewing) {
+                    return
+                }
+                const spot = root.pieceSpot(x, y)
                 const point = root.boardPoint(x, y)
-                if (point === undefined) {
+                if (spot !== undefined && root.sceneModel.isPlaced(spot.piece)) {
+                    root.seamEditor.hoverPiece(spot.piece, spot.x, spot.y, spot.tolerance)
+                } else if (point === undefined) {
                     root.seamEditor.leave()
                 } else {
                     root.seamEditor.hover(point.x, point.y, root.boardTolerance(x, y, point))

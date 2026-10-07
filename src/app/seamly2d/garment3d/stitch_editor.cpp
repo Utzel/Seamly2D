@@ -24,58 +24,7 @@
 
 #include "stitch_editor.h"
 
-#include <QLineF>
-
 #include <algorithm>
-
-namespace
-{
-//---------------------------------------------------------------------------------------------------------------------
-qreal cross(const QPointF& a, const QPointF& b)
-{
-    return a.x() * b.y() - a.y() * b.x();
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-// The point mirrored across the line through a and b.
-QPointF reflect(const QPointF& point, const QPointF& a, const QPointF& b)
-{
-    const QPointF along = b - a;
-    const QPointF offset = point - a;
-    const QPointF onto = along * (QPointF::dotProduct(offset, along) / QPointF::dotProduct(along, along));
-    return a + onto * 2.0 - offset;
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-// Which of the outline's path points the node is, or -1.
-int nodePosition(const PieceOutline& outline, quint32 id)
-{
-    const QVector<OutlineNode>& nodes = outline.nodes();
-    for (int k = 0; k < nodes.size(); ++k)
-    {
-        if (nodes.at(k).id == id)
-        {
-            return k;
-        }
-    }
-    return -1;
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-// The ends of the fold line of a piece cut on the fold.
-bool foldLine(const StitchEditor::Piece& piece, QPointF* start, QPointF* end)
-{
-    const int first = piece.fold_start != 0 ? nodePosition(piece.outline, piece.fold_start) : -1;
-    const int last = piece.fold_end != 0 ? nodePosition(piece.outline, piece.fold_end) : -1;
-    if (first < 0 || last < 0)
-    {
-        return false;
-    }
-    *start = piece.outline.points().at(piece.outline.nodes().at(first).index);
-    *end = piece.outline.points().at(piece.outline.nodes().at(last).index);
-    return QLineF(*start, *end).length() > 0;
-}
-} // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
 bool StitchEditor::Edge::isValid() const
@@ -103,13 +52,13 @@ StitchEditor::StitchEditor(QObject* parent)
 //---------------------------------------------------------------------------------------------------------------------
 /// @brief The pieces the scene shows, as drafted, with the meshes it shows them by, and the pattern's topstitching.
 /// Their stitches are worked out right away, but not announced: the scene gets them with its new meshes.
-void StitchEditor::setPieces(const QVector<Piece>& pieces, const VTopstitches& topstitches)
+void StitchEditor::setPieces(const QVector<ShownPiece>& pieces, const VTopstitches& topstitches)
 {
     m_pieces = pieces;
     m_topstitches = topstitches;
 
     // A piece that was edited may have lost the segment the mouse is over.
-    const auto hovered = std::find_if(m_pieces.cbegin(), m_pieces.cend(), [this](const Piece& piece)
+    const auto hovered = std::find_if(m_pieces.cbegin(), m_pieces.cend(), [this](const ShownPiece& piece)
     {
         return piece.id == m_hovered.piece_id;
     });
@@ -164,7 +113,7 @@ QString StitchEditor::hint() const
     QString text;
     if (m_stitching && m_hovered.isValid())
     {
-        const auto piece = std::find_if(m_pieces.cbegin(), m_pieces.cend(), [this](const Piece& candidate)
+        const auto piece = std::find_if(m_pieces.cbegin(), m_pieces.cend(), [this](const ShownPiece& candidate)
         {
             return candidate.id == m_hovered.piece_id;
         });
@@ -237,7 +186,7 @@ void StitchEditor::leave()
 bool StitchEditor::click(int id, qreal x, qreal y, qreal tolerance)
 {
     const Edge edge = m_stitching ? edgeAt(static_cast<quint32>(id), QPointF(x, y), tolerance) : Edge();
-    const auto piece = std::find_if(m_pieces.cbegin(), m_pieces.cend(), [&edge](const Piece& candidate)
+    const auto piece = std::find_if(m_pieces.cbegin(), m_pieces.cend(), [&edge](const ShownPiece& candidate)
     {
         return candidate.id == edge.piece_id;
     });
@@ -280,47 +229,25 @@ bool StitchEditor::click(int id, qreal x, qreal y, qreal tolerance)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// The piece the scene shows by this id, and how the mesh it shows lies over the piece as drafted.
-const StitchEditor::Piece* StitchEditor::pieceShowing(quint32 id, Layout* layout) const
+// The piece the scene shows by this id, and the mesh it shows.
+const ShownPiece* StitchEditor::pieceShowing(quint32 id, const ShownMesh** shown) const
 {
-    for (const Piece& piece : m_pieces)
+    for (const ShownPiece& piece : m_pieces)
     {
-        for (const Shown& shown : piece.shown)
+        *shown = piece.mesh(id);
+        if (*shown != nullptr)
         {
-            if (shown.id == id)
-            {
-                *layout = shown.layout;
-                return &piece;
-            }
+            return &piece;
         }
     }
     return nullptr;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// The segments along the fold line of a piece cut on the fold, from the fold's start to its end; the garment has no
-// edge there.
-QVector<bool> StitchEditor::foldSegments(const Piece& piece) const
-{
-    const int count = piece.outline.segmentCount();
-    QVector<bool> fold(count, false);
-    const int start = piece.fold_start != 0 ? nodePosition(piece.outline, piece.fold_start) : -1;
-    const int end = piece.fold_end != 0 ? nodePosition(piece.outline, piece.fold_end) : -1;
-    if (start >= 0 && end >= 0 && start != end)
-    {
-        for (int segment = start; segment != end; segment = (segment + 1) % count)
-        {
-            fold[segment] = true;
-        }
-    }
-    return fold;
-}
-
-//---------------------------------------------------------------------------------------------------------------------
 // The style each of the piece's segments is topstitched in, one of the presets' names; empty where it isn't stitched.
-QVector<QString> StitchEditor::segmentStyles(const Piece& piece) const
+QVector<QString> StitchEditor::segmentStyles(const ShownPiece& piece) const
 {
-    const QVector<bool> fold = foldSegments(piece);
+    const QVector<bool> fold = piece.foldSegments();
     QVector<QString> styles(fold.size());
     for (int segment = 0; segment < fold.size(); ++segment)
     {
@@ -342,46 +269,17 @@ TopstitchStyle StitchEditor::chosenStyle() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Where a point of a shown mesh's flat shape is on the piece as drafted: on an unfolded piece's mirrored half, it is
-// mirrored back across the fold line.
-QPointF StitchEditor::drafted(const Piece& piece, Layout layout, const QPointF& point) const
-{
-    QPointF on_piece = point;
-    QPointF start;
-    QPointF end;
-    if (layout == Layout::Mirrored)
-    {
-        on_piece.setX(-point.x());
-    }
-    else if (layout == Layout::Unfolded && foldLine(piece, &start, &end))
-    {
-        // The drafted half lies on the side of the fold line its points are furthest to.
-        qreal drafted_side = 0;
-        for (const QPointF& outline_point : piece.outline.points())
-        {
-            const qreal side = cross(end - start, outline_point - start);
-            drafted_side = qAbs(side) > qAbs(drafted_side) ? side : drafted_side;
-        }
-        if (cross(end - start, point - start) * drafted_side < 0)
-        {
-            on_piece = reflect(point, start, end);
-        }
-    }
-    return on_piece;
-}
-
-//---------------------------------------------------------------------------------------------------------------------
 // The edge of the piece shown by this id nearest to a point of its mesh's flat shape, if no further than the
 // tolerance; a fold line is no edge.
 StitchEditor::Edge StitchEditor::edgeAt(quint32 id, const QPointF& point, qreal tolerance) const
 {
     Edge edge;
-    Layout layout = Layout::Drafted;
-    const Piece* piece = pieceShowing(id, &layout);
+    const ShownMesh* shown = nullptr;
+    const ShownPiece* piece = pieceShowing(id, &shown);
     if (piece != nullptr)
     {
-        const OutlineHit hit = piece->outline.hit(drafted(*piece, layout, point));
-        if (hit.segment >= 0 && hit.distance <= tolerance && !foldSegments(*piece).value(hit.segment))
+        const OutlineHit hit = piece->outline.hit(piece->drafted(shown->layout, point));
+        if (hit.segment >= 0 && hit.distance <= tolerance && !piece->foldSegments().value(hit.segment))
         {
             edge.piece_id = piece->id;
             edge.segment = hit.segment;
@@ -409,7 +307,7 @@ void StitchEditor::workOutStitches()
 {
     m_stitches.clear();
     const TopstitchStyle chosen = chosenStyle();
-    for (const Piece& piece : m_pieces)
+    for (const ShownPiece& piece : m_pieces)
     {
         const QVector<QString> styles = segmentStyles(piece);
         for (const TopstitchStyle& style : TopstitchStyle::presets())
@@ -428,15 +326,15 @@ void StitchEditor::workOutStitches()
             {
                 rows += Topstitching::rows(piece.outline, stitched, distance);
             }
-            for (const Shown& shown : piece.shown)
+            for (const ShownMesh& shown : piece.shown)
             {
-                m_stitches[shown.id] += Topstitching::stitches(shown.mesh, laidOut(rows, piece, shown.layout),
+                m_stitches[shown.id] += Topstitching::stitches(shown.mesh, piece.laidOut(rows, shown.layout),
                                                                style.stitch_length, style.thread_width);
             }
         }
-        for (const Shown& shown : piece.shown)
+        for (const ShownMesh& shown : piece.shown)
         {
-            m_stitches[shown.id] += Topstitching::stitches(shown.mesh, laidOut(piece.paths, piece, shown.layout),
+            m_stitches[shown.id] += Topstitching::stitches(shown.mesh, piece.laidOut(piece.paths, shown.layout),
                                                            chosen.stitch_length, chosen.thread_width);
         }
     }
@@ -446,7 +344,7 @@ void StitchEditor::workOutStitches()
 void StitchEditor::workOutPreview()
 {
     m_preview.clear();
-    for (const Piece& piece : m_pieces)
+    for (const ShownPiece& piece : m_pieces)
     {
         if (m_hovered.isValid() && piece.id == m_hovered.piece_id)
         {
@@ -458,44 +356,12 @@ void StitchEditor::workOutPreview()
             {
                 rows += Topstitching::rows(piece.outline, stitched, distance);
             }
-            for (const Shown& shown : piece.shown)
+            for (const ShownMesh& shown : piece.shown)
             {
-                m_preview.insert(shown.id, Topstitching::stitches(shown.mesh, laidOut(rows, piece, shown.layout),
+                m_preview.insert(shown.id, Topstitching::stitches(shown.mesh, piece.laidOut(rows, shown.layout),
                                                                   style.stitch_length, style.thread_width));
             }
         }
     }
 }
 
-//---------------------------------------------------------------------------------------------------------------------
-// The rows drawn on the piece as drafted, laid out as a mesh the scene shows lies over it: on an unfolded piece also
-// mirrored across the fold line, on a mirrored copy mirrored.
-QVector<QVector<QPointF>> StitchEditor::laidOut(const QVector<QVector<QPointF>>& rows, const Piece& piece,
-                                                Layout layout)
-{
-    QVector<QVector<QPointF>> laid = rows;
-    QPointF start;
-    QPointF end;
-    if (layout == Layout::Mirrored)
-    {
-        for (QVector<QPointF>& row : laid)
-        {
-            for (QPointF& point : row)
-            {
-                point.setX(-point.x());
-            }
-        }
-    }
-    else if (layout == Layout::Unfolded && foldLine(piece, &start, &end))
-    {
-        for (QVector<QPointF> row : rows)
-        {
-            for (QPointF& point : row)
-            {
-                point = reflect(point, start, end);
-            }
-            laid.append(row);
-        }
-    }
-    return laid;
-}

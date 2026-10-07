@@ -27,11 +27,13 @@
 
 #include <QColor>
 #include <QPointF>
+#include <QVector3D>
 #include <QVector>
 #include <QtQuick3D/QQuick3DGeometry>
 
 /// @brief Colored bands along stretches of seam line, or colored lines between points, lying flat on the board of
-/// pieces. Positions are in the board's coordinates: cm, y up.
+/// pieces, in the board's coordinates: cm, y up. Or, for the pieces on the avatar, colored tubes along stretches of
+/// seam line and lines between points in space, in scene coordinates.
 ///
 /// Every vertex carries its color, so all seams can be drawn with one model; the material has to use vertex colors.
 class SeamGeometry : public QQuick3DGeometry
@@ -53,10 +55,26 @@ public:
         QColor  color;
     };
 
+    struct Tube
+    {
+        QVector<QVector3D> points;
+        QColor             color;
+        qreal              radius = 0;
+    };
+
+    struct Segment
+    {
+        QVector3D from;
+        QVector3D to;
+        QColor    color;
+    };
+
     explicit           SeamGeometry(QQuick3DObject* parent = nullptr);
 
     void               setBands(const QVector<Band>& bands);
     void               setLines(const QVector<Line>& lines);
+    void               setTubes(const QVector<Tube>& tubes);
+    void               setSegments(const QVector<Segment>& segments);
 
 private:
     Q_DISABLE_COPY(SeamGeometry)

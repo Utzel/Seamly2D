@@ -86,8 +86,8 @@ QVector<GarmentSeam> GarmentSymmetry::madeUp(const QVector<GarmentSeam>& seams) 
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// The side's mirror image on the other side of the garment; false for a piece cut once, which has none. On the
-// mirrored half of an unfolded piece the seam line runs the other way, so the side's ends swap: turned says so.
+/// @brief The side's mirror image on the other side of the garment; false for a piece cut once, which has none. On the
+/// mirrored half of an unfolded piece the seam line runs the other way, so the side's ends swap: turned says so.
 bool GarmentSymmetry::mirrored(const GarmentSeamSide& side, GarmentSeamSide* mirror, bool* turned) const
 {
     const Piece piece = m_pieces.value(side.piece);
