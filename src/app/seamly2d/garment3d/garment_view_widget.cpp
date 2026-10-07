@@ -1829,7 +1829,8 @@ void GarmentViewWidget::exportDrape()
 
 //---------------------------------------------------------------------------------------------------------------------
 // The garment to export: each piece on the avatar, and the copy of a piece cut twice, where the scene shows it, with
-// its color and its flat shape; and the avatar, in the grey the scene draws it in.
+// its color and its flat shape, and the image of its fabric laid on it as the scene lays it; and the avatar, in the
+// grey the scene draws it in.
 QVector<ExportMesh> GarmentViewWidget::exportMeshes() const
 {
     QVector<ExportMesh> meshes;
@@ -1841,6 +1842,20 @@ QVector<ExportMesh> GarmentViewWidget::exportMeshes() const
         mesh.positions = piece.positions;
         mesh.flat = piece.mesh.rest_positions;
         mesh.indices = piece.mesh.indices;
+
+        QByteArray image = piece.texture;
+        QBuffer image_buffer(&image);
+        image_buffer.open(QIODevice::ReadOnly);
+        const QSize pixels = QImageReader(&image_buffer).size();
+        if (piece.texture_width > 0 && pixels.width() > 0 && pixels.height() > 0)
+        {
+            const qreal height = piece.texture_width * pixels.height() / pixels.width();
+            mesh.image = piece.texture;
+            for (const QPointF& in_fabric : PieceGeometry::grainPositions(piece.mesh, piece.grain_angle))
+            {
+                mesh.image_uv.append(QPointF(in_fabric.x() / piece.texture_width, -in_fabric.y() / height));
+            }
+        }
         meshes.append(mesh);
 
         if (!piece.stitches.isEmpty())
@@ -1849,7 +1864,7 @@ QVector<ExportMesh> GarmentViewWidget::exportMeshes() const
                 piece.stitches, piece.positions, PieceGeometry::vertexNormals(piece.mesh, piece.positions));
             ExportMesh stitches;
             stitches.name = tr("%1 topstitching").arg(piece.name);
-            stitches.color = m_scene_model->threadColor(piece.color);
+            stitches.color = m_scene_model->threadColor(m_scene_model->clothColor(piece.id));
             stitches.positions = thread.positions;
             stitches.indices = thread.indices;
             meshes.append(stitches);

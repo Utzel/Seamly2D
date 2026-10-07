@@ -183,20 +183,16 @@ void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& p
         }
     }
 
-    // Along the grain (the warp) and across it (the weft), in the piece scene's coordinates, whose y points down.
-    const qreal grain = qDegreesToRadians(grain_angle);
-    const QPointF warp(qCos(grain), -qSin(grain));
-    const QPointF weft(qSin(grain), qCos(grain));
-
+    const QVector<QPointF> in_fabric = grainPositions(mesh, grain_angle);
     const int vertex_floats = floats_per_vertex + (colored ? floats_per_color : 0);
     const int vertex_bytes = vertex_floats * static_cast<int>(sizeof(float));
     QByteArray vertex_data(static_cast<int>(drawn.size()) * vertex_bytes, Qt::Uninitialized);
     float* vertex = reinterpret_cast<float*>(vertex_data.data());
-    for (int d = 0; d < drawn.size(); ++d)
+    for (int corner = 0; corner < drawn.size(); ++corner)
     {
-        const int i = of_vertex.at(d);
-        const QVector3D& position = drawn.at(d);
-        const QVector3D& normal = facing.at(d);
+        const int i = of_vertex.at(corner);
+        const QVector3D& position = drawn.at(corner);
+        const QVector3D& normal = facing.at(corner);
         const QPointF& rest = mesh.rest_positions.at(i);
         *vertex++ = position.x();
         *vertex++ = position.y();
@@ -206,8 +202,8 @@ void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& p
         *vertex++ = normal.z();
         *vertex++ = static_cast<float>(rest.x());
         *vertex++ = static_cast<float>(rest.y());
-        *vertex++ = static_cast<float>(QPointF::dotProduct(rest, weft));
-        *vertex++ = static_cast<float>(QPointF::dotProduct(rest, warp));
+        *vertex++ = static_cast<float>(in_fabric.at(i).x());
+        *vertex++ = static_cast<float>(in_fabric.at(i).y());
         if (colored)
         {
             const QVector3D color = linear(colors.at(i));
@@ -242,6 +238,26 @@ void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& p
     setIndexData(index_data);
     setBounds(minimum, maximum);
     update();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Where each of the mesh's vertices lies in the fabric, in cm across the grain and along it, towards where the
+/// grainline points; the grain runs at grain_angle degrees anticlockwise from the piece's x axis, as the piece scene
+/// shows it.
+QVector<QPointF> PieceGeometry::grainPositions(const GarmentMesh& mesh, qreal grain_angle)
+{
+    // Along the grain (the warp) and across it (the weft), in the piece scene's coordinates, whose y points down.
+    const qreal grain = qDegreesToRadians(grain_angle);
+    const QPointF warp(qCos(grain), -qSin(grain));
+    const QPointF weft(qSin(grain), qCos(grain));
+
+    QVector<QPointF> positions;
+    positions.reserve(mesh.rest_positions.size());
+    for (const QPointF& rest : mesh.rest_positions)
+    {
+        positions.append(QPointF(QPointF::dotProduct(rest, weft), QPointF::dotProduct(rest, warp)));
+    }
+    return positions;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

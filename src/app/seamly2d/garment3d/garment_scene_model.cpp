@@ -972,6 +972,21 @@ void GarmentSceneModel::updateImages()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief The color the piece's cloth looks from afar: its fabric image's, or its own; invalid for a piece the scene
+/// doesn't show.
+QColor GarmentSceneModel::clothColor(quint32 id) const
+{
+    for (const Row& row : m_rows)
+    {
+        if (row.id == id)
+        {
+            return clothColor(row);
+        }
+    }
+    return QColor();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // The color the row's cloth looks from afar: its image's, or its own.
 QColor GarmentSceneModel::clothColor(const Row& row) const
 {

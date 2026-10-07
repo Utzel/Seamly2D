@@ -26,6 +26,7 @@
 #define PIECE_GEOMETRY_H
 
 #include <QColor>
+#include <QPointF>
 #include <QVector3D>
 #include <QVector>
 #include <QtQuick3D/QQuick3DGeometry>
@@ -58,6 +59,7 @@ public:
 
     static QVector<QVector3D> placedPositions(const GarmentMesh& mesh, const QVector<QVector3D>& positions);
     static QVector<QVector3D> vertexNormals(const GarmentMesh& mesh, const QVector<QVector3D>& placed);
+    static QVector<QPointF>   grainPositions(const GarmentMesh& mesh, qreal grain_angle);
 
 private:
     Q_DISABLE_COPY(PieceGeometry)
