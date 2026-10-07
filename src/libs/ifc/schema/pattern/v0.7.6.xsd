@@ -181,11 +181,15 @@
         </xs:element>
         <xs:element name="fabrics" minOccurs="0" maxOccurs="1">
           <xs:complexType>
-            <xs:sequence minOccurs="0" maxOccurs="unbounded">
+            <xs:sequence>
+              <xs:element name="texture" type="fabricTexture" minOccurs="0" maxOccurs="1"/>
               <xs:element name="fabric" minOccurs="0" maxOccurs="unbounded">
                 <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="texture" type="fabricTexture" minOccurs="0" maxOccurs="1"/>
+                  </xs:sequence>
                   <xs:attribute name="piece" type="xs:unsignedInt" use="required"/>
-                  <xs:attribute name="name" type="xs:string" use="required"/>
+                  <xs:attribute name="name" type="xs:string"/>
                 </xs:complexType>
               </xs:element>
             </xs:sequence>
@@ -863,6 +867,14 @@
       <xs:pattern value="(0|([1-9][0-9]*))\.(0|([1-9][0-9]*))\.(0|([1-9][0-9]*))"/>
     </xs:restriction>
   </xs:simpleType>
+  <xs:complexType name="fabricTexture">
+    <xs:simpleContent>
+      <xs:extension base="xs:base64Binary">
+        <xs:attribute name="extension" type="imageExtension" use="required"/>
+        <xs:attribute name="width" type="xs:double" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
   <xs:simpleType name="imageExtension">
     <xs:restriction base="xs:string">
       <xs:enumeration value="PNG"/>

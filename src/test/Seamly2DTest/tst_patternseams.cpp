@@ -127,6 +127,16 @@ VPieceArrangement arrangement(quint32 piece, const QString& part, qreal angle, q
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+VFabricTexture texture(const QByteArray& image, qreal width)
+{
+    VFabricTexture made;
+    made.image = image;
+    made.extension = QStringLiteral("PNG");
+    made.width = width;
+    return made;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 QStringList childTags(const QDomElement& element)
 {
     QStringList tags;
@@ -279,7 +289,8 @@ void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
     pattern.setTopstitches(topstitches);
     VGarmentFabrics fabrics;
     fabrics.garment = QStringLiteral("denim");
-    fabrics.pieces = {{20, QStringLiteral("chiffon")}};
+    fabrics.texture = texture(QByteArrayLiteral("PNG twill"), 12.5);
+    fabrics.pieces = {{20, QStringLiteral("chiffon"), {}}, {30, QString(), texture(QByteArrayLiteral("print"), 30)}};
     pattern.setFabrics(fabrics);
     pattern.setArrangements({arrangement(10, QStringLiteral("body"), 0, 120),
                              arrangement(20, QStringLiteral("leftLeg"), 0, 60),
@@ -333,7 +344,7 @@ void TST_PatternSeams::fabricsAreReadBack() const
     SeamsPattern pattern;
     VGarmentFabrics fabrics;
     fabrics.garment = QStringLiteral("cottonJersey");
-    fabrics.pieces = {{10, QStringLiteral("denim")}, {30, QStringLiteral("chiffon")}};
+    fabrics.pieces = {{10, QStringLiteral("denim"), {}}, {30, QStringLiteral("chiffon"), {}}};
     pattern.setFabrics(fabrics);
 
     QCOMPARE(pattern.getFabrics(), fabrics);
@@ -346,13 +357,42 @@ void TST_PatternSeams::fabricsAreReadBack() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// A piece cut from the garment's fabric is drawn with the garment's image of it, unless it has its own; a piece cut
+// from a fabric of its own, only with its own. An image alone is stored.
+void TST_PatternSeams::fabricTexturesAreReadBack() const
+{
+    SeamsPattern pattern;
+    VGarmentFabrics fabrics;
+    fabrics.garment = QStringLiteral("denim");
+    fabrics.texture = texture(QByteArrayLiteral("\x89PNG\r\n\x1a\n twill"), 12.5);
+    fabrics.pieces = {{10, QStringLiteral("chiffon"), {}},
+                      {20, QString(), texture(QByteArrayLiteral("print"), 30)},
+                      {40, QStringLiteral("cottonJersey"), texture(QByteArrayLiteral("stripes"), 5)}};
+    pattern.setFabrics(fabrics);
+
+    const VGarmentFabrics read = pattern.getFabrics();
+    QCOMPARE(read, fabrics);
+    QVERIFY(read.textureOf(10).isNull());
+    QCOMPARE(read.of(20), QStringLiteral("denim"));
+    QCOMPARE(read.textureOf(20), fabrics.pieces.at(1).texture);
+    QCOMPARE(read.textureOf(30), fabrics.texture);
+    QCOMPARE(read.textureOf(40), fabrics.pieces.at(2).texture);
+
+    VGarmentFabrics image_only;
+    image_only.texture = fabrics.texture;
+    pattern.setFabrics(image_only);
+    QCOMPARE(pattern.getFabrics(), image_only);
+    QCOMPARE(pattern.getFabrics().of(10), QString());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void TST_PatternSeams::undoRestoresFabrics() const
 {
     SeamsPattern pattern;
     VGarmentFabrics before;
     before.garment = QStringLiteral("cottonShirting");
     VGarmentFabrics after = before;
-    after.pieces = {{10, QStringLiteral("denim")}};
+    after.pieces = {{10, QStringLiteral("denim"), texture(QByteArrayLiteral("twill"), 15)}};
     pattern.setFabrics(before);
 
     QSignalSpy changes(&pattern, &VAbstractPattern::fabricsChanged);

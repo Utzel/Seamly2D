@@ -43,6 +43,7 @@ private slots:
     void garmentDataKeepsSchemaOrder() const;
     void undoRestoresArrangements() const;
     void fabricsAreReadBack() const;
+    void fabricTexturesAreReadBack() const;
     void undoRestoresFabrics() const;
     void topstitchesAreReadBack() const;
     void undoRestoresTopstitches() const;

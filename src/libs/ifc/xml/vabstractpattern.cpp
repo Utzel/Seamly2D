@@ -104,6 +104,7 @@ const QString VAbstractPattern::TagArrangements         = QStringLiteral("arrang
 const QString VAbstractPattern::TagArrangement          = QStringLiteral("arrangement");
 const QString VAbstractPattern::TagFabrics              = QStringLiteral("fabrics");
 const QString VAbstractPattern::TagFabric               = QStringLiteral("fabric");
+const QString VAbstractPattern::TagTexture              = QStringLiteral("texture");
 const QString VAbstractPattern::TagTopstitches          = QStringLiteral("topstitches");
 const QString VAbstractPattern::TagTopstitch            = QStringLiteral("topstitch");
 const QString VAbstractPattern::TagDraftBlock           = QStringLiteral("draftBlock");
@@ -297,6 +298,22 @@ void ReadExpressionAttribute(QVector<VFormulaField> &expressions, const QDomElem
     formula.attribute = attribute;
 
     expressions.append(formula);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The image of a fabric an element of the fabrics holds, if any.
+VFabricTexture readFabricTexture(const QDomElement& parent)
+{
+    VFabricTexture texture;
+    const QDomElement element = parent.firstChildElement(VAbstractPattern::TagTexture);
+    if (!element.isNull())
+    {
+        texture.image = QByteArray::fromBase64(element.text().toLatin1());
+        texture.extension = VDomDocument::GetParametrString(element, VAbstractPattern::AttrExtension,
+                                                            QStringLiteral("PNG"));
+        texture.width = VDomDocument::GetParametrDouble(element, VAbstractPattern::AttrWidth, QStringLiteral("10"));
+    }
+    return texture;
 }
 }
 
@@ -2198,15 +2215,27 @@ bool VPieceArrangement::operator==(const VPieceArrangement& other) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+bool VFabricTexture::isNull() const
+{
+    return image.isEmpty();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool VFabricTexture::operator==(const VFabricTexture& other) const
+{
+    return image == other.image && extension == other.extension && qFuzzyCompare(1.0 + width, 1.0 + other.width);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 bool VPieceFabric::operator==(const VPieceFabric& other) const
 {
-    return piece_id == other.piece_id && fabric == other.fabric;
+    return piece_id == other.piece_id && fabric == other.fabric && texture == other.texture;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 bool VGarmentFabrics::operator==(const VGarmentFabrics& other) const
 {
-    return garment == other.garment && pieces == other.pieces;
+    return garment == other.garment && texture == other.texture && pieces == other.pieces;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2215,12 +2244,31 @@ QString VGarmentFabrics::of(quint32 piece_id) const
 {
     for (const VPieceFabric& fabric : pieces)
     {
-        if (fabric.piece_id == piece_id)
+        if (fabric.piece_id == piece_id && !fabric.fabric.isEmpty())
         {
             return fabric.fabric;
         }
     }
     return garment;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The image of the fabric the piece is cut from: its own, or, cut from the garment's fabric, the garment's;
+/// null for none.
+VFabricTexture VGarmentFabrics::textureOf(quint32 piece_id) const
+{
+    for (const VPieceFabric& fabric : pieces)
+    {
+        if (fabric.piece_id == piece_id)
+        {
+            if (!fabric.texture.isNull() || !fabric.fabric.isEmpty())
+            {
+                return fabric.texture;
+            }
+            break;
+        }
+    }
+    return texture;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2407,12 +2455,14 @@ VGarmentFabrics VAbstractPattern::getFabrics() const
     VGarmentFabrics fabrics;
     const QDomElement fabrics_element = documentElement().firstChildElement(TagFabrics);
     fabrics.garment = fabrics_element.isNull() ? QString() : GetParametrEmptyString(fabrics_element, AttrDefault);
+    fabrics.texture = readFabricTexture(fabrics_element);
     QDomElement element = fabrics_element.firstChildElement(TagFabric);
     while (!element.isNull())
     {
         VPieceFabric fabric;
         fabric.piece_id = GetParametrUInt(element, AttrPiece, NULL_ID_STR);
-        fabric.fabric = GetParametrString(element, AttrName);
+        fabric.fabric = GetParametrEmptyString(element, AttrName);
+        fabric.texture = readFabricTexture(element);
         fabrics.pieces.append(fabric);
 
         element = element.nextSiblingElement(TagFabric);
@@ -2427,7 +2477,19 @@ void VAbstractPattern::setFabrics(const VGarmentFabrics& fabrics)
     QDomElement pattern = documentElement();
     QDomElement element = pattern.firstChildElement(TagFabrics);
 
-    if (fabrics.garment.isEmpty() && fabrics.pieces.isEmpty())
+    auto append_texture = [this](QDomElement& parent, const VFabricTexture& texture)
+    {
+        if (!texture.isNull())
+        {
+            QDomElement tag = createElement(TagTexture);
+            SetAttribute(tag, AttrExtension, texture.extension);
+            SetAttribute(tag, AttrWidth, texture.width);
+            tag.appendChild(createTextNode(QString::fromLatin1(texture.image.toBase64())));
+            parent.appendChild(tag);
+        }
+    };
+
+    if (fabrics.garment.isEmpty() && fabrics.texture.isNull() && fabrics.pieces.isEmpty())
     {
         if (!element.isNull())
         {
@@ -2453,11 +2515,16 @@ void VAbstractPattern::setFabrics(const VGarmentFabrics& fabrics)
         {
             SetAttribute(element, AttrDefault, fabrics.garment);
         }
+        append_texture(element, fabrics.texture);
         for (const VPieceFabric& fabric : fabrics.pieces)
         {
             QDomElement tag = createElement(TagFabric);
             SetAttribute(tag, AttrPiece, fabric.piece_id);
-            SetAttribute(tag, AttrName, fabric.fabric);
+            if (!fabric.fabric.isEmpty())
+            {
+                SetAttribute(tag, AttrName, fabric.fabric);
+            }
+            append_texture(tag, fabric.texture);
             element.appendChild(tag);
         }
     }

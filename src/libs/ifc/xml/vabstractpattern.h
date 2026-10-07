@@ -140,24 +140,40 @@ struct VPieceArrangement
     bool    operator==(const VPieceArrangement& other) const;
 };
 
-/// A piece cut from another fabric than the rest of the garment: the name of one of the 3D View's fabrics.
+/// An image of a fabric, for the 3D View to draw it with: the image file's bytes, its extension, "PNG", "JPG" or
+/// "BMP", and how wide the cloth it shows is in cm, the image repeating along the grain and across it.
+struct VFabricTexture
+{
+    QByteArray image {};
+    QString    extension {};
+    qreal      width {0};
+
+    bool       isNull() const;
+    bool       operator==(const VFabricTexture& other) const;
+};
+
+/// A piece cut from another fabric than the rest of the garment, the name of one of the 3D View's fabrics, or empty
+/// for the garment's, and an image of its own of the fabric, if any.
 struct VPieceFabric
 {
-    quint32 piece_id {NULL_ID};
-    QString fabric {};
+    quint32        piece_id {NULL_ID};
+    QString        fabric {};
+    VFabricTexture texture {};
 
-    bool    operator==(const VPieceFabric& other) const;
+    bool           operator==(const VPieceFabric& other) const;
 };
 
 /// The fabrics a garment is cut from, for the 3D View's drape: one for all its pieces, empty for the 3D View's
-/// default, and another for any piece cut from something else.
+/// default, and another for any piece cut from something else; each with an image of it, if any.
 struct VGarmentFabrics
 {
     QString               garment {};
+    VFabricTexture        texture {};
     QVector<VPieceFabric> pieces {};
 
     bool                  operator==(const VGarmentFabrics& other) const;
     QString               of(quint32 piece_id) const;
+    VFabricTexture        textureOf(quint32 piece_id) const;
 };
 
 /// A segment of a piece's seam line, from one point of the piece's path to the next, topstitched in the 3D View in a
@@ -410,6 +426,7 @@ public:
     static const QString TagArrangement;
     static const QString TagFabrics;
     static const QString TagFabric;
+    static const QString TagTexture;
     static const QString TagTopstitches;
     static const QString TagTopstitch;
     static const QString TagDraftBlock;
