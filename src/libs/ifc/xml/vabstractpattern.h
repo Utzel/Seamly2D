@@ -203,6 +203,21 @@ struct VTopstitches
     QString             styleOf(quint32 piece_id, quint32 start_node, quint32 end_node) const;
 };
 
+/// The avatar the 3D View shows a pattern without measurements on: a woman or a man of a European clothing size, and
+/// the height, bust or chest, waist and hip it is fitted to, in cm, the size's or changed from them.
+struct VGarmentAvatar
+{
+    bool  male {false};
+    int   size {0};  ///< 0 for no avatar chosen
+    qreal height {0};
+    qreal bust {0};
+    qreal waist {0};
+    qreal hip {0};
+
+    bool  isNull() const;
+    bool  operator==(const VGarmentAvatar& other) const;
+};
+
 struct GroupAttributes
 {
    QString  name;
@@ -241,6 +256,9 @@ public:
 
     VTopstitches                   getTopstitches() const;
     void                           setTopstitches(const VTopstitches& topstitches);
+
+    VGarmentAvatar                 getAvatar() const;
+    void                           setAvatar(const VGarmentAvatar& avatar);
     bool                           isVariableUsed(const QStringList &variable_names) const;
 
     virtual void                   CreateEmptyFile()=0;
@@ -429,6 +447,7 @@ public:
     static const QString TagTexture;
     static const QString TagTopstitches;
     static const QString TagTopstitch;
+    static const QString TagAvatar;
     static const QString TagDraftBlock;
     static const QString TagGroups;
     static const QString TagGroup;
@@ -525,6 +544,11 @@ public:
     static const QString AttrDefault;
     static const QString AttrStitched;
     static const QString AttrStyle;
+    static const QString AttrGender;
+    static const QString AttrSize;
+    static const QString AttrBust;
+    static const QString AttrWaist;
+    static const QString AttrHip;
 
     static const QString AttrAll;
 
@@ -642,6 +666,7 @@ signals:
     void           arrangementsChanged();
     void           fabricsChanged();
     void           topstitchesChanged();
+    void           avatarChanged();
     void           setCurrentDraftBlock(const QString &draftblock);
     void           patternHasGroups(bool value);
     void           updateGroups();

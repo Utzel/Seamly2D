@@ -224,6 +224,23 @@
             <xs:field xpath="@end"/>
           </xs:unique>
         </xs:element>
+        <xs:element name="avatar" minOccurs="0" maxOccurs="1">
+          <xs:complexType>
+            <xs:attribute name="gender" use="required">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="female"/>
+                  <xs:enumeration value="male"/>
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="size" type="xs:unsignedInt" use="required"/>
+            <xs:attribute name="height" type="xs:double" use="required"/>
+            <xs:attribute name="bust" type="xs:double" use="required"/>
+            <xs:attribute name="waist" type="xs:double" use="required"/>
+            <xs:attribute name="hip" type="xs:double" use="required"/>
+          </xs:complexType>
+        </xs:element>
         <xs:element name="draftBlock" minOccurs="1" maxOccurs="unbounded">
           <xs:complexType>
             <xs:sequence>

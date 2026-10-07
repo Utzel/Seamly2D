@@ -36,6 +36,7 @@
 #include "../ifc/xml/vabstractpattern.h"
 #include "../ifc/xml/vpatternconverter.h"
 #include "../vtools/undocommands/save_arrangements.h"
+#include "../vtools/undocommands/save_avatar.h"
 #include "../vtools/undocommands/save_fabrics.h"
 #include "../vtools/undocommands/save_seams.h"
 #include "../vtools/undocommands/save_topstitches.h"
@@ -133,6 +134,19 @@ VFabricTexture texture(const QByteArray& image, qreal width)
     made.image = image;
     made.extension = QStringLiteral("PNG");
     made.width = width;
+    return made;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+VGarmentAvatar avatar(bool male, int size, qreal height, qreal bust, qreal waist, qreal hip)
+{
+    VGarmentAvatar made;
+    made.male = male;
+    made.size = size;
+    made.height = height;
+    made.bust = bust;
+    made.waist = waist;
+    made.hip = hip;
     return made;
 }
 
@@ -277,10 +291,12 @@ void TST_PatternSeams::arrangementsAreReadBack() const
 
 //---------------------------------------------------------------------------------------------------------------------
 // Whichever is made first, the seams come before the arrangements, those before the fabrics, those before the
-// topstitching, and all before the draft blocks. Pieces can be arranged on every part of the body.
+// topstitching, that before the avatar, and all before the draft blocks. Pieces can be arranged on every part of the
+// body.
 void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
 {
     SeamsPattern pattern;
+    pattern.setAvatar(avatar(true, 52, 180.5, 104, 92, 108));
     VTopstitches topstitches;
     topstitches.all = true;
     topstitches.style = QStringLiteral("double");
@@ -302,8 +318,8 @@ void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
     QCOMPARE(childTags(pattern.documentElement()),
              QStringList({QStringLiteral("version"), QStringLiteral("unit"), QStringLiteral("measurements"),
                           QStringLiteral("finalMeasurements"), QStringLiteral("seams"), QStringLiteral("arrangements"),
-                          QStringLiteral("fabrics"), QStringLiteral("topstitches"), QStringLiteral("draftBlock"),
-                          QStringLiteral("draftBlock")}));
+                          QStringLiteral("fabrics"), QStringLiteral("topstitches"), QStringLiteral("avatar"),
+                          QStringLiteral("draftBlock"), QStringLiteral("draftBlock")}));
 
     QTemporaryDir folder;
     QVERIFY(folder.isValid());
@@ -464,5 +480,41 @@ void TST_PatternSeams::undoRestoresTopstitches() const
 
     stack.undo();
     QCOMPARE(pattern.getTopstitches(), before);
+    QCOMPARE(changes.count(), 2);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A chosen avatar is stored with its measurements, changed or not; a null one takes it out again.
+void TST_PatternSeams::avatarIsReadBack() const
+{
+    SeamsPattern pattern;
+    QVERIFY(pattern.getAvatar().isNull());
+
+    const VGarmentAvatar woman = avatar(false, 40, 165.5, 93, 76, 101.5);
+    pattern.setAvatar(woman);
+    QCOMPARE(pattern.getAvatar(), woman);
+    const VGarmentAvatar man = avatar(true, 54, 182, 108, 96, 112);
+    pattern.setAvatar(man);
+    QCOMPARE(pattern.getAvatar(), man);
+    QCOMPARE(pattern.documentElement().elementsByTagName(QStringLiteral("avatar")).size(), 1);
+
+    pattern.setAvatar(VGarmentAvatar());
+    QVERIFY(pattern.documentElement().firstChildElement(QStringLiteral("avatar")).isNull());
+    QVERIFY(pattern.getAvatar().isNull());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_PatternSeams::undoRestoresAvatar() const
+{
+    SeamsPattern pattern;
+    const VGarmentAvatar after = avatar(false, 42, 168, 96, 80, 104);
+
+    QSignalSpy changes(&pattern, &VAbstractPattern::avatarChanged);
+    QUndoStack stack;
+    stack.push(new SaveAvatar(QStringLiteral("avatar"), VGarmentAvatar(), after, &pattern));
+    QCOMPARE(pattern.getAvatar(), after);
+
+    stack.undo();
+    QVERIFY(pattern.getAvatar().isNull());
     QCOMPARE(changes.count(), 2);
 }

@@ -1,7 +1,7 @@
 //---------------------------------------------------------------------------------------------------------------------
-//  @file   tst_patternseams.h
+//  @file   save_avatar.h
 //  @author Julius
-//  @date   5 Oct, 2026
+//  @date   7 Oct, 2026
 //
 //  @copyright
 //  Copyright (C)  2026 Seamly, LLC
@@ -22,36 +22,32 @@
 //  along with Seamly2D. If not, see <http://www.gnu.org/licenses/>.
 //---------------------------------------------------------------------------------------------------------------------
 
-#ifndef TST_PATTERNSEAMS_H
-#define TST_PATTERNSEAMS_H
+#ifndef SAVE_AVATAR_H
+#define SAVE_AVATAR_H
 
-#include <QObject>
+#include <QString>
 
-class TST_PatternSeams : public QObject
+#include "vundocommand.h"
+
+/// @brief Replaces the avatar the 3D View shows a pattern without measurements on.
+class SaveAvatar : public VUndoCommand
 {
     Q_OBJECT
 public:
-    explicit TST_PatternSeams(QObject* parent = nullptr);
+                               SaveAvatar(const QString& text, const VGarmentAvatar& old_avatar,
+                                          const VGarmentAvatar& new_avatar, VAbstractPattern* doc,
+                                          QUndoCommand* parent = nullptr);
+    virtual                   ~SaveAvatar() = default;
 
-private slots:
-    void seamsAreReadBack() const;
-    void seamsFollowTheSchema() const;
-    void noSeamsLeaveNoElement() const;
-    void undoRestoresSeams() const;
-    void olderPatternsAreConverted() const;
-    void arrangementsAreReadBack() const;
-    void garmentDataKeepsSchemaOrder() const;
-    void undoRestoresArrangements() const;
-    void fabricsAreReadBack() const;
-    void fabricTexturesAreReadBack() const;
-    void undoRestoresFabrics() const;
-    void topstitchesAreReadBack() const;
-    void undoRestoresTopstitches() const;
-    void avatarIsReadBack() const;
-    void undoRestoresAvatar() const;
+    virtual void               undo() override;
+    virtual void               redo() override;
+    virtual int                id() const override;
 
 private:
-    Q_DISABLE_COPY(TST_PatternSeams)
+    Q_DISABLE_COPY(SaveAvatar)
+
+    VGarmentAvatar             m_old_avatar;
+    VGarmentAvatar             m_new_avatar;
 };
 
-#endif // TST_PATTERNSEAMS_H
+#endif // SAVE_AVATAR_H

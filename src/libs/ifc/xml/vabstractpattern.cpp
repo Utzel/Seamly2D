@@ -107,6 +107,7 @@ const QString VAbstractPattern::TagFabric               = QStringLiteral("fabric
 const QString VAbstractPattern::TagTexture              = QStringLiteral("texture");
 const QString VAbstractPattern::TagTopstitches          = QStringLiteral("topstitches");
 const QString VAbstractPattern::TagTopstitch            = QStringLiteral("topstitch");
+const QString VAbstractPattern::TagAvatar               = QStringLiteral("avatar");
 const QString VAbstractPattern::TagDraftBlock           = QStringLiteral("draftBlock");
 const QString VAbstractPattern::TagGroups               = QStringLiteral("groups");
 const QString VAbstractPattern::TagGroup                = QStringLiteral("group");
@@ -203,6 +204,11 @@ const QString VAbstractPattern::AttrPart                = QStringLiteral("part")
 const QString VAbstractPattern::AttrDefault             = QStringLiteral("default");
 const QString VAbstractPattern::AttrStitched            = QStringLiteral("stitched");
 const QString VAbstractPattern::AttrStyle               = QStringLiteral("style");
+const QString VAbstractPattern::AttrGender              = QStringLiteral("gender");
+const QString VAbstractPattern::AttrSize                = QStringLiteral("size");
+const QString VAbstractPattern::AttrBust                = QStringLiteral("bust");
+const QString VAbstractPattern::AttrWaist               = QStringLiteral("waist");
+const QString VAbstractPattern::AttrHip                 = QStringLiteral("hip");
 
 const QString VAbstractPattern::AttrAll                 = QStringLiteral("all");
 
@@ -281,6 +287,11 @@ bool VAbstractPattern::patternLabelWasChanged = false;
 
 namespace
 {
+// How the avatar's gender is stored.
+const QString female_gender = QStringLiteral("female");
+const QString male_gender = QStringLiteral("male");
+
+//---------------------------------------------------------------------------------------------------------------------
 void ReadExpressionAttribute(QVector<VFormulaField> &expressions, const QDomElement &element, const QString &attribute)
 {
     VFormulaField formula;
@@ -2318,6 +2329,20 @@ QString VTopstitches::styleOf(quint32 piece_id, quint32 start_node, quint32 end_
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+bool VGarmentAvatar::isNull() const
+{
+    return size == 0;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool VGarmentAvatar::operator==(const VGarmentAvatar& other) const
+{
+    return male == other.male && size == other.size && qFuzzyCompare(1.0 + height, 1.0 + other.height)
+           && qFuzzyCompare(1.0 + bust, 1.0 + other.bust) && qFuzzyCompare(1.0 + waist, 1.0 + other.waist)
+           && qFuzzyCompare(1.0 + hip, 1.0 + other.hip);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief The seams sewing the pieces together, in the order they were made.
 ///
 /// A seam can name a piece or point that is gone, after the piece was deleted or its path edited. Such seams are
@@ -2618,11 +2643,60 @@ void VAbstractPattern::setTopstitches(const VTopstitches& topstitches)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief The avatar the 3D View shows the garment on when the pattern has no measurements; null if none was chosen.
+VGarmentAvatar VAbstractPattern::getAvatar() const
+{
+    VGarmentAvatar avatar;
+    const QDomElement element = documentElement().firstChildElement(TagAvatar);
+    if (!element.isNull())
+    {
+        avatar.male = GetParametrString(element, AttrGender, female_gender) == male_gender;
+        avatar.size = static_cast<int>(GetParametrUInt(element, AttrSize, QStringLiteral("0")));
+        avatar.height = GetParametrDouble(element, AttrHeight, QStringLiteral("0"));
+        avatar.bust = GetParametrDouble(element, AttrBust, QStringLiteral("0"));
+        avatar.waist = GetParametrDouble(element, AttrWaist, QStringLiteral("0"));
+        avatar.hip = GetParametrDouble(element, AttrHip, QStringLiteral("0"));
+    }
+    return avatar;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Replaces the avatar; a null one takes it out. Meant to be called by the SaveAvatar undo command.
+void VAbstractPattern::setAvatar(const VGarmentAvatar& avatar)
+{
+    QDomElement pattern = documentElement();
+    QDomElement element = pattern.firstChildElement(TagAvatar);
+
+    if (avatar.isNull())
+    {
+        if (!element.isNull())
+        {
+            pattern.removeChild(element);
+        }
+    }
+    else
+    {
+        if (element.isNull())
+        {
+            element = createGarmentElement(TagAvatar);
+        }
+        SetAttribute(element, AttrGender, avatar.male ? male_gender : female_gender);
+        SetAttribute(element, AttrSize, avatar.size);
+        SetAttribute(element, AttrHeight, avatar.height);
+        SetAttribute(element, AttrBust, avatar.bust);
+        SetAttribute(element, AttrWaist, avatar.waist);
+        SetAttribute(element, AttrHip, avatar.hip);
+    }
+
+    emit avatarChanged();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Adds an empty element for the 3D garment's data where the schema wants it: the seams, the arrangements, the fabrics,
-// then the topstitching, all before the draft blocks, which are added at the end.
+// the topstitching, then the avatar, all before the draft blocks, which are added at the end.
 QDomElement VAbstractPattern::createGarmentElement(const QString& tag)
 {
-    const QStringList order = {TagSeams, TagArrangements, TagFabrics, TagTopstitches, TagDraftBlock};
+    const QStringList order = {TagSeams, TagArrangements, TagFabrics, TagTopstitches, TagAvatar, TagDraftBlock};
     QDomElement pattern = documentElement();
 
     QDomElement before;
