@@ -20,6 +20,7 @@ SOURCES += \
     $$PWD/piece_mesher.cpp \
     $$PWD/piece_outline.cpp \
     $$PWD/seam_stretch.cpp \
+    $$PWD/standard_sizes.cpp \
     $$PWD/topstitch.cpp
 
 *msvc*:SOURCES += $$PWD/stable.cpp
@@ -43,6 +44,7 @@ HEADERS += \
     $$PWD/piece_mesher.h \
     $$PWD/piece_outline.h \
     $$PWD/seam_stretch.h \
+    $$PWD/standard_sizes.h \
     $$PWD/topstitch.h \
     $$PWD/stable.h
 

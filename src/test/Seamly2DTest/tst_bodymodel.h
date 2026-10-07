@@ -50,6 +50,8 @@ private slots:
     void fitKeepsTheArmsProportions() const;
     void fitKeepsTheLegsProportions() const;
     void fitStaysInRange() const;
+    void standardSizesFollowTheGrading() const;
+    void standardSizesAreReached() const;
     void wrapFindsBodyParts() const;
     void wrapPlacesOnAGivenPart() const;
     void wrappedPiecesStartOutsideTheBody() const;

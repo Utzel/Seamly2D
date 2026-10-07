@@ -37,6 +37,7 @@
 #include "../vgarment/body_model.h"
 #include "../vgarment/body_wrap.h"
 #include "../vgarment/piece_mesher.h"
+#include "../vgarment/standard_sizes.h"
 
 namespace
 {
@@ -386,6 +387,66 @@ void TST_BodyModel::fitReachesTypicalBodies() const
         QVERIFY2(qAbs(fit.measured.knee_height - body.wanted.knee_height) < 1.0, qUtf8Printable(report));
         QVERIFY2(qAbs(fit.measured.knee - body.wanted.knee) < 1.0, qUtf8Printable(report));
         QVERIFY2(qAbs(fit.measured.calf - body.wanted.calf) < 1.0, qUtf8Printable(report));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A woman's size 38 has a bust of 88, a man's size 50 a chest of 100; each size is larger all round than the one
+// before; a size not offered is the nearest one that is.
+void TST_BodyModel::standardSizesFollowTheGrading() const
+{
+    const StandardSize woman = StandardSizes::of(false, 38);
+    QCOMPARE(woman.measurements.height, 168.0);
+    QCOMPARE(woman.measurements.bust, 88.0);
+    QCOMPARE(woman.measurements.waist, 72.0);
+    QCOMPARE(woman.measurements.hip, 96.0);
+    const StandardSize man = StandardSizes::of(true, 50);
+    QCOMPARE(man.measurements.bust, 100.0);
+    QCOMPARE(man.measurements.waist, 88.0);
+    QCOMPARE(man.measurements.hip, 104.0);
+
+    for (const QVector<StandardSize>& sizes : {StandardSizes::women(), StandardSizes::men()})
+    {
+        QCOMPARE(sizes.size(), 8);
+        for (int i = 1; i < sizes.size(); ++i)
+        {
+            QVERIFY(sizes.at(i).size == sizes.at(i - 1).size + 2);
+            QVERIFY(sizes.at(i).measurements.bust > sizes.at(i - 1).measurements.bust);
+            QVERIFY(sizes.at(i).measurements.waist > sizes.at(i - 1).measurements.waist);
+            QVERIFY(sizes.at(i).measurements.hip > sizes.at(i - 1).measurements.hip);
+            QVERIFY(sizes.at(i).measurements.height >= sizes.at(i - 1).measurements.height);
+        }
+    }
+    QCOMPARE(StandardSizes::of(false, 47).size, 46);
+    QCOMPARE(StandardSizes::of(true, 30).size, 44);
+    QCOMPARE(StandardSizes::of(false, StandardSizes::defaultSize(false)).size, 38);
+    QCOMPARE(StandardSizes::of(true, StandardSizes::defaultSize(true)).size, 50);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The avatar can be fitted to the smallest, the middle and the largest sizes offered. A woman's waist only goes up to
+// about 86 cm in the body model, short of the largest women's sizes; theirs is as full as it goes.
+void TST_BodyModel::standardSizesAreReached() const
+{
+    const BodyModel model;
+    for (const bool male : {false, true})
+    {
+        const QVector<StandardSize> sizes = male ? StandardSizes::men() : StandardSizes::women();
+        for (const StandardSize& size : {sizes.first(), StandardSizes::of(male, StandardSizes::defaultSize(male)),
+                                         sizes.last()})
+        {
+            const BodyMeasurements& wanted = size.measurements;
+            const BodyFit fit = BodyFitter(model).fit(wanted, male ? 1.0 : 0.0, BodyShape::ageFromYears(25));
+            const QString report = QStringLiteral("%1 size %2: height %3, bust %4, waist %5, hip %6")
+                                       .arg(male ? QStringLiteral("man") : QStringLiteral("woman")).arg(size.size)
+                                       .arg(fit.measured.height).arg(fit.measured.bust).arg(fit.measured.waist)
+                                       .arg(fit.measured.hip);
+            QVERIFY2(qAbs(fit.measured.height - wanted.height) < 0.5, qUtf8Printable(report));
+            QVERIFY2(qAbs(fit.measured.bust - wanted.bust) < 1.5, qUtf8Printable(report));
+            QVERIFY2(qAbs(fit.measured.waist - qMin(wanted.waist, male ? wanted.waist : 85.5)) < 1.5,
+                     qUtf8Printable(report));
+            QVERIFY2(qAbs(fit.measured.hip - wanted.hip) < 1.5, qUtf8Printable(report));
+        }
     }
 }
 
