@@ -335,6 +335,17 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
         }
         m_rows.clear();
 
+        // New pieces get new images of their fabrics too: once the pieces drawn in an image are gone, the scene lets
+        // go of its pixels and doesn't take them up again for other pieces.
+        for (const FabricImage& image : m_images)
+        {
+            if (image.data != nullptr)
+            {
+                image.data->deleteLater();
+            }
+        }
+        m_images.clear();
+
         for (const Piece& piece : pieces)
         {
             Row row;
