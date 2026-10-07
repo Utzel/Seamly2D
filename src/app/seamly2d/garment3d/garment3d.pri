@@ -4,6 +4,7 @@
 SOURCES += \
     $$PWD/avatar_geometry.cpp \
     $$PWD/drape_runner.cpp \
+    $$PWD/flow_layout.cpp \
     $$PWD/garment_scene_model.cpp \
     $$PWD/garment_view_widget.cpp \
     $$PWD/piece_geometry.cpp \
@@ -16,6 +17,7 @@ SOURCES += \
 HEADERS += \
     $$PWD/avatar_geometry.h \
     $$PWD/drape_runner.h \
+    $$PWD/flow_layout.h \
     $$PWD/garment_scene_model.h \
     $$PWD/garment_view_widget.h \
     $$PWD/piece_geometry.h \

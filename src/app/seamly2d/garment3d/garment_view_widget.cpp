@@ -87,6 +87,7 @@
 #include "../vtools/undocommands/save_seams.h"
 #include "../vtools/undocommands/save_topstitches.h"
 #include "drape_runner.h"
+#include "flow_layout.h"
 #include "garment_scene_model.h"
 #include "piece_geometry.h"
 #include "seam_editor.h"
@@ -132,6 +133,9 @@ const qreal default_age = 25.0;
 
 // The toolbar's icons are drawn this many pixels wide, and twice that for high resolution screens.
 const int icon_size = 32;
+
+// Gap between the toolbar's groups side by side, in pixels.
+const int tool_group_spacing = 6;
 
 // Edge length of the triangles in cm for a final drape; CLO recommends 20 mm while editing and 5 to 10 mm for the
 // final drape.
@@ -1718,16 +1722,28 @@ void GarmentViewWidget::createScene()
     // createScene() a second time.
     m_view_container = QWidget::createWindowContainer(m_quick_view);
     m_view_container->setFocusPolicy(Qt::StrongFocus);
-    layout()->addWidget(m_view_container);
+    // The scene takes all the height the toolbar's rows leave.
+    static_cast<QVBoxLayout*>(layout())->addWidget(m_view_container, 1);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Sewing, flipping and removing seams. Delete and Esc only act while the view has the focus, so they don't get in
-// the way of the piece scene's.
+// The tools come in groups: sewing and topstitching, arranging and draping, how the cloth looks, and export. The
+// groups sit side by side as far as the dock is wide and wrap into rows where it isn't, so no tool is ever hidden
+// behind a toolbar's overflow. Delete and Esc only act while the view has the focus, so they don't get in the way of
+// the piece scene's.
 void GarmentViewWidget::createToolBar()
 {
-    QToolBar* tool_bar = new QToolBar(this);
-    tool_bar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    QWidget* tool_area = new QWidget(this);
+    FlowLayout* tool_layout = new FlowLayout(tool_area, tool_group_spacing);
+    tool_layout->setContentsMargins(0, 0, 0, 0);
+    auto add_group = [tool_area, tool_layout]()
+    {
+        QToolBar* group = new QToolBar(tool_area);
+        group->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        tool_layout->addWidget(group);
+        return group;
+    };
+    QToolBar* tool_bar = add_group();
 
     m_sew_action = tool_bar->addAction(tr("Sew"));
     m_sew_action->setCheckable(true);
@@ -1823,7 +1839,7 @@ void GarmentViewWidget::createToolBar()
         button->setPopupMode(QToolButton::MenuButtonPopup);
     }
 
-    tool_bar->addSeparator();
+    tool_bar = add_group();
 
     m_arrange_action = tool_bar->addAction(tr("Arrange"));
     m_arrange_action->setCheckable(true);
@@ -1836,18 +1852,26 @@ void GarmentViewWidget::createToolBar()
     m_simulate_action->setToolTip(tr("Drape the pieces on the avatar, sewn together by their seams"));
     connect(m_simulate_action, &QAction::toggled, this, &GarmentViewWidget::setSimulating);
 
-    m_reset_action = tool_bar->addAction(tr("Reset"));
-    m_reset_action->setToolTip(tr("Put the draped pieces back where they were arranged"));
-    connect(m_reset_action, &QAction::triggered, this, &GarmentViewWidget::resetDrape);
-
-    m_fine_action = tool_bar->addAction(tr("Fine"));
+    // How finely the cloth drapes is a setting of the simulation, in its menu.
+    QMenu* simulate_menu = new QMenu(this);
+    simulate_menu->setToolTipsVisible(true);
+    m_fine_action = simulate_menu->addAction(tr("Fine Drape"));
     m_fine_action->setCheckable(true);
     m_fine_action->setToolTip(tr("Drape with smaller triangles, %1 instead of %2 cm: slower, but folds and the fit "
                                  "show in finer detail. A drape goes on from where it hangs.")
                                   .arg(fine_edge_length).arg(PieceMesher::defaultEdgeLength()));
     connect(m_fine_action, &QAction::toggled, this, &GarmentViewWidget::setFine);
+    m_simulate_action->setMenu(simulate_menu);
+    if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_simulate_action)))
+    {
+        button->setPopupMode(QToolButton::MenuButtonPopup);
+    }
 
-    tool_bar->addSeparator();
+    m_reset_action = tool_bar->addAction(tr("Reset"));
+    m_reset_action->setToolTip(tr("Put the draped pieces back where they were arranged"));
+    connect(m_reset_action, &QAction::triggered, this, &GarmentViewWidget::resetDrape);
+
+    tool_bar = add_group();
 
     // As CLO's fit maps, one at a time: the button shows the map chosen in its menu.
     m_fit_action = tool_bar->addAction(tr("Fit Map"));
@@ -1903,7 +1927,7 @@ void GarmentViewWidget::createToolBar()
     tool_bar->addWidget(m_fabric_box);
     connect(m_fabric_box, QOverload<int>::of(&QComboBox::activated), this, &GarmentViewWidget::chooseFabric);
 
-    tool_bar->addSeparator();
+    tool_bar = add_group();
 
     m_export_action = tool_bar->addAction(tr("Export"));
     m_export_action->setToolTip(tr("Save the pieces on the avatar as they hang, and the avatar, for other 3D programs: "
@@ -1916,7 +1940,7 @@ void GarmentViewWidget::createToolBar()
     connect(m_cancel_action, &QAction::triggered, this, &GarmentViewWidget::cancel);
     addAction(m_cancel_action);
 
-    layout()->addWidget(tool_bar);
+    layout()->addWidget(tool_area);
     updateIcons();
     updateActions();
 }
