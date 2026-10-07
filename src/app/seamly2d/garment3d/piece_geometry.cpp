@@ -36,31 +36,16 @@
 
 namespace
 {
-// Position, normal and texture coordinate, as floats, and the color when the strain is shown.
+// Position, normal and texture coordinates, as floats, and the color when the vertices have one.
 const int floats_per_vertex = 3 + 3 + 2 + 2;
 const int floats_per_color = 4;
 
-// Strain is shown green where there is none, yellow at half the full strain and red from the full strain on.
-const qreal full_strain = 0.1;
-
 //---------------------------------------------------------------------------------------------------------------------
-QVector3D colorVector(const QColor& color)
+// The color in linear RGB, as vertex colors are.
+QVector3D linear(const QColor& color)
 {
-    return QVector3D(color.redF(), color.greenF(), color.blueF());
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-// The color that shows the strain, in linear RGB as vertex colors are.
-QVector3D strainColor(qreal strain)
-{
-    const QVector<QColor> colors = PieceGeometry::strainColors();
-    const QVector3D none = colorVector(colors.at(0));
-    const QVector3D half = colorVector(colors.at(1));
-    const QVector3D full = colorVector(colors.at(2));
-    const float share = static_cast<float>(qBound(0.0, strain / full_strain, 1.0));
-    const QVector3D color = share < 0.5f ? none + (half - none) * (share * 2.0f)
-                                         : half + (full - half) * (share * 2.0f - 1.0f);
-    return QVector3D(qPow(color.x(), 2.2f), qPow(color.y(), 2.2f), qPow(color.z(), 2.2f));
+    return QVector3D(qPow(static_cast<float>(color.redF()), 2.2f), qPow(static_cast<float>(color.greenF()), 2.2f),
+                     qPow(static_cast<float>(color.blueF()), 2.2f));
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -90,16 +75,15 @@ PieceGeometry::PieceGeometry(QQuick3DObject* parent)
 {}
 
 //---------------------------------------------------------------------------------------------------------------------
-/// @brief Replaces the geometry with the mesh, at the given positions in cm, or flat on the board without them.
-/// Texture coordinates are the flat piece's positions in cm, so a fabric texture can later be scaled to its real
-/// repeat size. With the strain shown, each vertex gets the color of how much the cloth around it is stretched.
-/// @brief The piece's mesh, where it is put or else lying flat, optionally colored by its strain. The grain runs at
-/// grain_angle degrees anticlockwise from the piece's x axis, as the piece scene shows it.
-void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions, bool strain_shown,
-                            qreal grain_angle)
+/// @brief Replaces the geometry with the mesh, at the given positions in cm, or flat on the board without them, with a
+/// color for each vertex if there is one for each. Texture coordinates are the flat piece's positions in cm, and where
+/// it lies in the fabric, in cm across and along the grain, which runs at grain_angle degrees anticlockwise from the
+/// piece's x axis, as the piece scene shows it.
+void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions,
+                            const QVector<QColor>& colors, qreal grain_angle)
 {
     const QVector<QVector3D> placed = placedPositions(mesh, positions);
-    const QVector<qreal> strain = strain_shown ? mesh.strain(placed) : QVector<qreal>();
+    const bool colored = colors.size() == mesh.vertexCount();
     const QVector<QVector3D> normals = vertexNormals(mesh, placed);
 
     // The piece scene's y axis points down, the 3D scene's up, which turns every triangle around; swapping two
@@ -116,7 +100,7 @@ void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& p
     const QPointF warp(qCos(grain), -qSin(grain));
     const QPointF weft(qSin(grain), qCos(grain));
 
-    const int vertex_floats = floats_per_vertex + (strain_shown ? floats_per_color : 0);
+    const int vertex_floats = floats_per_vertex + (colored ? floats_per_color : 0);
     const int vertex_bytes = vertex_floats * static_cast<int>(sizeof(float));
     QByteArray vertex_data(mesh.vertexCount() * vertex_bytes, Qt::Uninitialized);
     float* vertex = reinterpret_cast<float*>(vertex_data.data());
@@ -135,9 +119,9 @@ void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& p
         *vertex++ = static_cast<float>(rest.y());
         *vertex++ = static_cast<float>(QPointF::dotProduct(rest, weft));
         *vertex++ = static_cast<float>(QPointF::dotProduct(rest, warp));
-        if (strain_shown)
+        if (colored)
         {
-            const QVector3D color = strainColor(strain.at(i));
+            const QVector3D color = linear(colors.at(i));
             *vertex++ = color.x();
             *vertex++ = color.y();
             *vertex++ = color.z();
@@ -159,7 +143,7 @@ void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& p
     addAttribute(Attribute::NormalSemantic, 3 * static_cast<int>(sizeof(float)), Attribute::F32Type);
     addAttribute(Attribute::TexCoord0Semantic, 6 * static_cast<int>(sizeof(float)), Attribute::F32Type);
     addAttribute(Attribute::TexCoord1Semantic, 8 * static_cast<int>(sizeof(float)), Attribute::F32Type);
-    if (strain_shown)
+    if (colored)
     {
         addAttribute(Attribute::ColorSemantic, floats_per_vertex * static_cast<int>(sizeof(float)),
                      Attribute::F32Type);
@@ -169,20 +153,6 @@ void PieceGeometry::setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& p
     setIndexData(index_data);
     setBounds(minimum, maximum);
     update();
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-/// @brief The strain shown in full red, as a share of the drafted size: cloth 10% longer than drafted.
-qreal PieceGeometry::fullStrain()
-{
-    return full_strain;
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-/// @brief The colors the strain is shown in: for none, for half the full strain and for the full strain.
-QVector<QColor> PieceGeometry::strainColors()
-{
-    return {QColor(61, 178, 74), QColor(255, 212, 0), QColor(230, 26, 26)};
 }
 
 //---------------------------------------------------------------------------------------------------------------------

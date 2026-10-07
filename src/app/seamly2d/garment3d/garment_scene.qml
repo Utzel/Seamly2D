@@ -268,8 +268,8 @@ Rectangle {
 
                     position: placed ? root.sceneModel.boardOffset.times(-1) : Qt.vector3d(0, 0, index * 0.05)
 
-                    // With the strain shown, the vertex colors take the place of the piece's own.
-                    readonly property color ownColor: root.sceneModel.strainShown ? "white" : pieceColor
+                    // With a fit map shown, the vertex colors take the place of the piece's own.
+                    readonly property color ownColor: root.sceneModel.fitMapShown ? "white" : pieceColor
 
                     // While a piece is selected the others step back, so the selection reads whatever the colors are.
                     readonly property color clothColor: selected
@@ -287,8 +287,8 @@ Rectangle {
 
                         materials: PrincipledMaterial {
                             baseColor: piece_node.clothColor
-                            vertexColorsEnabled: root.sceneModel.strainShown
-                            baseColorMap: root.sceneModel.checksShown && !root.sceneModel.strainShown
+                            vertexColorsEnabled: root.sceneModel.fitMapShown
+                            baseColorMap: root.sceneModel.checksShown && !root.sceneModel.fitMapShown
                                           ? checks_texture : null
                             roughness: 0.85
                             metalness: 0.0
@@ -520,54 +520,44 @@ Rectangle {
         horizontalAlignment: Text.AlignHCenter
     }
 
-    // How the strain colors read: green unstretched, yellow at half the full strain, red from the full strain on.
+    // How the fit map's colors read: the values its four colors stand for, the lowest at the bottom.
     Row {
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
         anchors.margins: 8
         spacing: 4
-        visible: root.sceneModel.strainShown
+        visible: root.sceneModel.fitMapShown
 
         Item {
-            width: Math.max(full_label.implicitWidth, half_label.implicitWidth, none_label.implicitWidth)
-            height: strain_bar.height
+            id: fit_labels
+            width: 48
+            height: fit_bar.height
 
-            Text {
-                id: full_label
-                anchors.right: parent.right
-                anchors.top: parent.top
-                text: Math.round(root.sceneModel.fullStrain * 100) + "%+"
-                color: root.textColor
-                font.pointSize: 8
-            }
+            Repeater {
+                model: root.sceneModel.fitLabels
 
-            Text {
-                id: half_label
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                text: Math.round(root.sceneModel.fullStrain * 50) + "%"
-                color: root.textColor
-                font.pointSize: 8
-            }
+                Text {
+                    required property int index
+                    required property string modelData
 
-            Text {
-                id: none_label
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                text: "0%"
-                color: root.textColor
-                font.pointSize: 8
+                    anchors.right: parent.right
+                    y: (fit_labels.height - height) * (1 - index / 3)
+                    text: modelData
+                    color: root.textColor
+                    font.pointSize: 8
+                }
             }
         }
 
         Rectangle {
-            id: strain_bar
+            id: fit_bar
             width: 10
             height: 120
             gradient: Gradient {
-                GradientStop { position: 0.0; color: root.sceneModel.strainColors[2] }
-                GradientStop { position: 0.5; color: root.sceneModel.strainColors[1] }
-                GradientStop { position: 1.0; color: root.sceneModel.strainColors[0] }
+                GradientStop { position: 0.0; color: root.sceneModel.fitColors[3] }
+                GradientStop { position: 1 / 3; color: root.sceneModel.fitColors[2] }
+                GradientStop { position: 2 / 3; color: root.sceneModel.fitColors[1] }
+                GradientStop { position: 1.0; color: root.sceneModel.fitColors[0] }
             }
         }
     }

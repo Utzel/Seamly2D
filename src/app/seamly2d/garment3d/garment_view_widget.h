@@ -113,6 +113,8 @@ private slots:
     void               setSimulating(bool simulating);
     void               resetDrape();
     void               setFine(bool fine);
+    void               showFitMap(bool shown);
+    void               chooseFitMap();
     void               setStitching(bool stitching);
     void               stitchEveryEdge(bool every);
     void               chooseStitchStyle(QAction* action);
@@ -209,7 +211,8 @@ private:
     QAction*                   m_simulate_action;
     QAction*                   m_reset_action;
     QAction*                   m_fine_action;
-    QAction*                   m_strain_action;
+    QAction*                   m_fit_action;
+    QActionGroup*              m_fit_maps;
     QAction*                   m_checks_action;
     QAction*                   m_export_action;
     QComboBox*                 m_fabric_box;

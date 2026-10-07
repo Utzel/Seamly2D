@@ -81,6 +81,7 @@
 #include "tst_clothsolver.h"
 #include "tst_garmentsymmetry.h"
 #include "tst_garmentexport.h"
+#include "tst_garmentfit.h"
 #include "tst_garmentmesh.h"
 #include "tst_topstitch.h"
 #include "tst_limbline.h"
@@ -196,6 +197,7 @@ int main(int argc, char** argv)
     ASSERT_TEST(new TST_PieceMesher());
     ASSERT_TEST(new TST_GarmentMesh());
     ASSERT_TEST(new TST_GarmentExport());
+    ASSERT_TEST(new TST_GarmentFit());
     ASSERT_TEST(new TST_Topstitch());
     ASSERT_TEST(new TST_LimbLine());
     ASSERT_TEST(new TST_BodyModel());

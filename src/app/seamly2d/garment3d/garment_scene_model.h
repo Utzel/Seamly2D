@@ -30,10 +30,12 @@
 #include <QHash>
 #include <QRectF>
 #include <QString>
+#include <QStringList>
 #include <QVariantList>
 #include <QVector3D>
 #include <QVector>
 
+#include "../vgarment/body_collider.h"
 #include "../vgarment/garment_mesh.h"
 #include "../vgarment/topstitch.h"
 
@@ -59,13 +61,23 @@ class GarmentSceneModel : public QAbstractListModel
     Q_PROPERTY(QString avatarNote READ avatarNote NOTIFY avatarChanged)
     Q_PROPERTY(bool arranging READ isArranging NOTIFY arrangingChanged)
     Q_PROPERTY(QString hint READ hint NOTIFY hintChanged)
-    Q_PROPERTY(bool strainShown READ isStrainShown NOTIFY strainShownChanged)
-    Q_PROPERTY(qreal fullStrain READ fullStrain CONSTANT)
-    Q_PROPERTY(QVariantList strainColors READ strainColors CONSTANT)
+    Q_PROPERTY(bool fitMapShown READ isFitMapShown NOTIFY fitMapChanged)
+    Q_PROPERTY(QVariantList fitColors READ fitColors NOTIFY fitMapChanged)
+    Q_PROPERTY(QStringList fitLabels READ fitLabels NOTIFY fitMapChanged)
     Q_PROPERTY(bool checksShown READ isChecksShown NOTIFY checksShownChanged)
     Q_PROPERTY(qreal checkRepeat READ checkRepeat CONSTANT)
 
 public:
+    /// What the cloth can be colored by, as CLO's fit maps: how much it is stretched, how far it stands off the body,
+    /// how hard it presses on it.
+    enum class FitMap
+    {
+        None,
+        Strain,
+        Ease,
+        Pressure
+    };
+
     enum Roles
     {
         PieceIdRole = Qt::UserRole + 1,
@@ -128,10 +140,12 @@ public:
     QString                hint() const;
     void                   setHint(const QString& hint);
 
-    bool                   isStrainShown() const;
-    void                   setStrainShown(bool shown);
-    qreal                  fullStrain() const;
-    QVariantList           strainColors() const;
+    FitMap                 fitMap() const;
+    void                   setFitMap(FitMap map);
+    bool                   isFitMapShown() const;
+    QVariantList           fitColors() const;
+    QStringList            fitLabels() const;
+    void                   setBody(const BodyCollider& body);
 
     bool                   isChecksShown() const;
     void                   setChecksShown(bool shown);
@@ -153,7 +167,7 @@ signals:
     void                   piecePicked(quint32 id);
     void                   arrangingChanged();
     void                   hintChanged();
-    void                   strainShownChanged();
+    void                   fitMapChanged();
     void                   checksShownChanged();
     void                   placeRequested(const QVector3D& point);
     void                   grabRequested(quint32 id, const QVector3D& point);
@@ -193,12 +207,15 @@ private:
     QString                m_avatar_note;
     bool                   m_arranging;
     QString                m_hint;
-    bool                   m_strain_shown;
+    FitMap                 m_fit_map;
+    BodyCollider           m_body;
     bool                   m_checks_shown;
     QColor                 m_thread_color;
 
     void                   updateSceneBounds();
     void                   showStitches(const Row& row) const;
+    void                   showMesh(const Row& row) const;
+    QVector<QColor>        vertexColors(const Row& row) const;
 };
 
 #endif // GARMENT_SCENE_MODEL_H

@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <limits>
 
+#include "../vgarment/garment_fit.h"
 #include "../vgarment/piece_outline.h"
 #include "avatar_geometry.h"
 #include "piece_geometry.h"
@@ -45,6 +46,48 @@ const qreal check_repeat = 4.0;
 
 // Stitches an edge under the mouse would get are drawn this much thicker than stitches, so they show over them.
 const qreal preview_scale = 1.8;
+
+// The fit maps' colors, at the values they stand for, from the lowest up: strain in percent, green unstretched to
+// dark red twice as stretched as red; ease in cm, red touching the body to blue well off it; pressure in kPa, green
+// none to dark red, as tight as compression wear.
+struct FitScale
+{
+    qreal       values[4];
+    const char* colors[4];
+    const char* unit;
+};
+const FitScale strain_scale = {{0.0, 5.0, 10.0, 20.0}, {"#3db24a", "#ffd400", "#e61a1a", "#7a0d0d"}, "%"};
+const FitScale ease_scale = {{0.0, 1.5, 4.0, 8.0}, {"#e61a1a", "#ffd400", "#3db24a", "#2f6fd6"}, " cm"};
+const FitScale pressure_scale = {{0.0, 1.0, 2.0, 4.0}, {"#3db24a", "#ffd400", "#e61a1a", "#7a0d0d"}, " kPa"};
+
+// Pieces a fit map can't tell anything about, as those on the board for ease and pressure, are this grey.
+const char* const unmapped_color = "#c8c8c8";
+
+//---------------------------------------------------------------------------------------------------------------------
+const FitScale& fitScale(GarmentSceneModel::FitMap map)
+{
+    return map == GarmentSceneModel::FitMap::Ease       ? ease_scale
+           : map == GarmentSceneModel::FitMap::Pressure ? pressure_scale
+                                                        : strain_scale;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The scale's color for the value, between the colors of the values around it; past the last, the last.
+QColor scaleColor(const FitScale& scale, qreal value)
+{
+    int above = 1;
+    while (above < 3 && value > scale.values[above])
+    {
+        ++above;
+    }
+    const qreal span = scale.values[above] - scale.values[above - 1];
+    const qreal t = qBound(0.0, (value - scale.values[above - 1]) / span, 1.0);
+    const QColor low(scale.colors[above - 1]);
+    const QColor high(scale.colors[above]);
+    return QColor::fromRgbF(static_cast<float>(low.redF() + (high.redF() - low.redF()) * t),
+                            static_cast<float>(low.greenF() + (high.greenF() - low.greenF()) * t),
+                            static_cast<float>(low.blueF() + (high.blueF() - low.blueF()) * t));
+}
 
 // Thread matching the cloth is this much of the way from the cloth's color to black on light cloth, or to white on
 // dark cloth, so the stitching still shows.
@@ -142,7 +185,8 @@ GarmentSceneModel::GarmentSceneModel(QObject* parent)
     , m_avatar_note()
     , m_arranging(false)
     , m_hint()
-    , m_strain_shown(false)
+    , m_fit_map(FitMap::None)
+    , m_body()
     , m_checks_shown(false)
     , m_thread_color()
 {}
@@ -240,7 +284,7 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.placed = !row.positions.isEmpty();
             row.stitches = pieces.at(i).stitches;
             row.preview = pieces.at(i).preview;
-            row.geometry->setMesh(row.mesh, row.positions, m_strain_shown, row.grain_angle);
+            showMesh(row);
             row.outline->setOutline(row.mesh, row.positions);
             showStitches(row);
         }
@@ -274,7 +318,7 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.placed = !piece.positions.isEmpty();
             row.geometry = new PieceGeometry();
             row.geometry->setParent(this);
-            row.geometry->setMesh(piece.mesh, piece.positions, m_strain_shown, row.grain_angle);
+            showMesh(row);
             row.outline = new PieceGeometry();
             row.outline->setParent(this);
             row.outline->setOutline(piece.mesh, piece.positions);
@@ -320,7 +364,7 @@ void GarmentSceneModel::setPiecePositions(quint32 id, const QVector<QVector3D>& 
         if (row.id == id && row.placed && positions.size() == row.mesh.vertexCount())
         {
             row.positions = positions;
-            row.geometry->setMesh(row.mesh, positions, m_strain_shown, row.grain_angle);
+            showMesh(row);
             row.outline->setOutline(row.mesh, positions);
             showStitches(row);
         }
@@ -596,23 +640,69 @@ void GarmentSceneModel::setHint(const QString& hint)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-/// @brief Whether the pieces are colored by how much their cloth is stretched rather than in their own colors.
-bool GarmentSceneModel::isStrainShown() const
+/// @brief What the cloth is colored by instead of the pieces' own colors, if anything.
+GarmentSceneModel::FitMap GarmentSceneModel::fitMap() const
 {
-    return m_strain_shown;
+    return m_fit_map;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-void GarmentSceneModel::setStrainShown(bool shown)
+void GarmentSceneModel::setFitMap(FitMap map)
 {
-    if (shown != m_strain_shown)
+    if (map != m_fit_map)
     {
-        m_strain_shown = shown;
+        m_fit_map = map;
         for (const Row& row : m_rows)
         {
-            row.geometry->setMesh(row.mesh, row.positions, m_strain_shown, row.grain_angle);
+            showMesh(row);
         }
-        emit strainShownChanged();
+        emit fitMapChanged();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool GarmentSceneModel::isFitMapShown() const
+{
+    return m_fit_map != FitMap::None;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The fit map's colors, for its legend: at the four values fitLabels() names, from the lowest up.
+QVariantList GarmentSceneModel::fitColors() const
+{
+    QVariantList colors;
+    for (const char* const color : fitScale(m_fit_map).colors)
+    {
+        colors.append(QColor(color));
+    }
+    return colors;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The values the fit map's colors stand for, from the lowest up, the last one and beyond.
+QStringList GarmentSceneModel::fitLabels() const
+{
+    const FitScale& scale = fitScale(m_fit_map);
+    QStringList labels;
+    for (int i = 0; i < 4; ++i)
+    {
+        labels.append(QString::number(scale.values[i]) + (i == 3 ? QStringLiteral("+") : QString())
+                      + QString::fromLatin1(scale.unit));
+    }
+    return labels;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The avatar's body, which the ease and pressure maps measure the cloth against.
+void GarmentSceneModel::setBody(const BodyCollider& body)
+{
+    m_body = body;
+    if (m_fit_map == FitMap::Ease || m_fit_map == FitMap::Pressure)
+    {
+        for (const Row& row : m_rows)
+        {
+            showMesh(row);
+        }
     }
 }
 
@@ -641,24 +731,6 @@ qreal GarmentSceneModel::checkRepeat() const
     return check_repeat;
 }
 
-//---------------------------------------------------------------------------------------------------------------------
-/// @brief The strain shown in full red, as a share of the drafted size.
-qreal GarmentSceneModel::fullStrain() const
-{
-    return PieceGeometry::fullStrain();
-}
-
-//---------------------------------------------------------------------------------------------------------------------
-/// @brief The colors the strain is shown in, for the legend: for none, half the full strain and the full strain.
-QVariantList GarmentSceneModel::strainColors() const
-{
-    QVariantList colors;
-    for (const QColor& color : PieceGeometry::strainColors())
-    {
-        colors.append(color);
-    }
-    return colors;
-}
 
 //---------------------------------------------------------------------------------------------------------------------
 /// @brief Shows the avatar, a body given by its vertex positions in cm. The note says how far it is from the wanted
@@ -770,6 +842,55 @@ void GarmentSceneModel::updateSceneBounds()
     m_scene_center = (minimum + maximum) / 2.0f;
     m_scene_radius = static_cast<qreal>((maximum - minimum).length()) / 2.0;
     emit sceneBoundsChanged();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Shows the row's mesh where it is, colored by the fit map if one is shown.
+void GarmentSceneModel::showMesh(const Row& row) const
+{
+    row.geometry->setMesh(row.mesh, row.positions, vertexColors(row), row.grain_angle);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The color of each of the row's vertices on the fit map shown; none without one. Ease and pressure only tell
+// something about pieces on the avatar.
+QVector<QColor> GarmentSceneModel::vertexColors(const Row& row) const
+{
+    QVector<QColor> colors;
+    if (m_fit_map == FitMap::None)
+    {
+        return colors;
+    }
+
+    QVector<qreal> values;
+    if (m_fit_map == FitMap::Strain)
+    {
+        values = row.mesh.strain(PieceGeometry::placedPositions(row.mesh, row.positions));
+        for (qreal& value : values)
+        {
+            value *= 100.0;
+        }
+    }
+    else if (!row.placed || m_body.isEmpty())
+    {
+        return QVector<QColor>(row.mesh.vertexCount(), QColor(unmapped_color));
+    }
+    else if (m_fit_map == FitMap::Ease)
+    {
+        values = GarmentFit::ease(m_body, row.positions);
+    }
+    else
+    {
+        values = GarmentFit::pressure(row.mesh, m_body, row.positions);
+    }
+
+    const FitScale& scale = fitScale(m_fit_map);
+    colors.reserve(values.size());
+    for (const qreal value : values)
+    {
+        colors.append(scaleColor(scale, value));
+    }
+    return colors;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

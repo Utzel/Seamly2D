@@ -198,7 +198,8 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_simulate_action(nullptr)
     , m_reset_action(nullptr)
     , m_fine_action(nullptr)
-    , m_strain_action(nullptr)
+    , m_fit_action(nullptr)
+    , m_fit_maps(nullptr)
     , m_checks_action(nullptr)
     , m_export_action(nullptr)
     , m_fabric_box(nullptr)
@@ -308,6 +309,7 @@ void GarmentViewWidget::clear()
     m_arrangements.clear();
     m_wrap.reset();
     m_collider = BodyCollider();
+    m_scene_model->setBody(m_collider);
     m_rebuild_timer->stop();
     m_rebuild_pending = false;
     m_mesh_cache.clear();
@@ -575,6 +577,7 @@ void GarmentViewWidget::updateAvatar()
                 m_draped.clear();
                 m_wrap.reset();
                 m_collider = BodyCollider();
+                m_scene_model->setBody(m_collider);
                 rebuildScene();
             }
         }
@@ -623,6 +626,7 @@ void GarmentViewWidget::avatarFitted()
             m_wrap.reset(new BodyWrap(*m_body_model, result.positions));
             m_collider = BodyCollider(result.positions.mid(0, m_body_model->skinVertexCount()),
                                       m_body_model->triangles());
+            m_scene_model->setBody(m_collider);
             rebuildScene();
         }
     }
@@ -1384,6 +1388,23 @@ qreal GarmentViewWidget::grainAngle(const VPiece& piece) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// Colors the cloth by the fit map chosen in the Fit Map menu, or by the pieces' own colors again.
+void GarmentViewWidget::showFitMap(bool shown)
+{
+    const QAction* chosen = m_fit_maps->checkedAction();
+    const auto map = static_cast<GarmentSceneModel::FitMap>(chosen != nullptr ? chosen->data().toInt() : 0);
+    m_scene_model->setFitMap(shown ? map : GarmentSceneModel::FitMap::None);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A fit map was chosen in the menu: it shows right away.
+void GarmentViewWidget::chooseFitMap()
+{
+    m_fit_action->setChecked(true);
+    showFitMap(true);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Meshes the pieces finer for a final drape, or coarse again for editing. Every piece is meshed again, and a drape
 // carries over onto the new meshes and goes on from there.
 void GarmentViewWidget::setFine(bool fine)
@@ -1828,11 +1849,43 @@ void GarmentViewWidget::createToolBar()
 
     tool_bar->addSeparator();
 
-    m_strain_action = tool_bar->addAction(tr("Strain"));
-    m_strain_action->setCheckable(true);
-    m_strain_action->setToolTip(tr("Color the cloth by how much it is stretched: green not at all, red %1% or more")
-                                    .arg(qRound(m_scene_model->fullStrain() * 100)));
-    connect(m_strain_action, &QAction::toggled, m_scene_model, &GarmentSceneModel::setStrainShown);
+    // As CLO's fit maps, one at a time: the button shows the map chosen in its menu.
+    m_fit_action = tool_bar->addAction(tr("Fit Map"));
+    m_fit_action->setCheckable(true);
+    m_fit_action->setToolTip(tr("Color the cloth by how the garment fits, as chosen in the menu: how much the cloth is "
+                                "stretched, how far it stands off the body, or how hard it presses on it"));
+    connect(m_fit_action, &QAction::toggled, this, &GarmentViewWidget::showFitMap);
+
+    QMenu* fit_menu = new QMenu(this);
+    fit_menu->setToolTipsVisible(true);
+    m_fit_maps = new QActionGroup(this);
+    const struct
+    {
+        GarmentSceneModel::FitMap map;
+        QString                   text;
+        QString                   tip;
+    } fit_maps[] = {
+        {GarmentSceneModel::FitMap::Strain, tr("Strain"),
+         tr("How much the cloth is stretched: green not at all, red 10% longer than drafted")},
+        {GarmentSceneModel::FitMap::Ease, tr("Ease"),
+         tr("How far the cloth stands off the body: red where it rests on it, blue 8 cm or more away")},
+        {GarmentSceneModel::FitMap::Pressure, tr("Pressure"),
+         tr("How hard the cloth presses on the body: green not at all, red 2 kPa or more")}};
+    for (const auto& fit_map : fit_maps)
+    {
+        QAction* action = fit_menu->addAction(fit_map.text);
+        action->setCheckable(true);
+        action->setChecked(fit_map.map == GarmentSceneModel::FitMap::Strain);
+        action->setData(static_cast<int>(fit_map.map));
+        action->setToolTip(fit_map.tip);
+        m_fit_maps->addAction(action);
+    }
+    connect(m_fit_maps, &QActionGroup::triggered, this, &GarmentViewWidget::chooseFitMap);
+    m_fit_action->setMenu(fit_menu);
+    if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_fit_action)))
+    {
+        button->setPopupMode(QToolButton::MenuButtonPopup);
+    }
 
     m_checks_action = tool_bar->addAction(tr("Checks"));
     m_checks_action->setCheckable(true);
@@ -1881,7 +1934,7 @@ void GarmentViewWidget::updateIcons()
         m_simulate_action->setIcon(toolIcon(QStringLiteral("simulate")));
         m_reset_action->setIcon(toolIcon(QStringLiteral("reset")));
         m_fine_action->setIcon(toolIcon(QStringLiteral("fine")));
-        m_strain_action->setIcon(toolIcon(QStringLiteral("strain")));
+        m_fit_action->setIcon(toolIcon(QStringLiteral("strain")));
         m_checks_action->setIcon(toolIcon(QStringLiteral("checks")));
         m_export_action->setIcon(toolIcon(QStringLiteral("export")));
     }
