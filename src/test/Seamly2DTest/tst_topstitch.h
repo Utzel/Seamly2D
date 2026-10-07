@@ -40,6 +40,8 @@ private slots:
     void rowsLeaveOutWhatIsTooNarrow() const;
     void stitchesLieOnTheMesh() const;
     void pointsOutsideGoToTheEdge() const;
+    void stylesRunInsideTheEdge() const;
+    void threadLiesOnBothFaces() const;
 
 private:
     Q_DISABLE_COPY(TST_Topstitch)

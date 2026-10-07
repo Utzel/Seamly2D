@@ -27,6 +27,8 @@
 #include <QLineF>
 #include <QtTest>
 
+#include <algorithm>
+
 #include "../vgarment/piece_mesher.h"
 #include "../vgarment/topstitch.h"
 
@@ -150,8 +152,9 @@ void TST_Topstitch::stitchesLieOnTheMesh() const
 {
     const GarmentMesh mesh = PieceMesher().meshPolygon(rectangle().points());
     const QVector<QVector<QPointF>> rows = {{QPointF(0, 0.6), QPointF(20, 0.6)}};
-    const QVector<ThreadStitch> stitches = Topstitching::stitches(mesh, rows, 0.3);
+    const QVector<ThreadStitch> stitches = Topstitching::stitches(mesh, rows, 0.3, 0.12);
     QCOMPARE(stitches.size(), 66);
+    QCOMPARE(stitches.first().width, 0.12f);
 
     const QPointF first = stitches.first().start.restPosition(mesh);
     const QPointF last = stitches.last().end.restPosition(mesh);
@@ -187,4 +190,72 @@ void TST_Topstitch::pointsOutsideGoToTheEdge() const
     QVERIFY(QLineF(located.at(0).restPosition(mesh), QPointF(0, 5)).length() < 1e-4);
     QVERIFY(QLineF(located.at(1).restPosition(mesh), QPointF(7.3, 4.1)).length() < 1e-4);
     QVERIFY(QLineF(located.at(2).restPosition(mesh), QPointF(20, 10)).length() < 1e-4);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The default style comes first and has one row; every style's rows run inside the edge, one further in than the
+// last. A style a pattern names but the 3D View doesn't know is the default.
+void TST_Topstitch::stylesRunInsideTheEdge() const
+{
+    const QVector<TopstitchStyle> styles = TopstitchStyle::presets();
+    QVERIFY(styles.size() > 1);
+    QCOMPARE(styles.first().name, TopstitchStyle::defaultName());
+    QCOMPARE(styles.first().distances, QVector<qreal>({Topstitching::defaultDistance()}));
+    for (const TopstitchStyle& style : styles)
+    {
+        QVERIFY(!style.distances.isEmpty() && style.distances.first() > 0);
+        QVERIFY(std::is_sorted(style.distances.cbegin(), style.distances.cend()));
+        QVERIFY(style.stitch_length > 0 && style.thread_width > 0);
+        QCOMPARE(TopstitchStyle::preset(style.name).name, style.name);
+    }
+    QCOMPARE(TopstitchStyle::preset(QStringLiteral("unknown")).name, TopstitchStyle::defaultName());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Each stitch is a spindle on each face of the cloth, five corners and four triangles each, facing away from the
+// cloth, its ridge raised in proportion to the thread's width.
+void TST_Topstitch::threadLiesOnBothFaces() const
+{
+    const GarmentMesh mesh = PieceMesher().meshPolygon(rectangle().points());
+    const QVector<ThreadStitch> stitches = Topstitching::stitches(mesh, {{QPointF(5, 0.6), QPointF(5.7, 0.6)}}, 0.3,
+                                                                  0.1);
+    QCOMPARE(stitches.size(), 2);
+
+    // Flat, facing +z.
+    QVector<QVector3D> positions;
+    for (const QPointF& rest : mesh.rest_positions)
+    {
+        positions.append(QVector3D(static_cast<float>(rest.x()), static_cast<float>(rest.y()), 0.0f));
+    }
+    const QVector<QVector3D> normals(positions.size(), QVector3D(0, 0, 1));
+    const ThreadMesh thread = Topstitching::threadMesh(stitches, positions, normals);
+    QCOMPARE(thread.positions.size(), 2 * 2 * 5);
+    QCOMPARE(thread.normals.size(), thread.positions.size());
+    QCOMPARE(thread.indices.size(), 2 * 2 * 4 * 3);
+
+    for (int i = 0; i < thread.indices.size(); i += 3)
+    {
+        const QVector3D& a = thread.positions.at(static_cast<int>(thread.indices.at(i)));
+        const QVector3D& b = thread.positions.at(static_cast<int>(thread.indices.at(i + 1)));
+        const QVector3D& c = thread.positions.at(static_cast<int>(thread.indices.at(i + 2)));
+        const QVector3D face = QVector3D::crossProduct(b - a, c - a);
+        const bool front = (i / 12) % 2 == 0;
+        QVERIFY(front ? face.z() > 0 : face.z() < 0);
+    }
+    float highest = 0;
+    float lowest = 0;
+    for (const QVector3D& position : thread.positions)
+    {
+        highest = qMax(highest, position.z());
+        lowest = qMin(lowest, position.z());
+    }
+    QVERIFY(highest > 0.05f && highest < 0.1f && qAbs(lowest + highest) < 1e-5f);
+
+    const ThreadMesh thicker = Topstitching::threadMesh(stitches, positions, normals, 2.0);
+    float thicker_highest = 0;
+    for (const QVector3D& position : thicker.positions)
+    {
+        thicker_highest = qMax(thicker_highest, position.z());
+    }
+    QVERIFY(qAbs(thicker_highest - 2 * highest) < 1e-5f);
 }

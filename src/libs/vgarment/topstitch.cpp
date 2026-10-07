@@ -34,9 +34,10 @@
 
 namespace
 {
-// Topstitching usually runs 6 mm inside the edge, in stitches 3 mm long.
+// Topstitching usually runs 6 mm inside the edge, in stitches 3 mm long, in thread a little under 1 mm thick.
 const qreal default_distance = 0.6;
 const qreal default_stitch_length = 0.3;
+const qreal default_thread_width = 0.08;
 
 // Of each stitch's length, this share shows as thread on top of the cloth; the rest is where it goes through.
 const qreal thread_share = 0.8;
@@ -56,6 +57,23 @@ const qreal same_point = 1e-6;
 
 // Barycentric weights this far below 0 still count as inside a triangle.
 const qreal inside_tolerance = 1e-9;
+
+// The style patterns topstitch in unless they say otherwise.
+const QString default_style = QStringLiteral("single");
+
+// How high a stitch rises at its middle, and how far off the cloth it lies so the cloth doesn't show through it, as
+// shares of the thread's width.
+const float thread_height = 0.45f;
+const float thread_lift = 0.25f;
+
+// How far the normals at a stitch's ends and sides lean along it and across it, so it lights up round.
+const float end_lean = 0.5f;
+const float side_lean = 2.0f;
+
+// A stitch has five corners on each face of the cloth, its two ends, its two sides and its ridge, and four triangles
+// between them.
+const int corners_per_face = 5;
+const quint32 face_triangles[] = {0, 4, 2, 0, 3, 4, 1, 2, 4, 1, 4, 3};
 
 //---------------------------------------------------------------------------------------------------------------------
 qreal cross(const QPointF& a, const QPointF& b)
@@ -325,6 +343,26 @@ QVector<QVector<QPointF>> offsetRow(const QVector<QPointF>& line, bool closed, q
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+TopstitchStyle makeStyle(const QString& name, const QVector<qreal>& distances, qreal stitch_length,
+                         qreal thread_width)
+{
+    TopstitchStyle style;
+    style.name = name;
+    style.distances = distances;
+    style.stitch_length = stitch_length;
+    style.thread_width = thread_width;
+    return style;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Any direction square to the given one, for a stitch whose cloth normal runs along it.
+QVector3D squareTo(const QVector3D& direction)
+{
+    const QVector3D other = qAbs(direction.x()) < 0.9f ? QVector3D(1, 0, 0) : QVector3D(0, 1, 0);
+    return QVector3D::crossProduct(direction, other).normalized();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // The point the given length along the line, whose lengths up to each of its points are given.
 QPointF pointAlong(const QVector<QPointF>& line, const QVector<qreal>& lengths, qreal along)
 {
@@ -544,13 +582,47 @@ bool SurfacePoint::operator!=(const SurfacePoint& other) const
 //---------------------------------------------------------------------------------------------------------------------
 bool ThreadStitch::operator==(const ThreadStitch& other) const
 {
-    return start == other.start && middle == other.middle && end == other.end;
+    return start == other.start && middle == other.middle && end == other.end && qFuzzyCompare(width, other.width);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 bool ThreadStitch::operator!=(const ThreadStitch& other) const
 {
     return !(*this == other);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The styles the 3D View offers, the default first: one row 6 mm inside the edge; an edge stitch 1.5 mm
+/// inside; an edge stitch with a row 6 mm further in; a twin needle's two rows 4 mm apart, as on hems; and jeans'
+/// two rows in heavy thread.
+QVector<TopstitchStyle> TopstitchStyle::presets()
+{
+    return {makeStyle(default_style, {default_distance}, default_stitch_length, default_thread_width),
+            makeStyle(QStringLiteral("edge"), {0.15}, 0.25, 0.07),
+            makeStyle(QStringLiteral("double"), {0.15, 0.75}, 0.3, 0.08),
+            makeStyle(QStringLiteral("twinNeedle"), {0.6, 1.0}, 0.3, 0.07),
+            makeStyle(QStringLiteral("jeans"), {0.2, 0.85}, 0.35, 0.12)};
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The preset of that name, or the default style for a name it doesn't know.
+TopstitchStyle TopstitchStyle::preset(const QString& name)
+{
+    const QVector<TopstitchStyle> styles = presets();
+    for (const TopstitchStyle& style : styles)
+    {
+        if (style.name == name)
+        {
+            return style;
+        }
+    }
+    return styles.first();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QString TopstitchStyle::defaultName()
+{
+    return default_style;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -565,6 +637,13 @@ qreal Topstitching::defaultDistance()
 qreal Topstitching::defaultStitchLength()
 {
     return default_stitch_length;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief How thick topstitching's thread is, in cm.
+qreal Topstitching::defaultThreadWidth()
+{
+    return default_thread_width;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -620,11 +699,11 @@ QVector<QVector<QPointF>> Topstitching::rows(const PieceOutline& outline, const 
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-/// @brief Stitches of the given length along the rows, laid onto the mesh, whose flat shape the rows are drawn on. An
-/// open row's stitches sit in its middle, a closed row's go all the way round, a little longer or shorter to fit.
-/// Rows shorter than a stitch get none.
+/// @brief Stitches of the given length and thread width along the rows, laid onto the mesh, whose flat shape the rows
+/// are drawn on. An open row's stitches sit in its middle, a closed row's go all the way round, a little longer or
+/// shorter to fit. Rows shorter than a stitch get none.
 QVector<ThreadStitch> Topstitching::stitches(const GarmentMesh& mesh, const QVector<QVector<QPointF>>& rows,
-                                             qreal stitch_length)
+                                             qreal stitch_length, qreal thread_width)
 {
     QVector<ThreadStitch> stitches;
     if (mesh.triangleCount() == 0 || stitch_length <= 0)
@@ -660,7 +739,8 @@ QVector<ThreadStitch> Topstitching::stitches(const GarmentMesh& mesh, const QVec
         }
         else
         {
-            count = static_cast<int>(std::floor(total / stitch_length));
+            // A row a whole number of stitches long, but for rounding, takes all of them.
+            count = static_cast<int>(std::floor((total + same_point) / stitch_length));
             start = (total - count * spacing) / 2;
         }
 
@@ -678,9 +758,57 @@ QVector<ThreadStitch> Topstitching::stitches(const GarmentMesh& mesh, const QVec
     stitches.reserve(located.size() / 3);
     for (int i = 0; i + 2 < located.size(); i += 3)
     {
-        stitches.append({located.at(i), located.at(i + 1), located.at(i + 2)});
+        stitches.append({located.at(i), located.at(i + 1), located.at(i + 2), static_cast<float>(thread_width)});
     }
     return stitches;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The stitches' thread, each stitch a short spindle from where it comes out of the cloth to where it goes back
+/// in, raised a little off the cloth, on both faces of it, with normals that light it round. The cloth's vertices are
+/// at the given positions, with the given normals of unit length; scale makes the thread thicker and lifts it further,
+/// as for stitches shown over others.
+ThreadMesh Topstitching::threadMesh(const QVector<ThreadStitch>& stitches, const QVector<QVector3D>& positions,
+                                    const QVector<QVector3D>& normals, qreal scale)
+{
+    ThreadMesh mesh;
+    const int corner_count = static_cast<int>(stitches.size()) * 2 * corners_per_face;
+    mesh.positions.reserve(corner_count);
+    mesh.normals.reserve(corner_count);
+    mesh.indices.reserve(static_cast<int>(stitches.size()) * 2 * static_cast<int>(std::size(face_triangles)));
+
+    const float size = static_cast<float>(scale);
+    for (const ThreadStitch& stitch : stitches)
+    {
+        const QVector3D start = stitch.start.position(positions);
+        const QVector3D middle = stitch.middle.position(positions);
+        const QVector3D end = stitch.end.position(positions);
+        QVector3D normal = stitch.middle.position(normals);
+        normal = normal.isNull() ? QVector3D(0, 0, 1) : normal.normalized();
+        QVector3D along = end - start;
+        along = along.isNull() ? squareTo(normal) : along.normalized();
+        QVector3D side = QVector3D::crossProduct(normal, along);
+        side = side.isNull() ? squareTo(along) : side.normalized();
+        const float width = stitch.width * size;
+
+        // The same spindle on each face of the cloth, turned over for the back, so both face outwards.
+        for (const float face : {1.0f, -1.0f})
+        {
+            const QVector3D up = normal * face;
+            const QVector3D left = side * face;
+            const QVector3D lift = up * (thread_lift * width);
+            const quint32 first = static_cast<quint32>(mesh.positions.size());
+            mesh.positions << start + lift << end + lift << middle + lift + left * (width / 2)
+                           << middle + lift - left * (width / 2) << middle + lift + up * (thread_height * width);
+            mesh.normals << (up - along * end_lean).normalized() << (up + along * end_lean).normalized()
+                         << (up + left * side_lean).normalized() << (up - left * side_lean).normalized() << up;
+            for (const quint32 corner : face_triangles)
+            {
+                mesh.indices.append(first + corner);
+            }
+        }
+    }
+    return mesh;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

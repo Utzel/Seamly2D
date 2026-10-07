@@ -26,6 +26,7 @@
 #define TOPSTITCH_H
 
 #include <QPointF>
+#include <QString>
 #include <QVector3D>
 #include <QVector>
 #include <QtGlobal>
@@ -53,9 +54,19 @@ struct ThreadStitch
     SurfacePoint start;
     SurfacePoint middle;
     SurfacePoint end;
+    float        width = 0.08f;  ///< how thick the thread is, in cm, as Topstitching::defaultThreadWidth()
 
     bool         operator==(const ThreadStitch& other) const;
     bool         operator!=(const ThreadStitch& other) const;
+};
+
+/// @brief The thread of stitches as triangles, to draw or to export: positions, normals of unit length, and three
+/// corners per triangle, anticlockwise seen from outside.
+struct ThreadMesh
+{
+    QVector<QVector3D> positions;
+    QVector<QVector3D> normals;
+    QVector<quint32>   indices;
 };
 
 /// @brief Topstitching: rows of stitches a little inside a piece's edges, or along lines drawn on the piece.
@@ -68,12 +79,32 @@ class Topstitching
 public:
     static qreal                     defaultDistance();
     static qreal                     defaultStitchLength();
+    static qreal                     defaultThreadWidth();
 
     static QVector<QVector<QPointF>> rows(const PieceOutline& outline, const QVector<bool>& stitched,
                                           qreal distance = defaultDistance());
     static QVector<ThreadStitch>     stitches(const GarmentMesh& mesh, const QVector<QVector<QPointF>>& rows,
-                                              qreal stitch_length = defaultStitchLength());
+                                              qreal stitch_length = defaultStitchLength(),
+                                              qreal thread_width = defaultThreadWidth());
     static QVector<SurfacePoint>     locate(const GarmentMesh& mesh, const QVector<QPointF>& points);
+    static ThreadMesh                threadMesh(const QVector<ThreadStitch>& stitches,
+                                                const QVector<QVector3D>& positions,
+                                                const QVector<QVector3D>& normals, qreal scale = 1.0);
+};
+
+/// @brief A way of topstitching, as CLO's topstitch styles describe one: rows of stitches at given distances inside
+/// the edge, how long the stitches are and how thick the thread. The presets are what sewing usually does; their names
+/// are what patterns store, the 3D View shows them translated.
+struct TopstitchStyle
+{
+    QString        name;  ///< what patterns store, as the presets are named
+    QVector<qreal> distances = {Topstitching::defaultDistance()};  ///< how far inside the edge each row runs, in cm
+    qreal          stitch_length = Topstitching::defaultStitchLength();  ///< in cm
+    qreal          thread_width = Topstitching::defaultThreadWidth();    ///< how thick the thread is, in cm
+
+    static QVector<TopstitchStyle> presets();
+    static TopstitchStyle          preset(const QString& name);
+    static QString                 defaultName();
 };
 
 #endif // TOPSTITCH_H
