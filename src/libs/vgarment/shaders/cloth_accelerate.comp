@@ -1,0 +1,100 @@
+// Seamly2D: after each sweep of the cloth solver on the graphics card, carries each vertex on further along the way
+// the sweeps went (Chebyshev acceleration, as ClothSolver::step() does on the processor) and keeps where the vertices
+// were for the next sweeps. Baked into cloth_accelerate.comp.qsb by scripts/shaders/bake_shaders.py.
+#version 450
+
+layout(local_size_x = 64) in;
+
+// As in cloth_sweep.comp.
+layout(std140, binding = 0) uniform Step
+{
+    float time_step;
+    float damping;
+    float stitch_stiffness;
+    float contact_stiffness;
+    float self_contact_stiffness;
+    float friction;
+    float thickness;
+    float floor_height;
+    int   has_floor;
+    int   has_body;
+    float contact_margin;
+    float max_move;
+    float friction_rest;
+    int   vertex_count;
+    int   vertex_terms;
+    int   membrane_corners;
+    int   hinge_corners;
+    int   stitch_corners;
+    int   hinges;
+    int   stitches;
+    int   body;
+    int   self_starts;
+    int   self_roles;
+    int   self_contacts;
+    int   self_contact_count;
+} this_step;
+
+layout(std140, binding = 1) uniform Sweep
+{
+    int   first;
+    int   count;
+    float weight;                // how far on the vertices are carried
+    int   accelerate;            // whether they are, not after the first sweep
+} this_sweep;
+
+layout(std430, binding = 2) buffer Positions { vec4 positions[]; };
+layout(std430, binding = 3) readonly buffer Motion { vec4 motion[]; };
+layout(std430, binding = 4) buffer Snapshot { vec4 snapshot[]; };   // where the vertices were one sweep ago
+layout(std430, binding = 5) buffer Stopped { int stopped[]; };
+layout(std430, binding = 6) buffer Earlier { vec4 earlier[]; };     // and two sweeps ago
+
+const float unbounded = 3.0e38;
+
+float bodyReach(int vertex)
+{
+    const float heading = length(motion[2 * vertex + 1].xyz - motion[2 * vertex].xyz);
+    return this_step.has_body != 0 ? this_step.contact_margin + heading : unbounded;
+}
+
+vec3 withinReach(vec3 start, vec3 heading_to, float body_reach, float cloth_bound, out bool stopped_there)
+{
+    vec3 moved_to = heading_to;
+    float travelled = length(moved_to - start);
+    if (travelled > body_reach)
+    {
+        moved_to = start + (moved_to - start) * (body_reach / travelled);
+        travelled = body_reach;
+    }
+    stopped_there = travelled > cloth_bound;
+    if (stopped_there)
+    {
+        moved_to = start + (moved_to - start) * (cloth_bound / travelled);
+    }
+    return moved_to;
+}
+
+void main()
+{
+    const int vertex = int(gl_GlobalInvocationID.x);
+    if (vertex >= this_step.vertex_count)
+    {
+        return;
+    }
+    vec4 here = positions[vertex];
+    if (this_sweep.accelerate != 0 && here.w == 0.0)
+    {
+        const vec3 before = earlier[vertex].xyz;
+        const vec4 start = motion[2 * vertex];
+        bool stopped_there;
+        here.xyz = withinReach(start.xyz, before + (here.xyz - before) * this_sweep.weight, bodyReach(vertex), start.w,
+                               stopped_there);
+        if (stopped_there)
+        {
+            stopped[vertex] = 1;
+        }
+        positions[vertex] = here;
+    }
+    earlier[vertex] = snapshot[vertex];
+    snapshot[vertex] = here;
+}

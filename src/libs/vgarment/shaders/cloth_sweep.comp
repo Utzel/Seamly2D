@@ -1,0 +1,441 @@
+// Seamly2D: one sweep of the cloth solver over one colour of vertices, on the graphics card.
+//
+// Each workgroup moves one vertex to where its forces balance, as ClothSolver::solveVertex() does on the processor;
+// see there for the physics. Its lanes share out the vertex's membranes, hinges, stitches and self contacts, and add
+// up what they found: one invocation going through them all in turn would keep the whole colour waiting on it, each
+// one a wait for memory. The data is packed into few buffers, as OpenGL guarantees only eight per shader; where each
+// part starts is in the step's uniform block. Baked into cloth_sweep.comp.qsb by scripts/shaders/bake_shaders.py.
+#version 450
+
+// The lanes sharing out one vertex's terms; dispatches with more vertices than one row of workgroups takes go on in
+// further rows.
+const int lanes = 32;
+const int row = 65535;
+layout(local_size_x = 32) in;
+
+// What holds for the whole step, and where the parts of the packed buffers start.
+layout(std140, binding = 0) uniform Step
+{
+    float time_step;
+    float damping;               // the cloth's, over the time step
+    float stitch_stiffness;
+    float contact_stiffness;
+    float self_contact_stiffness;
+    float friction;
+    float thickness;
+    float floor_height;
+    int   has_floor;
+    int   has_body;
+    float contact_margin;
+    float max_move;
+    float friction_rest;
+    int   vertex_count;
+    int   vertex_terms;          // in topology: four for each vertex, where its roles start and end
+    int   membrane_corners;      // in topology: four for each membrane, three used
+    int   hinge_corners;         // in topology: four for each hinge
+    int   stitch_corners;        // in topology: four for each stitch, three used
+    int   hinges;                // in terms: two for each hinge
+    int   stitches;              // in terms: one for each stitch
+    int   body;                  // in terms: four for each triangle of the body
+    int   self_starts;           // in contacts: where each vertex's self contacts start, and one more for the end
+    int   self_roles;            // in contacts
+    int   self_contacts;         // in contacts: eight for each self contact
+    int   self_contact_count;
+} this_step;
+
+// The colour this dispatch sweeps.
+layout(std140, binding = 1) uniform Sweep
+{
+    int   first;                 // where the colour's vertices start in topology
+    int   count;
+    float weight;                // the Chebyshev weight, for cloth_accelerate.comp
+    int   accelerate;
+} this_sweep;
+
+// x, y, z and whether the vertex is pinned.
+layout(std430, binding = 2) buffer Positions { vec4 positions[]; };
+
+// Two for each vertex: where it started the step and how far the cloth near it lets it move, then where it would go
+// by itself and its mass.
+layout(std430, binding = 3) readonly buffer Motion { vec4 motion[]; };
+
+// How each self contact pushes each of its vertices this sweep: nine numbers for each contact and role, the push and
+// how stiffly, as cloth_contacts.comp works them out.
+layout(std430, binding = 4) readonly buffer Pushes { float pushes[]; };
+
+layout(std430, binding = 5) buffer Stopped { int stopped[]; };
+
+// The colours' vertices, then the vertex terms, the roles (term << 2 | corner) and the corners of the membranes,
+// hinges and stitches.
+layout(std430, binding = 6) readonly buffer Topology { int topology[]; };
+
+// The membranes (shape of corners 0 and 1; shape of corner 2 and the area; weft, warp and shear stiffness), the
+// hinges (weights; stiffness), the stitches (how far along the edge) and the body's triangles (corners; normal).
+layout(std430, binding = 7) readonly buffer Terms { vec4 terms[]; };
+
+// The body triangle each vertex may touch, or -1, then the self contacts: where each vertex's start, the roles
+// (contact << 2 | role), and the contacts (four corners, whether of two edges, side, whether live).
+layout(std430, binding = 8) readonly buffer Contacts { int contacts[]; };
+
+const float tiny = 1e-9;
+const float singular = 1e-12;
+const float unbounded = 3.0e38;
+
+// A symmetric 3 x 3 matrix: xx, xy, xz in a; yy, yz, zz in b.
+struct Mat3
+{
+    vec3 a;
+    vec3 b;
+};
+
+void addIdentity(inout Mat3 m, float factor)
+{
+    m.a.x += factor;
+    m.b.x += factor;
+    m.b.z += factor;
+}
+
+void addOuter(inout Mat3 m, vec3 v, float factor)
+{
+    m.a += factor * v.x * v;
+    m.b += factor * vec3(v.y * v.y, v.y * v.z, v.z * v.z);
+}
+
+// Solves m x = b; false if m is singular.
+bool solve(Mat3 m, vec3 b, out vec3 x)
+{
+    const float xx = m.a.x;
+    const float xy = m.a.y;
+    const float xz = m.a.z;
+    const float yy = m.b.x;
+    const float yz = m.b.y;
+    const float zz = m.b.z;
+    const float c_xx = yy * zz - yz * yz;
+    const float c_xy = xz * yz - xy * zz;
+    const float c_xz = xy * yz - xz * yy;
+    const float determinant = xx * c_xx + xy * c_xy + xz * c_xz;
+    x = vec3(0.0);
+    if (abs(determinant) < singular)
+    {
+        return false;
+    }
+    const float c_yy = xx * zz - xz * xz;
+    const float c_yz = xy * xz - xx * yz;
+    const float c_zz = xx * yy - xy * xy;
+    x = vec3(c_xx * b.x + c_xy * b.y + c_xz * b.z, c_xy * b.x + c_yy * b.y + c_yz * b.z,
+             c_xz * b.x + c_yz * b.y + c_zz * b.z) / determinant;
+    return true;
+}
+
+float share(float part, float whole)
+{
+    return abs(whole) > tiny ? part / whole : 0.0;
+}
+
+// Where the point of triangle abc closest to p is, as the weights of a, b and c (Ericson, 5.1.5).
+vec3 closestOnTriangle(vec3 p, vec3 a, vec3 b, vec3 c)
+{
+    const vec3 ab = b - a;
+    const vec3 ac = c - a;
+    const float d1 = dot(ab, p - a);
+    const float d2 = dot(ac, p - a);
+    const float d3 = dot(ab, p - b);
+    const float d4 = dot(ac, p - b);
+    const float d5 = dot(ab, p - c);
+    const float d6 = dot(ac, p - c);
+    const float va = d3 * d6 - d5 * d4;
+    const float vb = d5 * d2 - d1 * d6;
+    const float vc = d1 * d4 - d3 * d2;
+    if (d1 <= 0.0 && d2 <= 0.0)
+    {
+        return vec3(1.0, 0.0, 0.0);
+    }
+    if (d3 >= 0.0 && d4 <= d3)
+    {
+        return vec3(0.0, 1.0, 0.0);
+    }
+    if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0)
+    {
+        const float v = share(d1, d1 - d3);
+        return vec3(1.0 - v, v, 0.0);
+    }
+    if (d6 >= 0.0 && d5 <= d6)
+    {
+        return vec3(0.0, 0.0, 1.0);
+    }
+    if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0)
+    {
+        const float w = share(d2, d2 - d6);
+        return vec3(1.0 - w, 0.0, w);
+    }
+    if (va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0)
+    {
+        const float w = share(d4 - d3, (d4 - d3) + (d5 - d6));
+        return vec3(0.0, 1.0 - w, w);
+    }
+    const float whole = va + vb + vc;
+    const float v = share(vb, whole);
+    const float w = share(vc, whole);
+    return vec3(1.0 - v - w, v, w);
+}
+
+// How far a vertex may move from where it started the step: the body was only searched so far around it.
+float bodyReach(int vertex)
+{
+    const float heading = length(motion[2 * vertex + 1].xyz - motion[2 * vertex].xyz);
+    return this_step.has_body != 0 ? this_step.contact_margin + heading : unbounded;
+}
+
+vec3 withinReach(vec3 start, vec3 heading_to, float body_reach, float cloth_bound, out bool stopped_there)
+{
+    vec3 moved_to = heading_to;
+    float travelled = length(moved_to - start);
+    if (travelled > body_reach)
+    {
+        moved_to = start + (moved_to - start) * (body_reach / travelled);
+        travelled = body_reach;
+    }
+    stopped_there = travelled > cloth_bound;
+    if (stopped_there)
+    {
+        moved_to = start + (moved_to - start) * (cloth_bound / travelled);
+    }
+    return moved_to;
+}
+
+// The body or the floor pushing the cloth out by the depth, and holding back its sliding along them.
+void pushOut(vec3 normal, float depth, vec3 moved, inout vec3 force, inout Mat3 hessian)
+{
+    const float k = this_step.contact_stiffness;
+    force += normal * (k * depth);
+    addOuter(hessian, normal, k);
+
+    const vec3 sliding = moved - normal * dot(normal, moved);
+    const float friction = min(this_step.friction * k * depth / max(length(sliding), this_step.friction_rest), k);
+    force -= sliding * friction;
+    addIdentity(hessian, friction);
+    addOuter(hessian, normal, -friction);
+}
+
+// Membranes: the cloth resists stretching along and across its grain, and shearing.
+void addMembrane(int role, vec3 position, vec3 moved, inout vec3 force, inout Mat3 hessian)
+{
+    const float damping = this_step.damping;
+    const int membrane = role >> 2;
+    const int corner = role & 3;
+    const vec4 shape01 = terms[3 * membrane];
+    const vec4 shape2_area = terms[3 * membrane + 1];
+    const vec4 stiffness = terms[3 * membrane + 2];
+    const vec2 shape[3] = vec2[3](shape01.xy, shape01.zw, shape2_area.xy);
+
+    // The deformation gradient's columns, where the weft and the warp went, and how fast they are changing.
+    vec3 weft = vec3(0.0);
+    vec3 warp = vec3(0.0);
+    vec3 weft_rate = vec3(0.0);
+    vec3 warp_rate = vec3(0.0);
+    for (int k = 0; k < 3; ++k)
+    {
+        const int other = topology[this_step.membrane_corners + 4 * membrane + k];
+        const vec3 at = k == corner ? position : positions[other].xyz;
+        const vec3 change = k == corner ? moved : at - motion[2 * other].xyz;
+        weft += at * shape[k].x;
+        warp += at * shape[k].y;
+        weft_rate += change * shape[k].x;
+        warp_rate += change * shape[k].y;
+    }
+
+    const float strain_weft = (dot(weft, weft) - 1.0) / 2.0;
+    const float strain_warp = (dot(warp, warp) - 1.0) / 2.0;
+    const float strain_shear = dot(weft, warp) / 2.0;
+    const float rate_weft = dot(weft, weft_rate);
+    const float rate_warp = dot(warp, warp_rate);
+    const float rate_shear = (dot(weft, warp_rate) + dot(warp, weft_rate)) / 2.0;
+    const float stress_weft = stiffness.x * (strain_weft + damping * rate_weft);
+    const float stress_warp = stiffness.y * (strain_warp + damping * rate_warp);
+    const float stress_shear = 2.0 * stiffness.z * (strain_shear + damping * rate_shear);
+
+    const float along_weft = shape[corner].x;
+    const float along_warp = shape[corner].y;
+    const float area = shape2_area.z;
+    force -= (weft * (stress_weft * along_weft + stress_shear * along_warp)
+              + warp * (stress_shear * along_weft + stress_warp * along_warp)) * area;
+
+    const float material = area * (1.0 + damping);
+    addOuter(hessian, weft * along_weft, material * stiffness.x);
+    addOuter(hessian, warp * along_warp, material * stiffness.y);
+    addOuter(hessian, (warp * along_weft + weft * along_warp) * 0.5, 4.0 * material * stiffness.z);
+    const float geometric = along_weft * along_weft * stress_weft + 2.0 * along_weft * along_warp * stress_shear
+                            + along_warp * along_warp * stress_warp;
+    addIdentity(hessian, area * max(0.0, geometric));
+}
+
+// Hinges: the cloth resists bending across its inner edges.
+void addHinge(int role, vec3 position, vec3 moved, inout vec3 force, inout Mat3 hessian)
+{
+    const float damping = this_step.damping;
+    const int hinge = role >> 2;
+    const int corner = role & 3;
+    const vec4 weights = terms[this_step.hinges + 2 * hinge];
+    const float stiffness = terms[this_step.hinges + 2 * hinge + 1].x;
+    vec3 bend = vec3(0.0);
+    vec3 bend_rate = vec3(0.0);
+    for (int k = 0; k < 4; ++k)
+    {
+        const int other = topology[this_step.hinge_corners + 4 * hinge + k];
+        const vec3 at = k == corner ? position : positions[other].xyz;
+        bend += at * weights[k];
+        bend_rate += (k == corner ? moved : at - motion[2 * other].xyz) * weights[k];
+    }
+    const float weight = weights[corner];
+    force -= (bend + bend_rate * damping) * (stiffness * weight);
+    addIdentity(hessian, stiffness * weight * weight * (1.0 + damping));
+}
+
+// Stitches pull the sides of seams together. Roles: 0 the stitched vertex, 1 the start of the edge it is stitched to,
+// 2 its end, 3 both, where the edge is a point.
+void addStitch(int role, inout vec3 force, inout Mat3 hessian)
+{
+    const int stitch = role >> 2;
+    const int kind = role & 3;
+    const float along = terms[this_step.stitches + stitch].x;
+    const int corners_at = this_step.stitch_corners + 4 * stitch;
+    const float weight = kind == 0 ? 1.0 : kind == 1 ? -(1.0 - along) : kind == 2 ? -along : -1.0;
+    const vec3 target = positions[topology[corners_at + 1]].xyz * (1.0 - along)
+                        + positions[topology[corners_at + 2]].xyz * along;
+    const vec3 gap = positions[topology[corners_at]].xyz - target;
+    force -= gap * (this_step.stitch_stiffness * weight);
+    addIdentity(hessian, this_step.stitch_stiffness * weight * weight);
+}
+
+// Cloth closer to itself than its thickness pushes it away, as cloth_contacts.comp worked out for the sweep. A self
+// role (contact << 2 | role) is also where its push is.
+void addSelfPush(int self_role, inout vec3 force, inout Mat3 hessian)
+{
+    const int at = 9 * self_role;
+    force += vec3(pushes[at], pushes[at + 1], pushes[at + 2]);
+    hessian.a += vec3(pushes[at + 3], pushes[at + 4], pushes[at + 5]);
+    hessian.b += vec3(pushes[at + 6], pushes[at + 7], pushes[at + 8]);
+}
+
+// What each lane found, added up.
+shared vec3 lane_force[lanes];
+shared vec3 lane_a[lanes];
+shared vec3 lane_b[lanes];
+
+void main()
+{
+    // Every lane goes through to the end of the adding up, also where there is no vertex to move or it is pinned:
+    // Direct3D only has a workgroup wait for all its lanes where it can tell they all get there.
+    const int index = int(gl_WorkGroupID.y) * row + int(gl_WorkGroupID.x);
+    const int lane = int(gl_LocalInvocationID.x);
+    const bool listed = index < this_sweep.count;
+    const int vertex = listed ? topology[this_sweep.first + index] : 0;
+    const vec4 here = positions[vertex];
+    const bool moving = listed && here.w == 0.0;
+    const vec3 position = here.xyz;
+    const vec4 start = motion[2 * vertex];
+    const vec3 moved = position - start.xyz;
+
+    // The vertex's membrane roles, then its hinge and stitch roles, follow each other in topology; its self roles
+    // are in contacts. Each lane takes every lanes-th of them all.
+    const int terms_at = this_step.vertex_terms + 4 * vertex;
+    const ivec4 starts = ivec4(topology[terms_at], topology[terms_at + 1], topology[terms_at + 2],
+                               topology[terms_at + 3]);
+    const int self_first = contacts[this_step.self_starts + vertex];
+    const int own = starts.w - starts.x;
+    const int all = moving ? own + contacts[this_step.self_starts + vertex + 1] - self_first : 0;
+    vec3 force = vec3(0.0);
+    Mat3 hessian;
+    hessian.a = vec3(0.0);
+    hessian.b = vec3(0.0);
+    for (int t = lane; t < all; t += lanes)
+    {
+        if (t >= own)
+        {
+            addSelfPush(contacts[this_step.self_roles + self_first + t - own], force, hessian);
+        }
+        else if (starts.x + t < starts.y)
+        {
+            addMembrane(topology[starts.x + t], position, moved, force, hessian);
+        }
+        else if (starts.x + t < starts.z)
+        {
+            addHinge(topology[starts.x + t], position, moved, force, hessian);
+        }
+        else
+        {
+            addStitch(topology[starts.x + t], force, hessian);
+        }
+    }
+
+    lane_force[lane] = force;
+    lane_a[lane] = hessian.a;
+    lane_b[lane] = hessian.b;
+    memoryBarrierShared();
+    barrier();
+    for (int half_lanes = lanes / 2; half_lanes > 0; half_lanes /= 2)
+    {
+        if (lane < half_lanes)
+        {
+            lane_force[lane] += lane_force[lane + half_lanes];
+            lane_a[lane] += lane_a[lane + half_lanes];
+            lane_b[lane] += lane_b[lane + half_lanes];
+        }
+        memoryBarrierShared();
+        barrier();
+    }
+    if (lane != 0 || !moving)
+    {
+        return;
+    }
+    force = lane_force[0];
+    hessian.a = lane_a[0];
+    hessian.b = lane_b[0];
+
+    // Inertia pulls the vertex towards where it would go by itself.
+    const float h = this_step.time_step;
+    const vec4 inertial = motion[2 * vertex + 1];
+    const float inertia = inertial.w / (h * h);
+    force += (inertial.xyz - position) * inertia;
+    addIdentity(hessian, inertia);
+
+    // The body and the floor push the cloth out to its thickness, and hold it by friction.
+    const int triangle = contacts[vertex];
+    if (triangle >= 0)
+    {
+        const int body_at = this_step.body + 4 * triangle;
+        const vec3 a = terms[body_at].xyz;
+        const vec3 b = terms[body_at + 1].xyz;
+        const vec3 c = terms[body_at + 2].xyz;
+        const vec3 face = terms[body_at + 3].xyz;
+        const vec3 on = closestOnTriangle(position, a, b, c);
+        const vec3 offset = position - (a * on.x + b * on.y + c * on.z);
+        const float offset_length = length(offset);
+        const bool inside = dot(offset, face) < 0.0;
+        const float distance = inside ? -offset_length : offset_length;
+        const vec3 normal = offset_length > 1e-5 ? (inside ? -offset : offset) / offset_length : face;
+        if (distance < this_step.thickness)
+        {
+            pushOut(normal, this_step.thickness - distance, moved, force, hessian);
+        }
+    }
+    const float above_floor = position.y - this_step.floor_height;
+    if (this_step.has_floor != 0 && above_floor < this_step.thickness)
+    {
+        pushOut(vec3(0.0, 1.0, 0.0), this_step.thickness - above_floor, moved, force, hessian);
+    }
+
+    vec3 move;
+    if (solve(hessian, force, move))
+    {
+        const float move_length = length(move);
+        if (move_length > this_step.max_move)
+        {
+            move *= this_step.max_move / move_length;
+        }
+        bool stopped_there;
+        positions[vertex] = vec4(withinReach(start.xyz, position + move, bodyReach(vertex), start.w, stopped_there),
+                                 here.w);
+        stopped[vertex] = stopped_there ? 1 : 0;
+    }
+}

@@ -8,7 +8,9 @@ SOURCES += \
     $$PWD/body_measurer.cpp \
     $$PWD/body_model.cpp \
     $$PWD/body_wrap.cpp \
+    $$PWD/cloth_compute.cpp \
     $$PWD/cloth_solver.cpp \
+    $$PWD/compute_device.cpp \
     $$PWD/fabric.cpp \
     $$PWD/garment_export.cpp \
     $$PWD/garment_fit.cpp \
@@ -29,7 +31,9 @@ HEADERS += \
     $$PWD/body_measurer.h \
     $$PWD/body_model.h \
     $$PWD/body_wrap.h \
+    $$PWD/cloth_compute.h \
     $$PWD/cloth_solver.h \
+    $$PWD/compute_device.h \
     $$PWD/fabric.h \
     $$PWD/garment_export.h \
     $$PWD/garment_fit.h \
@@ -42,6 +46,14 @@ HEADERS += \
     $$PWD/topstitch.h \
     $$PWD/stable.h
 
-# The avatar's body, built by scripts/avatar/build_avatar_data.py. BodyData::standard() initializes it.
+# The avatar's body, built by scripts/avatar/build_avatar_data.py, which BodyData::standard() initializes; and the
+# cloth solver's compute shaders, baked from their GLSL below by scripts/shaders/bake_shaders.py, which ClothCompute
+# initializes.
 RESOURCES += \
-    $$PWD/share/avatar/avatar.qrc
+    $$PWD/share/avatar/avatar.qrc \
+    $$PWD/shaders/cloth_shaders.qrc
+
+OTHER_FILES += \
+    $$PWD/shaders/cloth_accelerate.comp \
+    $$PWD/shaders/cloth_contacts.comp \
+    $$PWD/shaders/cloth_sweep.comp

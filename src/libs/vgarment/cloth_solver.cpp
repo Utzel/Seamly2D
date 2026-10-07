@@ -57,9 +57,10 @@ const double contact_margin = 2.0;
 // The self contact search shares out the vertices and the edges among threads in runs of this many.
 const int search_run = 256;
 
-// Colours with at least this many vertices are solved on several threads; for fewer, handing out the work costs
-// more than it saves.
+// Colours with at least this many vertices are solved on several threads, and self contacts worked out when there are
+// at least this many; for fewer, handing out the work costs more than it saves.
 const int parallel_colour = 1024;
+const int parallel_contacts = 1024;
 
 // Determinants smaller than this leave a vertex where it is, its forces don't say where to go.
 const double singular = 1e-12;
@@ -561,7 +562,13 @@ quint64 edgeKey(quint32 a, quint32 b)
 ClothSolver::ClothSolver(const ClothSettings& settings)
     : m_settings(settings)
     , m_prepared(false)
+    , m_compute()
+    , m_on_device(false)
+    , m_device_step()
 {}
+
+//---------------------------------------------------------------------------------------------------------------------
+ClothSolver::~ClothSolver() = default;
 
 //---------------------------------------------------------------------------------------------------------------------
 const ClothSettings& ClothSolver::settings() const
@@ -767,6 +774,7 @@ void ClothSolver::setCollider(const BodyCollider& collider)
 {
     m_collider = collider;
     m_contacts.clear();
+    m_on_device = false;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -777,6 +785,32 @@ void ClothSolver::setPinned(quint32 vertex, bool pinned)
     {
         m_pinned[static_cast<int>(vertex)] = pinned;
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Runs the sweeps on the graphics card from the next step on, or with none on the processor again. Must be
+/// called on the thread that steps, which the device was opened on, and with none before the device closes. False if
+/// the card can't compute.
+bool ClothSolver::useDevice(QRhi* device)
+{
+    m_compute.reset();
+    m_on_device = false;
+    if (device != nullptr)
+    {
+        m_compute.reset(new ClothCompute(device));
+        if (!m_compute->isReady())
+        {
+            m_compute.reset();
+        }
+    }
+    return m_compute != nullptr;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Whether the sweeps run on the graphics card. Should the card fail, they go back to the processor.
+bool ClothSolver::isOnDevice() const
+{
+    return m_compute != nullptr;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -840,6 +874,7 @@ void ClothSolver::step(qreal time_step)
     if (!m_prepared)
     {
         prepare();
+        m_on_device = false;
     }
 
     const double h = time_step;
@@ -875,21 +910,42 @@ void ClothSolver::step(qreal time_step)
         }
     }
 
+    // On the graphics card, if there is one; should it fail, on the processor from then on.
+    if (m_compute == nullptr || !sweepOnDevice(h))
+    {
+        m_compute.reset();
+        sweep(h);
+    }
+
+    const double kept = qMax(0.0, 1.0 - m_settings.air_damping * h);
+    for (int i = 0; i < vertexCount(); ++i)
+    {
+        const bool still = m_pinned.at(i) || m_stopped.value(i, 0) != 0;
+        store(m_velocity, i, still ? Vec3() : (load(m_position, i) - load(m_previous, i)) * (kept / h));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Sweeps over the vertices, colour by colour, each moving to where its forces balance.
+void ClothSolver::sweep(double time_step)
+{
+    const double h = time_step;
+
     // Vertices of one colour share no membrane, hinge or stitch, so they can move at the same time. Each writes only
     // its own position, which mustn't be shared with another list then. Cloth touching itself can bring vertices of
-    // one colour together, so they see each other where they were when the colour started.
+    // one colour together, so the cloth a vertex touches is seen where it was when the sweep started; the sweeps on the
+    // graphics card see it the same way.
     QVector<double> two_sweeps_ago = m_position;
     QVector<double> one_sweep_ago = m_position;
     m_position.detach();
     double weight = 1.0;
     for (int iteration = 0; iteration < m_settings.iterations; ++iteration)
     {
+        pushSelfContacts(h);
         for (QVector<int>& color : m_colors)
         {
             if (color.size() >= parallel_colour)
             {
-                m_snapshot = m_position;
-                m_snapshot.detach();
                 const int run_count = qMax(1, QThread::idealThreadCount());
                 const int run_length = (static_cast<int>(color.size()) + run_count - 1) / run_count;
                 QVector<int> runs(run_count);
@@ -902,7 +958,7 @@ void ClothSolver::step(qreal time_step)
                         const int vertex = color.at(i);
                         if (!m_pinned.at(vertex))
                         {
-                            solveVertex(vertex, h, m_snapshot);
+                            solveVertex(vertex, h);
                         }
                     }
                 });
@@ -913,7 +969,7 @@ void ClothSolver::step(qreal time_step)
                 {
                     if (!m_pinned.at(vertex))
                     {
-                        solveVertex(vertex, h, m_position);
+                        solveVertex(vertex, h);
                     }
                 }
             }
@@ -949,13 +1005,206 @@ void ClothSolver::step(qreal time_step)
             one_sweep_ago.detach();
         }
     }
+}
 
-    const double kept = qMax(0.0, 1.0 - m_settings.air_damping * h);
-    for (int i = 0; i < vertexCount(); ++i)
+//---------------------------------------------------------------------------------------------------------------------
+// The sweeps on the graphics card: the cloth goes onto it once, then each step's start, and the vertices come back
+// where the sweeps left them. False if the card failed.
+bool ClothSolver::sweepOnDevice(double time_step)
+{
+    if (!m_on_device)
     {
-        const bool still = m_pinned.at(i) || m_stopped.value(i, 0) != 0;
-        store(m_velocity, i, still ? Vec3() : (load(m_position, i) - load(m_previous, i)) * (kept / h));
+        m_on_device = m_compute->setCloth(packedCloth());
+        if (!m_on_device)
+        {
+            return false;
+        }
     }
+
+    const int count = vertexCount();
+    ClothCompute::Step& step = m_device_step;
+    step.time_step = static_cast<float>(time_step);
+    step.damping = static_cast<float>(m_settings.damping / time_step);
+    step.stitch_stiffness = static_cast<float>(m_settings.stitch_stiffness);
+    step.contact_stiffness = static_cast<float>(m_settings.contact_stiffness);
+    step.self_contact_stiffness = static_cast<float>(m_settings.self_contact_stiffness);
+    step.friction = static_cast<float>(m_settings.friction);
+    step.thickness = static_cast<float>(m_settings.thickness);
+    step.floor_height = static_cast<float>(m_settings.floor_height);
+    step.has_floor = m_settings.floor ? 1 : 0;
+    step.has_body = m_collider.isEmpty() ? 0 : 1;
+    step.contact_margin = static_cast<float>(contact_margin);
+    step.max_move = static_cast<float>(max_move);
+    step.friction_rest = static_cast<float>(friction_rest);
+    step.vertex_count = count;
+
+    // Where each vertex starts the sweeps and whether it is pinned; where it started the step and how far the cloth
+    // near it lets it move; where it would go by itself and its mass.
+    ClothCompute::Start start;
+    start.positions.resize(4 * count);
+    start.motion.resize(8 * count);
+    const float unbounded = 3.0e38f;
+    for (int i = 0; i < count; ++i)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            start.positions[4 * i + k] = static_cast<float>(m_position.at(3 * i + k));
+            start.motion[8 * i + k] = static_cast<float>(m_previous.at(3 * i + k));
+            start.motion[8 * i + 4 + k] = static_cast<float>(m_inertial.at(3 * i + k));
+        }
+        start.positions[4 * i + 3] = m_pinned.at(i) ? 1.0f : 0.0f;
+        start.motion[8 * i + 3] = static_cast<float>(qMin(m_self_bound.value(i, unbounded),
+                                                          static_cast<double>(unbounded)));
+        start.motion[8 * i + 7] = static_cast<float>(m_mass.at(i));
+    }
+
+    // The body triangle each vertex may touch, then the self contacts.
+    start.contacts.reserve(2 * count + 1 + m_self_roles.size() + 8 * m_self_contacts.size());
+    for (int i = 0; i < count; ++i)
+    {
+        start.contacts.append(m_contact_triangle.value(i, -1));
+    }
+    step.self_starts = static_cast<qint32>(start.contacts.size());
+    for (int i = 0; i <= count; ++i)
+    {
+        start.contacts.append(m_self_role_start.value(i, 0));
+    }
+    step.self_roles = static_cast<qint32>(start.contacts.size());
+    for (const SelfContactRole& role : m_self_roles)
+    {
+        start.contacts.append(role.contact << 2 | role.role);
+    }
+    step.self_contacts = static_cast<qint32>(start.contacts.size());
+    step.self_contact_count = static_cast<qint32>(m_self_contacts.size());
+    for (const SelfContact& contact : m_self_contacts)
+    {
+        start.contacts << contact.vertices[0] << contact.vertices[1] << contact.vertices[2] << contact.vertices[3]
+                       << (contact.edges ? 1 : 0) << static_cast<qint32>(contact.side) << (contact.live ? 1 : 0)
+                       << 0;
+    }
+
+    // Each sweep's Chebyshev weight, as sweep() has them.
+    double weight = 1.0;
+    for (int iteration = 0; iteration < m_settings.iterations; ++iteration)
+    {
+        const double radius = m_settings.acceleration * m_settings.acceleration;
+        weight = iteration == 0 ? 1.0 : 4.0 / (4.0 - radius * (iteration == 1 ? 2.0 : weight));
+        start.weights.append(iteration > 0 && m_settings.acceleration > 0 ? static_cast<float>(weight) : 0.0f);
+    }
+
+    QVector<float> swept;
+    QVector<qint32> stopped;
+    if (!m_compute->sweep(step, start, &swept, &stopped))
+    {
+        return false;
+    }
+    for (int i = 0; i < count; ++i)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            m_position[3 * i + k] = swept.at(4 * i + k);
+        }
+    }
+    m_stopped = QVector<char>(count, 0);
+    for (int i = 0; i < count; ++i)
+    {
+        m_stopped[i] = stopped.at(i) != 0 ? 1 : 0;
+    }
+    return true;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The cloth packed as the compute shaders read it, and where its parts start; see shaders/cloth_sweep.comp.
+ClothCompute::Cloth ClothSolver::packedCloth()
+{
+    const int count = vertexCount();
+    ClothCompute::Cloth cloth;
+    cloth.vertex_count = count;
+    QVector<qint32>& topology = cloth.topology;
+    QVector<float>& terms = cloth.terms;
+    ClothCompute::Step& step = m_device_step;
+
+    for (const QVector<int>& color : m_colors)
+    {
+        cloth.colour_starts.append(static_cast<qint32>(topology.size()));
+        topology += color;
+    }
+    cloth.colour_starts.append(static_cast<qint32>(topology.size()));
+
+    // Each vertex's roles, membranes first, then hinges and stitches, and where they start.
+    step.vertex_terms = static_cast<qint32>(topology.size());
+    topology.resize(topology.size() + 4 * count);
+    for (int vertex = 0; vertex < count; ++vertex)
+    {
+        topology[step.vertex_terms + 4 * vertex] = static_cast<qint32>(topology.size());
+        for (const Role& role : m_vertex_membranes.at(vertex))
+        {
+            topology.append(role.term << 2 | role.corner);
+        }
+        topology[step.vertex_terms + 4 * vertex + 1] = static_cast<qint32>(topology.size());
+        for (const Role& role : m_vertex_hinges.at(vertex))
+        {
+            topology.append(role.term << 2 | role.corner);
+        }
+        topology[step.vertex_terms + 4 * vertex + 2] = static_cast<qint32>(topology.size());
+        for (const StitchRole& role : m_vertex_stitches.at(vertex))
+        {
+            // The stitched vertex, the start or the end of the edge it is stitched to, or both.
+            const StitchTerm& stitch = m_stitches.at(role.stitch);
+            const int kind = vertex == stitch.vertex && role.weight > 0 ? 0
+                             : stitch.edge_start == stitch.edge_end   ? 3
+                             : vertex == stitch.edge_start            ? 1
+                                                                      : 2;
+            topology.append(role.stitch << 2 | kind);
+        }
+        topology[step.vertex_terms + 4 * vertex + 3] = static_cast<qint32>(topology.size());
+    }
+
+    step.membrane_corners = static_cast<qint32>(topology.size());
+    for (const Membrane& membrane : m_membranes)
+    {
+        topology << membrane.vertices[0] << membrane.vertices[1] << membrane.vertices[2] << 0;
+        terms << static_cast<float>(membrane.shape[0][0]) << static_cast<float>(membrane.shape[0][1])
+              << static_cast<float>(membrane.shape[1][0]) << static_cast<float>(membrane.shape[1][1])
+              << static_cast<float>(membrane.shape[2][0]) << static_cast<float>(membrane.shape[2][1])
+              << static_cast<float>(membrane.area) << 0.0f << static_cast<float>(membrane.weft)
+              << static_cast<float>(membrane.warp) << static_cast<float>(membrane.shear) << 0.0f;
+    }
+
+    step.hinge_corners = static_cast<qint32>(topology.size());
+    step.hinges = static_cast<qint32>(terms.size() / 4);
+    for (const Hinge& hinge : m_hinges)
+    {
+        topology << hinge.vertices[0] << hinge.vertices[1] << hinge.vertices[2] << hinge.vertices[3];
+        terms << static_cast<float>(hinge.weights[0]) << static_cast<float>(hinge.weights[1])
+              << static_cast<float>(hinge.weights[2]) << static_cast<float>(hinge.weights[3])
+              << static_cast<float>(hinge.stiffness) << 0.0f << 0.0f << 0.0f;
+    }
+
+    step.stitch_corners = static_cast<qint32>(topology.size());
+    step.stitches = static_cast<qint32>(terms.size() / 4);
+    for (const StitchTerm& stitch : m_stitches)
+    {
+        topology << stitch.vertex << stitch.edge_start << stitch.edge_end << 0;
+        terms << static_cast<float>(stitch.along) << 0.0f << 0.0f << 0.0f;
+    }
+
+    // The body's triangles: their corners and the way out of the body.
+    step.body = static_cast<qint32>(terms.size() / 4);
+    const QVector<QVector3D>& body = m_collider.positions();
+    const QVector<quint32>& triangles = m_collider.triangles();
+    for (int t = 0; t + 2 < triangles.size() && !m_collider.isEmpty(); t += 3)
+    {
+        const QVector3D& a = body.at(static_cast<int>(triangles.at(t)));
+        const QVector3D& b = body.at(static_cast<int>(triangles.at(t + 1)));
+        const QVector3D& c = body.at(static_cast<int>(triangles.at(t + 2)));
+        const QVector3D normal = QVector3D::crossProduct(b - a, c - a).normalized();
+        for (const QVector3D& corner : {a, b, c, normal})
+        {
+            terms << corner.x() << corner.y() << corner.z() << 0.0f;
+        }
+    }
+    return cloth;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1150,8 +1399,92 @@ double ClothSolver::bodyReach(int vertex) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// Before each sweep: how each self contact pushes each of its four vertices, nine numbers each, the push and then how
+// stiffly, as a symmetric 3 x 3 matrix. Cloth closer to itself than its thickness is pushed apart, along the line
+// between the closest points; parts that have passed through each other during the step are pushed back to the sides
+// they started the step on. A vertex sees the cloth it touches where it was when the sweep started, and is itself still
+// there when its turn comes, as nothing else moves it; so each contact pushes the same all through the sweep, and is
+// worked out once rather than for each of its vertices.
+void ClothSolver::pushSelfContacts(double time_step)
+{
+    const int count = static_cast<int>(m_self_contacts.size());
+    m_self_push.fill(0.0, 36 * count);
+    double* pushes = m_self_push.data();
+    const double damping = m_settings.damping / time_step;
+    auto push = [this, pushes, damping](int c)
+    {
+        const SelfContact& contact = m_self_contacts.at(c);
+        if (!contact.live)
+        {
+            return;
+        }
+        Vec3 corners[4];
+        for (int k = 0; k < 4; ++k)
+        {
+            corners[k] = load(m_position, contact.vertices[k]);
+        }
+        double weights[4];
+        const Vec3 gap = contactGap(corners, contact.edges, weights);
+        Vec3 normal;
+        const double distance = contactDistance(corners, contact.edges, weights, gap, contact.side, &normal);
+        if (distance >= m_settings.thickness)
+        {
+            return;
+        }
+
+        // Damping slows the parts coming together or apart, so cloth landing on cloth doesn't bounce.
+        Vec3 closing;
+        for (int k = 0; k < 4; ++k)
+        {
+            closing += (corners[k] - load(m_previous, contact.vertices[k])) * weights[k];
+        }
+        const double k = m_settings.self_contact_stiffness;
+        const double depth = m_settings.thickness - distance - damping * normal.dot(closing);
+        for (int role = 0; role < 4; ++role)
+        {
+            const double weight = weights[role];
+            const Vec3 force = normal * (k * weight * depth);
+            Mat3 stiffness;
+            stiffness.addOuter(normal, k * weight * weight * (1.0 + damping));
+            double* to = pushes + 9 * (4 * c + role);
+            to[0] = force.x;
+            to[1] = force.y;
+            to[2] = force.z;
+            to[3] = stiffness.xx;
+            to[4] = stiffness.xy;
+            to[5] = stiffness.xz;
+            to[6] = stiffness.yy;
+            to[7] = stiffness.yz;
+            to[8] = stiffness.zz;
+        }
+    };
+
+    if (count >= parallel_contacts)
+    {
+        const int run_count = qMax(1, QThread::idealThreadCount());
+        const int run_length = (count + run_count - 1) / run_count;
+        QVector<int> runs(run_count);
+        std::iota(runs.begin(), runs.end(), 0);
+        QtConcurrent::blockingMap(runs, [&push, count, run_length](const int& run)
+        {
+            for (int c = run * run_length; c < qMin(count, (run + 1) * run_length); ++c)
+            {
+                push(c);
+            }
+        });
+    }
+    else
+    {
+        for (int c = 0; c < count; ++c)
+        {
+            push(c);
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Moves one vertex to where its forces balance, holding all others still: one Newton step on its own energy.
-void ClothSolver::solveVertex(int vertex, double time_step, const QVector<double>& others)
+void ClothSolver::solveVertex(int vertex, double time_step)
 {
     const double h = time_step;
     const Vec3 position = load(m_position, vertex);
@@ -1240,41 +1573,18 @@ void ClothSolver::solveVertex(int vertex, double time_step, const QVector<double
         hessian.addIdentity(m_settings.stitch_stiffness * role.weight * role.weight);
     }
 
-    // Cloth closer to itself than its thickness is pushed apart, along the line between the closest points. Parts that
-    // have passed through each other during the step are pushed back to the sides they started the step on.
+    // Cloth closer to itself than its thickness pushes it away, as pushSelfContacts() worked out.
     for (int r = m_self_role_start.value(vertex); r < m_self_role_start.value(vertex + 1); ++r)
     {
         const SelfContactRole& role = m_self_roles.at(r);
-        const SelfContact& contact = m_self_contacts.at(role.contact);
-        if (!contact.live)
-        {
-            continue;
-        }
-        Vec3 corners[4];
-        for (int k = 0; k < 4; ++k)
-        {
-            corners[k] = k == role.role ? position : load(others, contact.vertices[k]);
-        }
-        double weights[4];
-        const Vec3 gap = contactGap(corners, contact.edges, weights);
-        Vec3 normal;
-        const double distance = contactDistance(corners, contact.edges, weights, gap, contact.side, &normal);
-        if (distance < m_settings.thickness)
-        {
-            const double weight = weights[role.role];
-            const double k = m_settings.self_contact_stiffness;
-            force += normal * (k * (m_settings.thickness - distance) * weight);
-            hessian.addOuter(normal, k * weight * weight);
-
-            // Damping slows the parts coming together or apart, so cloth landing on cloth doesn't bounce.
-            Vec3 closing;
-            for (int c = 0; c < 4; ++c)
-            {
-                closing += (corners[c] - load(m_previous, contact.vertices[c])) * weights[c];
-            }
-            force -= normal * (damping * k * weight * normal.dot(closing));
-            hessian.addOuter(normal, damping * k * weight * weight);
-        }
+        const double* push = m_self_push.constData() + 9 * (4 * role.contact + role.role);
+        force += Vec3{push[0], push[1], push[2]};
+        hessian.xx += push[3];
+        hessian.xy += push[4];
+        hessian.xz += push[5];
+        hessian.yy += push[6];
+        hessian.yz += push[7];
+        hessian.zz += push[8];
     }
 
     const int triangle = m_contact_triangle.value(vertex, -1);

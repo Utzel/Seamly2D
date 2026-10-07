@@ -39,13 +39,17 @@ private slots:
     void pinnedClothHangs() const;
     void stitchesCloseTheGap() const;
     void colliderMeasuresDistance() const;
+    void clothRestsOnSphere_data() const;
     void clothRestsOnSphere() const;
     void clothLandsOnCloth() const;
+    void foldedClothKeepsItsLayers_data() const;
     void foldedClothKeepsItsLayers() const;
+    void seamsCloseDespiteSelfContact_data() const;
     void seamsCloseDespiteSelfContact() const;
     void biasGivesMoreThanGrain() const;
     void stifferFabricBendsLess() const;
     void shearFollowsFromBias() const;
+    void deviceSweepsAsProcessor() const;
 
 private:
     Q_DISABLE_COPY(TST_ClothSolver)

@@ -1,0 +1,262 @@
+// Seamly2D: before each sweep of the cloth solver on the graphics card, works out how each self contact pushes each of
+// its four vertices, as ClothSolver::pushSelfContacts() does on the processor; see there for why once per sweep does.
+// Each invocation works out one contact. Baked into cloth_contacts.comp.qsb by scripts/shaders/bake_shaders.py.
+#version 450
+
+layout(local_size_x = 64) in;
+
+// What holds for the whole step, and where the parts of the packed buffers start, as in cloth_sweep.comp.
+layout(std140, binding = 0) uniform Step
+{
+    float time_step;
+    float damping;               // the cloth's, over the time step
+    float stitch_stiffness;
+    float contact_stiffness;
+    float self_contact_stiffness;
+    float friction;
+    float thickness;
+    float floor_height;
+    int   has_floor;
+    int   has_body;
+    float contact_margin;
+    float max_move;
+    float friction_rest;
+    int   vertex_count;
+    int   vertex_terms;          // in topology: four for each vertex, where its roles start and end
+    int   membrane_corners;      // in topology: four for each membrane, three used
+    int   hinge_corners;         // in topology: four for each hinge
+    int   stitch_corners;        // in topology: four for each stitch, three used
+    int   hinges;                // in terms: two for each hinge
+    int   stitches;              // in terms: one for each stitch
+    int   body;                  // in terms: four for each triangle of the body
+    int   self_starts;           // in contacts: where each vertex's self contacts start, and one more for the end
+    int   self_roles;            // in contacts
+    int   self_contacts;         // in contacts: eight for each self contact
+    int   self_contact_count;
+} this_step;
+
+// Where the vertices are, as the sweep starts.
+layout(std430, binding = 2) readonly buffer Positions { vec4 positions[]; };
+
+// Where each vertex started the step, among other things; see cloth_sweep.comp.
+layout(std430, binding = 3) readonly buffer Motion { vec4 motion[]; };
+
+// The self contacts: four corners, whether of two edges, side, whether live; see cloth_sweep.comp.
+layout(std430, binding = 8) readonly buffer Contacts { int contacts[]; };
+
+// Nine numbers for each contact and role: the push, then how stiffly, as a symmetric 3 x 3 matrix's xx, xy, xz, yy, yz
+// and zz.
+layout(std430, binding = 9) buffer Pushes { float pushes[]; };
+
+const float tiny = 1e-9;
+const float clear_angle = 0.2;
+
+float share(float part, float whole)
+{
+    return abs(whole) > tiny ? part / whole : 0.0;
+}
+
+// Where the point of triangle abc closest to p is, as the weights of a, b and c (Ericson, 5.1.5).
+vec3 closestOnTriangle(vec3 p, vec3 a, vec3 b, vec3 c)
+{
+    const vec3 ab = b - a;
+    const vec3 ac = c - a;
+    const float d1 = dot(ab, p - a);
+    const float d2 = dot(ac, p - a);
+    const float d3 = dot(ab, p - b);
+    const float d4 = dot(ac, p - b);
+    const float d5 = dot(ab, p - c);
+    const float d6 = dot(ac, p - c);
+    const float va = d3 * d6 - d5 * d4;
+    const float vb = d5 * d2 - d1 * d6;
+    const float vc = d1 * d4 - d3 * d2;
+    if (d1 <= 0.0 && d2 <= 0.0)
+    {
+        return vec3(1.0, 0.0, 0.0);
+    }
+    if (d3 >= 0.0 && d4 <= d3)
+    {
+        return vec3(0.0, 1.0, 0.0);
+    }
+    if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0)
+    {
+        const float v = share(d1, d1 - d3);
+        return vec3(1.0 - v, v, 0.0);
+    }
+    if (d6 >= 0.0 && d5 <= d6)
+    {
+        return vec3(0.0, 0.0, 1.0);
+    }
+    if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0)
+    {
+        const float w = share(d2, d2 - d6);
+        return vec3(1.0 - w, 0.0, w);
+    }
+    if (va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0)
+    {
+        const float w = share(d4 - d3, (d4 - d3) + (d5 - d6));
+        return vec3(0.0, 1.0 - w, w);
+    }
+    const float whole = va + vb + vc;
+    const float v = share(vb, whole);
+    const float w = share(vc, whole);
+    return vec3(1.0 - v - w, v, w);
+}
+
+// How far along the segments p1-q1 and p2-q2 their closest points are, from 0 to 1 (Ericson, 5.1.9).
+vec2 closestOnSegments(vec3 p1, vec3 q1, vec3 p2, vec3 q2)
+{
+    const vec3 d1 = q1 - p1;
+    const vec3 d2 = q2 - p2;
+    const vec3 r = p1 - p2;
+    const float a = dot(d1, d1);
+    const float e = dot(d2, d2);
+    const float f = dot(d2, r);
+    float s = 0.0;
+    float t = 0.0;
+    if (a <= tiny && e > tiny)
+    {
+        t = clamp(f / e, 0.0, 1.0);
+    }
+    else if (a > tiny)
+    {
+        const float c = dot(d1, r);
+        if (e <= tiny)
+        {
+            s = clamp(-c / a, 0.0, 1.0);
+        }
+        else
+        {
+            const float b = dot(d1, d2);
+            const float apart = a * e - b * b;
+            s = apart > tiny ? clamp((b * f - c * e) / apart, 0.0, 1.0) : 0.0;
+            t = (b * s + f) / e;
+            if (t < 0.0)
+            {
+                t = 0.0;
+                s = clamp(-c / a, 0.0, 1.0);
+            }
+            else if (t > 1.0)
+            {
+                t = 1.0;
+                s = clamp((b - c) / a, 0.0, 1.0);
+            }
+        }
+    }
+    return vec2(s, t);
+}
+
+// The gap between the closest points of two parts of cloth, from the second to the first: a vertex and a triangle,
+// or two edges. It is the sum of the corners, each weighted as given back in weights.
+vec3 contactGap(vec3 corners[4], bool edges, out vec4 weights)
+{
+    if (edges)
+    {
+        const vec2 along = closestOnSegments(corners[0], corners[1], corners[2], corners[3]);
+        weights = vec4(1.0 - along.x, along.x, along.y - 1.0, -along.y);
+    }
+    else
+    {
+        weights = vec4(1.0, -closestOnTriangle(corners[0], corners[1], corners[2], corners[3]));
+    }
+    return corners[0] * weights.x + corners[1] * weights.y + corners[2] * weights.z + corners[3] * weights.w;
+}
+
+vec3 contactNormal(vec3 corners[4], bool edges)
+{
+    return edges ? cross(corners[1] - corners[0], corners[3] - corners[2])
+                 : cross(corners[2] - corners[1], corners[3] - corners[1]);
+}
+
+bool clearNormal(vec3 corners[4], bool edges, vec3 normal)
+{
+    const vec3 a = edges ? corners[1] - corners[0] : corners[2] - corners[1];
+    const vec3 b = edges ? corners[3] - corners[2] : corners[3] - corners[1];
+    return length(normal) >= clear_angle * length(a) * length(b) && length(normal) > tiny;
+}
+
+bool acrossContact(bool edges, vec4 weights)
+{
+    return edges ? weights.y > 0.0 && weights.y < 1.0 && weights.w < 0.0 && weights.w > -1.0
+                 : weights.y < 0.0 && weights.z < 0.0 && weights.w < 0.0;
+}
+
+float contactDistance(vec3 corners[4], bool edges, vec4 weights, vec3 gap, float side, out vec3 direction)
+{
+    const vec3 normal = contactNormal(corners, edges);
+    const float normal_length = length(normal);
+    float distance = length(gap);
+    if (side != 0.0 && acrossContact(edges, weights) && clearNormal(corners, edges, normal))
+    {
+        direction = normal * (side / normal_length);
+        distance = dot(gap, direction);
+    }
+    else if (distance > tiny)
+    {
+        direction = gap / distance;
+    }
+    else
+    {
+        direction = normal_length > tiny ? normal * ((side < 0.0 ? -1.0 : 1.0) / normal_length) : vec3(0.0, 1.0, 0.0);
+    }
+    return distance;
+}
+
+void main()
+{
+    const int contact = int(gl_GlobalInvocationID.x);
+    if (contact >= this_step.self_contact_count)
+    {
+        return;
+    }
+    for (int k = 0; k < 36; ++k)
+    {
+        pushes[36 * contact + k] = 0.0;
+    }
+    const int contact_at = this_step.self_contacts + 8 * contact;
+    if (contacts[contact_at + 6] == 0)
+    {
+        return;
+    }
+
+    const bool edges = contacts[contact_at + 4] != 0;
+    const float side = float(contacts[contact_at + 5]);
+    vec3 corners[4];
+    for (int k = 0; k < 4; ++k)
+    {
+        corners[k] = positions[contacts[contact_at + k]].xyz;
+    }
+    vec4 weights;
+    const vec3 gap = contactGap(corners, edges, weights);
+    vec3 normal;
+    const float distance = contactDistance(corners, edges, weights, gap, side, normal);
+    if (distance >= this_step.thickness)
+    {
+        return;
+    }
+
+    // Damping slows the parts coming together or apart, so cloth landing on cloth doesn't bounce.
+    vec3 closing = vec3(0.0);
+    for (int k = 0; k < 4; ++k)
+    {
+        closing += (corners[k] - motion[2 * contacts[contact_at + k]].xyz) * weights[k];
+    }
+    const float stiffness = this_step.self_contact_stiffness;
+    const float depth = this_step.thickness - distance - this_step.damping * dot(normal, closing);
+    for (int role = 0; role < 4; ++role)
+    {
+        const float weight = weights[role];
+        const vec3 force = normal * (stiffness * weight * depth);
+        const float firmness = stiffness * weight * weight * (1.0 + this_step.damping);
+        const int at = 9 * (4 * contact + role);
+        pushes[at] = force.x;
+        pushes[at + 1] = force.y;
+        pushes[at + 2] = force.z;
+        pushes[at + 3] = firmness * normal.x * normal.x;
+        pushes[at + 4] = firmness * normal.x * normal.y;
+        pushes[at + 5] = firmness * normal.x * normal.z;
+        pushes[at + 6] = firmness * normal.y * normal.y;
+        pushes[at + 7] = firmness * normal.y * normal.z;
+        pushes[at + 8] = firmness * normal.z * normal.z;
+    }
+}

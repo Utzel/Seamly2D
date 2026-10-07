@@ -31,7 +31,10 @@
 #include <QVector>
 #include <QtGlobal>
 
+#include <memory>
+
 #include "body_collider.h"
+#include "cloth_compute.h"
 #include "fabric.h"
 #include "garment_mesh.h"
 #include "seam_stretch.h"
@@ -83,10 +86,14 @@ struct ClothSettings
 /// Stiff cloth needs more sweeps than a step can afford to settle, and without them it gives way slowly, as if it were
 /// soft. Chebyshev acceleration (Wang, SIGGRAPH Asia 2015), as Chen et al. use it, carries each sweep on further
 /// along the way the sweeps before went, which settles it in far fewer.
+///
+/// The sweeps, most of a step's work, can run on the graphics card, where each colour's vertices move at once, in
+/// single precision; the cloth drapes the same within what that tells apart.
 class ClothSolver
 {
 public:
     explicit           ClothSolver(const ClothSettings& settings = ClothSettings());
+                       ~ClothSolver();
 
     const ClothSettings& settings() const;
     void               setGravity(const QVector3D& gravity);
@@ -99,6 +106,8 @@ public:
     void               addStitches(const QVector<Stitch>& stitches);
     void               setCollider(const BodyCollider& collider);
     void               setPinned(quint32 vertex, bool pinned);
+    bool               useDevice(QRhi* device);
+    bool               isOnDevice() const;
 
     int                vertexCount() const;
     QVector<QVector3D> positions() const;
@@ -170,6 +179,8 @@ private:
         int    role = 0;
     };
 
+    Q_DISABLE_COPY(ClothSolver)
+
     ClothSettings      m_settings;
     QVector<double>    m_position;  // x, y and z of each vertex
     QVector<double>    m_velocity;
@@ -203,15 +214,23 @@ private:
     QVector<double>              m_self_bound;      // how far each vertex may move in the step, cloth being near
     QVector<char>                m_stopped;         // whether each vertex was stopped by the bound
     QVector<double>              m_self_found_at;   // where the vertices were when the self contacts were found
-    QVector<double>              m_snapshot;        // where the vertices were when a colour started moving at once
+    QVector<double>              m_self_push;       // how each self contact pushes each of its vertices, nine
+                                                    // numbers each; see pushSelfContacts()
+    std::unique_ptr<ClothCompute> m_compute;        // the graphics card the sweeps run on, if any
+    bool                         m_on_device;       // whether the cloth is on it
+    ClothCompute::Step           m_device_step;     // where the parts of the packed cloth start
 
     void               prepare();
+    void               sweep(double time_step);
+    bool               sweepOnDevice(double time_step);
+    ClothCompute::Cloth packedCloth();
     void               findContacts();
     void               findSelfContacts();
     void               findSelfContactsAround(const QVector<double>& heading);
     bool               mayTouch(const SelfContact& contact, double furthest) const;
     void               startSelfContact(SelfContact* contact, const QVector<double>& heading);
-    void               solveVertex(int vertex, double time_step, const QVector<double>& others);
+    void               pushSelfContacts(double time_step);
+    void               solveVertex(int vertex, double time_step);
     double             bodyReach(int vertex) const;
     bool               sewnTogether(int a, int b) const;
     bool               closeAtRest(const int* first, int first_count, const int* second, int second_count) const;

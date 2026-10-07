@@ -32,6 +32,7 @@
 
 #include "../vgarment/body_collider.h"
 #include "../vgarment/cloth_solver.h"
+#include "../vgarment/compute_device.h"
 #include "../vgarment/garment_mesh.h"
 #include "../vgarment/piece_mesher.h"
 #include "../vgarment/piece_outline.h"
@@ -154,6 +155,15 @@ BodyCollider sphere(float radius)
         }
     }
     return BodyCollider(positions, triangles);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A drape test runs on the processor, and again with the sweeps on the graphics card.
+void onProcessorAndDevice()
+{
+    QTest::addColumn<bool>("on_device");
+    QTest::newRow("processor") << false;
+    QTest::newRow("graphics card") << true;
 }
 } // anonymous namespace
 
@@ -306,22 +316,36 @@ void TST_ClothSolver::colliderMeasuresDistance() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+void TST_ClothSolver::clothRestsOnSphere_data() const
+{
+    onProcessorAndDevice();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // A cloth dropped onto a ball comes to rest on top of it, hanging down around it, without going in.
 void TST_ClothSolver::clothRestsOnSphere() const
 {
+    QFETCH(bool, on_device);
     const float radius = 10;
     ClothSettings settings;
     settings.floor = false;
+    ComputeDevice device;
     ClothSolver solver(settings);
     solver.setCollider(sphere(radius));
 
     const GarmentMesh mesh = PieceMesher().meshOutline(rectangle(-15, -15, 30, 30, 1));
     solver.addMesh(mesh, lyingFlat(mesh, 12));
+    if (on_device && !solver.useDevice(device.open()))
+    {
+        QSKIP("No graphics card here can compute");
+    }
 
     for (int i = 0; i < 180; ++i)
     {
         solver.step(frame);
     }
+    QCOMPARE(solver.isOnDevice(), on_device);
+    solver.useDevice(nullptr);
 
     const QVector<QVector3D> positions = solver.positions();
     float nearest = std::numeric_limits<float>::max();
@@ -391,10 +415,18 @@ void TST_ClothSolver::clothLandsOnCloth() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+void TST_ClothSolver::foldedClothKeepsItsLayers_data() const
+{
+    onProcessorAndDevice();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // A strip folded over onto itself keeps its two layers apart as the upper one settles onto the lower one.
 void TST_ClothSolver::foldedClothKeepsItsLayers() const
 {
+    QFETCH(bool, on_device);
     ClothSettings settings;
+    ComputeDevice device;
     ClothSolver solver(settings);
 
     const GarmentMesh strip = PieceMesher().meshOutline(rectangle(0, 0, 40, 10, 1));
@@ -406,38 +438,68 @@ void TST_ClothSolver::foldedClothKeepsItsLayers() const
                                 static_cast<float>(over ? 3.0 : settings.thickness), static_cast<float>(point.y())));
     }
     solver.addMesh(strip, folded);
+    if (on_device && !solver.useDevice(device.open()))
+    {
+        QSKIP("No graphics card here can compute");
+    }
 
     for (int i = 0; i < 120; ++i)
     {
         solver.step(frame);
     }
+    QCOMPARE(solver.isOnDevice(), on_device);
+    solver.useDevice(nullptr);
 
     // Away from the fold, which cloth that resists bending turns in a loop a few cm wide, the folded over half lies on
-    // the other.
+    // the other, about a thickness above it, and nowhere sinks into it. Where exactly the upper half sags most, and
+    // where the lower one bulges, hangs on the slightest difference as the strip settles, so the two halves are
+    // measured as a whole.
     const QVector<QVector3D> positions = solver.positions();
     float upper_lowest = std::numeric_limits<float>::max();
-    float lower_highest = -std::numeric_limits<float>::max();
+    float upper_height = 0;
+    float lower_height = 0;
+    int upper_count = 0;
+    int lower_count = 0;
     for (int i = 0; i < strip.vertexCount(); ++i)
     {
         const qreal x = strip.rest_positions.at(i).x();
         if (x > 30)
         {
             upper_lowest = qMin(upper_lowest, positions.at(i).y());
+            upper_height += positions.at(i).y();
+            ++upper_count;
         }
         else if (x < 10)
         {
-            lower_highest = qMax(lower_highest, positions.at(i).y());
+            lower_height += positions.at(i).y();
+            ++lower_count;
         }
     }
-    QVERIFY2(upper_lowest > lower_highest + 0.5f * static_cast<float>(settings.thickness) && upper_lowest < 1.5f,
-             qUtf8Printable(QStringLiteral("the upper half's lowest at %1 cm, the lower's highest at %2 cm")
-                 .arg(upper_lowest).arg(lower_highest)));
+    upper_height /= static_cast<float>(qMax(1, upper_count));
+    lower_height /= static_cast<float>(qMax(1, lower_count));
+    const float thickness = static_cast<float>(settings.thickness);
+    const float gap = upper_height - lower_height;
+    QVERIFY2(gap > 0.5f * thickness && gap < 2.0f * thickness && upper_lowest > lower_height,
+             qUtf8Printable(QStringLiteral("the upper half lies %1 cm above the lower one, its lowest at %2 cm, the "
+                                           "lower one at %3 cm").arg(gap).arg(upper_lowest).arg(lower_height)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_ClothSolver::seamsCloseDespiteSelfContact_data() const
+{
+    onProcessorAndDevice();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 // The cloth keeping its thickness from itself doesn't hold seams open: sewn sides close as tightly as without it.
 void TST_ClothSolver::seamsCloseDespiteSelfContact() const
 {
+    QFETCH(bool, on_device);
+    ComputeDevice device;
+    if (on_device && device.open() == nullptr)
+    {
+        QSKIP("No graphics card here can compute");
+    }
     float widest[2] = {0, 0};
     for (const bool self_contact : {true, false})
     {
@@ -455,11 +517,14 @@ void TST_ClothSolver::seamsCloseDespiteSelfContact() const
         const QVector<Stitch> stitches = SeamStretch::stitches(left.stretch(2, 3, left_offset),
                                                                right.stretch(14, 11, right_offset).reversed());
         solver.addStitches(stitches);
+        QCOMPARE(solver.useDevice(device.rhi()), on_device);
 
         for (int i = 0; i < 120; ++i)
         {
             solver.step(frame);
         }
+        QCOMPARE(solver.isOnDevice(), on_device);
+        solver.useDevice(nullptr);
 
         const QVector<QVector3D> positions = solver.positions();
         for (const Stitch& stitch : stitches)
@@ -575,4 +640,95 @@ void TST_ClothSolver::shearFollowsFromBias() const
     QCOMPARE(Fabric::presets().first().name, Fabric::defaultName());
     QCOMPARE(Fabric::preset(QStringLiteral("denim")).name, QStringLiteral("denim"));
     QCOMPARE(Fabric::preset(QStringLiteral("no such fabric")).name, Fabric::defaultName());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The sweeps on the graphics card move the cloth as those on the processor do, through every force there is: a strip
+// folded onto itself lies on the floor, two sheets sewn together lie on a ball, one corner pinned. Without the floor
+// and self contact, they agree within what single precision tells apart. Where cloth rests on cloth or the floor, a
+// thickness away, the sweeps stop short of where the forces exactly balance, and whether a contact counts right at
+// that distance tips the other way now and then; over a few steps, before the cloth crumples and which way it folds
+// hangs on the slightest difference, it stays close.
+void TST_ClothSolver::deviceSweepsAsProcessor() const
+{
+    ComputeDevice device;
+    if (device.open() == nullptr)
+    {
+        QSKIP("No graphics card here can compute");
+    }
+
+    const PieceMesher mesher;
+    const GarmentMesh strip = mesher.meshOutline(rectangle(-30, 15, 40, 10, 1));
+    const GarmentMesh left = mesher.meshOutline(rectangle(-10, -10, 10, 20, 11));
+    const GarmentMesh right = mesher.meshOutline(rectangle(0, -10, 10, 20, 21));
+    auto sweep = [&](ClothSettings settings, bool on_device, int steps, QVector<QVector3D>* positions)
+    {
+        settings.floor_height = -12;
+        ClothSolver solver(settings);
+        solver.setCollider(sphere(10));
+
+        // The strip folded in half, the folded over half a thickness above the other.
+        const float thickness = static_cast<float>(settings.thickness);
+        const float lowest = static_cast<float>(settings.floor_height) + thickness;
+        QVector<QVector3D> folded;
+        for (const QPointF& point : strip.rest_positions)
+        {
+            const bool over = point.x() > -10;
+            folded.append(QVector3D(static_cast<float>(over ? -20 - point.x() : point.x()),
+                                    over ? lowest + thickness : lowest, static_cast<float>(point.y())));
+        }
+        solver.addMesh(strip, folded);
+        const quint32 left_offset = solver.addMesh(left, lyingFlat(left, 10.0 + settings.thickness));
+        const quint32 right_offset = solver.addMesh(right, lyingFlat(right, 10.0 + settings.thickness));
+        solver.addStitches(SeamStretch::stitches(left.stretch(12, 13, left_offset),
+                                                 right.stretch(24, 21, right_offset).reversed()));
+        solver.setPinned(left_offset, true);
+        if (on_device && !solver.useDevice(device.rhi()))
+        {
+            return false;
+        }
+        for (int i = 0; i < steps; ++i)
+        {
+            solver.step(frame);
+        }
+        *positions = solver.positions();
+        const bool stayed = solver.isOnDevice() == on_device;
+        solver.useDevice(nullptr);
+        return stayed;
+    };
+    auto apart = [](const QVector<QVector3D>& here, const QVector<QVector3D>& there, float* mean, float* most)
+    {
+        *mean = 0;
+        *most = 0;
+        for (int i = 0; i < here.size() && i < there.size(); ++i)
+        {
+            const float distance = (here.at(i) - there.at(i)).length();
+            *mean += distance / static_cast<float>(here.size());
+            *most = qMax(*most, distance);
+        }
+    };
+
+    ClothSettings without_rests;
+    without_rests.floor = false;
+    without_rests.self_contact = false;
+    ClothSettings everything;
+    QVector<QVector3D> on_processor;
+    QVector<QVector3D> on_device;
+    float mean = 0;
+    float most = 0;
+
+    QVERIFY(sweep(without_rests, false, 1, &on_processor));
+    QVERIFY2(sweep(without_rests, true, 1, &on_device), qUtf8Printable(device.name()));
+    QCOMPARE(on_device.size(), on_processor.size());
+    apart(on_device, on_processor, &mean, &most);
+    QVERIFY2(most < 0.005f, qUtf8Printable(QStringLiteral("without the floor and self contact, on %1 a vertex ends up "
+                                                          "%2 cm from where it does on the processor")
+                                               .arg(device.name()).arg(most)));
+
+    QVERIFY(sweep(everything, false, 3, &on_processor));
+    QVERIFY2(sweep(everything, true, 3, &on_device), qUtf8Printable(device.name()));
+    apart(on_device, on_processor, &mean, &most);
+    QVERIFY2(mean < 0.03f && most < 0.3f,
+             qUtf8Printable(QStringLiteral("on %1 the vertices end up %2 cm on average and up to %3 cm from where "
+                                           "they do on the processor").arg(device.name()).arg(mean).arg(most)));
 }

@@ -74,7 +74,8 @@ Read [.github\CONTRIBUTING.md](.github\CONTRIBUTING.md) to get started on GitFlo
           * Qt Multimedia
           * Qt Image Formats
           * Qt Quick 3D (draws the 3D View dock)
-          * Qt Shader Tools (needed by Qt Quick 3D)
+          * Qt Shader Tools (needed by Qt Quick 3D; its qsb rebuilds the cloth solver's compute shaders with
+            `scripts/shaders/bake_shaders.py`, only after changing them)
     * Build Tools
       * Qt Creator
       * Qt Creator CDB Debugger Support

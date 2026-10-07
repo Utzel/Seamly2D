@@ -10,7 +10,8 @@
 message("Entering vgarment.pro")
 include(../../../common.pri)
 
-QT += widgets printsupport concurrent
+# gui-private for Qt's rendering hardware interface, which runs the cloth solver on the graphics card.
+QT += widgets printsupport concurrent gui-private
 
 # Name of library
 TARGET = vgarment
