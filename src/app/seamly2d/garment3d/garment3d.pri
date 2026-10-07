@@ -2,6 +2,7 @@
 # This need for correct working file translations.pro
 
 SOURCES += \
+    $$PWD/avatar_dialog.cpp \
     $$PWD/avatar_geometry.cpp \
     $$PWD/drape_runner.cpp \
     $$PWD/flow_layout.cpp \
@@ -15,6 +16,7 @@ SOURCES += \
     $$PWD/stitch_geometry.cpp
 
 HEADERS += \
+    $$PWD/avatar_dialog.h \
     $$PWD/avatar_geometry.h \
     $$PWD/drape_runner.h \
     $$PWD/flow_layout.h \

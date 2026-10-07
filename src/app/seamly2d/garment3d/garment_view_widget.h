@@ -59,13 +59,15 @@ class StitchEditor;
 class VAbstractPattern;
 class VContainer;
 struct VFabricTexture;
+struct VGarmentAvatar;
 struct VPieceArrangement;
 struct VSeam;
 struct VSeamSide;
 struct VTopstitches;
 
-/// @brief Content of the 3D View dock: the pattern's pieces and an avatar fitted to the pattern's measurements, in a
-/// 3D scene that follows every edit, and the seams that sew the pieces together.
+/// @brief Content of the 3D View dock: the pattern's pieces and an avatar fitted to the pattern's measurements, or to
+/// the size chosen for a pattern without them, in a 3D scene that follows every edit, and the seams that sew the
+/// pieces together.
 ///
 /// The Qt Quick scene, and with it the GPU context, is only created the first time the dock is shown, and the
 /// pieces are only meshed while it is visible, so the view costs nothing until it is used. The avatar is fitted on a
@@ -102,6 +104,8 @@ private slots:
     void               updateSeams();
     void               updateArrangements();
     void               updateFabrics();
+    void               updateChosenAvatar();
+    void               chooseAvatar();
     void               chooseFabric(int index);
     void               chooseFabricImage();
     void               changeFabricImageWidth();
@@ -213,6 +217,7 @@ private:
     QActionGroup*              m_threads;
     QAction*                   m_other_thread_action;
     QAction*                   m_cancel_action;
+    QAction*                   m_avatar_action;
     QAction*                   m_arrange_action;
     QAction*                   m_simulate_action;
     QAction*                   m_reset_action;
@@ -281,6 +286,8 @@ private:
     void               updateHint();
     void               updateAvatar();
     AvatarRequest      wantedAvatar() const;
+    AvatarRequest      measuredAvatar() const;
+    VGarmentAvatar     chosenAvatar() const;
     QString            avatarNote(const AvatarFit& result) const;
 };
 

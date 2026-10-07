@@ -86,10 +86,13 @@
 #include "../vpatterndb/vpiecepath.h"
 #include "../vgarment/cloth_solver.h"
 #include "../vgarment/fabric.h"
+#include "../vgarment/standard_sizes.h"
 #include "../vtools/undocommands/save_arrangements.h"
+#include "../vtools/undocommands/save_avatar.h"
 #include "../vtools/undocommands/save_fabrics.h"
 #include "../vtools/undocommands/save_seams.h"
 #include "../vtools/undocommands/save_topstitches.h"
+#include "avatar_dialog.h"
 #include "drape_runner.h"
 #include "flow_layout.h"
 #include "garment_scene_model.h"
@@ -257,6 +260,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_threads(nullptr)
     , m_other_thread_action(nullptr)
     , m_cancel_action(nullptr)
+    , m_avatar_action(nullptr)
     , m_arrange_action(nullptr)
     , m_simulate_action(nullptr)
     , m_reset_action(nullptr)
@@ -318,6 +322,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     connect(m_doc, &VAbstractPattern::arrangementsChanged, this, &GarmentViewWidget::updateArrangements);
     connect(m_doc, &VAbstractPattern::fabricsChanged, this, &GarmentViewWidget::updateFabrics);
     connect(m_doc, &VAbstractPattern::topstitchesChanged, this, &GarmentViewWidget::updateTopstitches);
+    connect(m_doc, &VAbstractPattern::avatarChanged, this, &GarmentViewWidget::updateChosenAvatar);
     connect(m_stitch_editor, &StitchEditor::topstitchesEdited, this, &GarmentViewWidget::saveTopstitches);
     connect(m_stitch_editor, &StitchEditor::stitchingChanged, this, &GarmentViewWidget::updateActions);
     connect(m_stitch_editor, &StitchEditor::stitchesChanged, this, &GarmentViewWidget::showStitches);
@@ -630,8 +635,8 @@ bool GarmentViewWidget::carryDrape(quint32 id, const GarmentMesh& before, const 
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Starts fitting the avatar if the measurements or the wearer changed. A change during a fit is picked up when the
-// fit finishes. A pattern without measurements gets no avatar.
+// Starts fitting the avatar if the measurements, the wearer or the avatar chosen for a pattern without measurements
+// changed. A change during a fit is picked up when the fit finishes.
 void GarmentViewWidget::updateAvatar()
 {
     const AvatarRequest request = wantedAvatar();
@@ -639,6 +644,7 @@ void GarmentViewWidget::updateAvatar()
     {
         m_avatar_request = request;
         m_has_avatar_request = true;
+        updateActions();
 
         if (!request.hasMeasurements())
         {
@@ -712,8 +718,25 @@ void GarmentViewWidget::avatarFitted()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// The pattern's measurements in cm, the ones the avatar can be fitted to; measurements that aren't there stay 0.
+// What the avatar is fitted to: the pattern's measurements, or without any, those of the avatar chosen for it.
 GarmentViewWidget::AvatarRequest GarmentViewWidget::wantedAvatar() const
+{
+    AvatarRequest request = measuredAvatar();
+    if (!request.hasMeasurements())
+    {
+        const VGarmentAvatar chosen = chosenAvatar();
+        request.wanted.height = chosen.height;
+        request.wanted.bust = chosen.bust;
+        request.wanted.waist = chosen.waist;
+        request.wanted.hip = chosen.hip;
+        request.gender = chosen.male ? 1.0 : 0.0;
+    }
+    return request;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The pattern's measurements in cm, the ones the avatar can be fitted to; measurements that aren't there stay 0.
+GarmentViewWidget::AvatarRequest GarmentViewWidget::measuredAvatar() const
 {
     // Looked up by internal name: DataMeasurements() is keyed by the names shown to the user, which can be translated.
     const QHash<QString, QSharedPointer<VInternalVariable>>* variables = m_data->DataVariables();
@@ -741,6 +764,55 @@ GarmentViewWidget::AvatarRequest GarmentViewWidget::wantedAvatar() const
     request.gender = m_wearer_gender;
     request.age = BodyShape::ageFromYears(m_wearer_age);
     return request;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The avatar chosen for the pattern, for when it has no measurements; until one is chosen, a woman, or a man if the
+// measurements' file says so, of the middle size.
+VGarmentAvatar GarmentViewWidget::chosenAvatar() const
+{
+    VGarmentAvatar avatar = m_doc->getAvatar();
+    if (avatar.isNull())
+    {
+        avatar.male = m_wearer_gender > 0.5;
+        const StandardSize size = StandardSizes::of(avatar.male, StandardSizes::defaultSize(avatar.male));
+        avatar.size = size.size;
+        avatar.height = size.measurements.height;
+        avatar.bust = size.measurements.bust;
+        avatar.waist = size.measurements.waist;
+        avatar.hip = size.measurements.hip;
+    }
+    return avatar;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The avatar chosen for the pattern changed, here or by undo and redo.
+void GarmentViewWidget::updateChosenAvatar()
+{
+    if (isVisible())
+    {
+        updateAvatar();
+    }
+    else
+    {
+        m_rebuild_pending = true;
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The avatar of a pattern without measurements was asked for: a woman or a man of a size, as tall and round as wanted.
+void GarmentViewWidget::chooseAvatar()
+{
+    AvatarDialog dialog(chosenAvatar(), qApp->patternUnit(), this);
+    if (dialog.exec() == QDialog::Accepted)
+    {
+        const VGarmentAvatar before = m_doc->getAvatar();
+        const VGarmentAvatar after = dialog.avatar();
+        if (!(after == before))
+        {
+            qApp->getUndoStack()->push(new SaveAvatar(tr("change avatar"), before, after, m_doc));
+        }
+    }
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1359,6 +1431,7 @@ void GarmentViewWidget::updateActions()
     m_remove_action->setEnabled(seam_selected || placed_selected);
 
     const bool has_avatar = m_scene_model->hasAvatar();
+    m_avatar_action->setEnabled(!measuredAvatar().hasMeasurements());
     m_arrange_action->setEnabled(has_avatar);
     m_simulate_action->setEnabled(has_avatar);
     m_reset_action->setEnabled(!m_draped.isEmpty());
@@ -2092,6 +2165,12 @@ void GarmentViewWidget::createToolBar()
 
     tool_bar = add_group();
 
+    m_avatar_action = tool_bar->addAction(tr("Avatar"));
+    m_avatar_action->setToolTip(tr("Choose who wears the garment when the pattern has no measurements: a woman or a "
+                                   "man of a European size, as tall and as round as wanted. With measurements, the "
+                                   "avatar is fitted to them."));
+    connect(m_avatar_action, &QAction::triggered, this, &GarmentViewWidget::chooseAvatar);
+
     m_arrange_action = tool_bar->addAction(tr("Arrange"));
     m_arrange_action->setCheckable(true);
     m_arrange_action->setToolTip(tr("Put pieces on the avatar: click a piece, then the spot where it goes; drag a "
@@ -2232,6 +2311,7 @@ void GarmentViewWidget::updateIcons()
         m_flip_action->setIcon(toolIcon(QStringLiteral("flip")));
         m_remove_action->setIcon(toolIcon(QStringLiteral("remove")));
         m_topstitch_action->setIcon(toolIcon(QStringLiteral("topstitch")));
+        m_avatar_action->setIcon(toolIcon(QStringLiteral("avatar")));
         m_arrange_action->setIcon(toolIcon(QStringLiteral("arrange")));
         m_simulate_action->setIcon(toolIcon(QStringLiteral("simulate")));
         m_reset_action->setIcon(toolIcon(QStringLiteral("reset")));
