@@ -43,6 +43,7 @@ struct Fabric
     qreal   weft_stiffness = 1200.0; ///< across the grain, in N/m
     qreal   bias_stiffness = 150.0;  ///< at 45 degrees to the grain, in N/m
     qreal   bending = 8.0;           ///< bending rigidity, in micro newton metres
+    qreal   thickness = 0.3;         ///< how thick it is, in mm, as the 3D View draws it
 
     qreal                  shearStiffness() const;
 

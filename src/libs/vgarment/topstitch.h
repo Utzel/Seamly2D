@@ -89,7 +89,8 @@ public:
     static QVector<SurfacePoint>     locate(const GarmentMesh& mesh, const QVector<QPointF>& points);
     static ThreadMesh                threadMesh(const QVector<ThreadStitch>& stitches,
                                                 const QVector<QVector3D>& positions,
-                                                const QVector<QVector3D>& normals, qreal scale = 1.0);
+                                                const QVector<QVector3D>& normals, qreal scale = 1.0,
+                                                qreal offset = 0.0);
 };
 
 /// @brief A way of topstitching, as CLO's topstitch styles describe one: rows of stitches at given distances inside

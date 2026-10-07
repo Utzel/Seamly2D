@@ -258,4 +258,17 @@ void TST_Topstitch::threadLiesOnBothFaces() const
         thicker_highest = qMax(thicker_highest, position.z());
     }
     QVERIFY(qAbs(thicker_highest - 2 * highest) < 1e-5f);
+
+    // On cloth drawn 0.1 cm thick, the thread lies on its faces, 0.05 cm either side of its middle.
+    const ThreadMesh on_thick_cloth = Topstitching::threadMesh(stitches, positions, normals, 1.0, 0.05);
+    float thick_highest = 0;
+    float thick_lowest = 0;
+    for (const QVector3D& position : on_thick_cloth.positions)
+    {
+        thick_highest = qMax(thick_highest, position.z());
+        thick_lowest = qMin(thick_lowest, position.z());
+    }
+    QVERIFY2(qAbs(thick_highest - (highest + 0.05f)) < 1e-5f && qAbs(thick_lowest + thick_highest) < 1e-5f,
+             qUtf8Printable(QStringLiteral("the thread reaches from %1 to %2 cm").arg(thick_lowest)
+                                .arg(thick_highest)));
 }

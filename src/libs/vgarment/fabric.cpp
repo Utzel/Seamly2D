@@ -30,7 +30,8 @@ namespace
 const QString default_name = QStringLiteral("cottonShirting");
 
 //---------------------------------------------------------------------------------------------------------------------
-Fabric makeFabric(const QString& name, qreal weight, qreal warp, qreal weft, qreal bias, qreal bending)
+Fabric makeFabric(const QString& name, qreal weight, qreal warp, qreal weft, qreal bias, qreal bending,
+                  qreal thickness)
 {
     Fabric fabric;
     fabric.name = name;
@@ -39,6 +40,7 @@ Fabric makeFabric(const QString& name, qreal weight, qreal warp, qreal weft, qre
     fabric.weft_stiffness = weft;
     fabric.bias_stiffness = bias;
     fabric.bending = bending;
+    fabric.thickness = thickness;
     return fabric;
 }
 } // anonymous namespace
@@ -57,11 +59,11 @@ qreal Fabric::shearStiffness() const
 /// @brief The fabrics the 3D View offers, the default first.
 QVector<Fabric> Fabric::presets()
 {
-    return {makeFabric(default_name, 120.0, 2000.0, 1200.0, 150.0, 8.0),
-            makeFabric(QStringLiteral("cottonJersey"), 170.0, 250.0, 120.0, 100.0, 3.0),
-            makeFabric(QStringLiteral("denim"), 400.0, 4000.0, 2500.0, 300.0, 60.0),
-            makeFabric(QStringLiteral("woolSuiting"), 260.0, 1500.0, 1100.0, 120.0, 15.0),
-            makeFabric(QStringLiteral("chiffon"), 50.0, 600.0, 450.0, 40.0, 0.5)};
+    return {makeFabric(default_name, 120.0, 2000.0, 1200.0, 150.0, 8.0, 0.3),
+            makeFabric(QStringLiteral("cottonJersey"), 170.0, 250.0, 120.0, 100.0, 3.0, 0.6),
+            makeFabric(QStringLiteral("denim"), 400.0, 4000.0, 2500.0, 300.0, 60.0, 0.9),
+            makeFabric(QStringLiteral("woolSuiting"), 260.0, 1500.0, 1100.0, 120.0, 15.0, 0.7),
+            makeFabric(QStringLiteral("chiffon"), 50.0, 600.0, 450.0, 40.0, 0.5, 0.15)};
 }
 
 //---------------------------------------------------------------------------------------------------------------------

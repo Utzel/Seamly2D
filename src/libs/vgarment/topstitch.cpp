@@ -767,9 +767,10 @@ QVector<ThreadStitch> Topstitching::stitches(const GarmentMesh& mesh, const QVec
 /// @brief The stitches' thread, each stitch a short spindle from where it comes out of the cloth to where it goes back
 /// in, raised a little off the cloth, on both faces of it, with normals that light it round. The cloth's vertices are
 /// at the given positions, with the given normals of unit length; scale makes the thread thicker and lifts it further,
-/// as for stitches shown over others.
+/// as for stitches shown over others. The cloth's faces lie offset cm either side of its vertices, as where its
+/// thickness is drawn; the thread lies on them.
 ThreadMesh Topstitching::threadMesh(const QVector<ThreadStitch>& stitches, const QVector<QVector3D>& positions,
-                                    const QVector<QVector3D>& normals, qreal scale)
+                                    const QVector<QVector3D>& normals, qreal scale, qreal offset)
 {
     ThreadMesh mesh;
     const int corner_count = static_cast<int>(stitches.size()) * 2 * corners_per_face;
@@ -796,7 +797,7 @@ ThreadMesh Topstitching::threadMesh(const QVector<ThreadStitch>& stitches, const
         {
             const QVector3D up = normal * face;
             const QVector3D left = side * face;
-            const QVector3D lift = up * (thread_lift * width);
+            const QVector3D lift = up * (static_cast<float>(offset) + thread_lift * width);
             const quint32 first = static_cast<quint32>(mesh.positions.size());
             mesh.positions << start + lift << end + lift << middle + lift + left * (width / 2)
                            << middle + lift - left * (width / 2) << middle + lift + up * (thread_height * width);
