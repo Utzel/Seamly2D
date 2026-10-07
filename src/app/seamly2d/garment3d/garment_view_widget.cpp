@@ -202,6 +202,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_simulate_action(nullptr)
     , m_reset_action(nullptr)
     , m_fine_action(nullptr)
+    , m_device_action(nullptr)
     , m_fit_action(nullptr)
     , m_fit_maps(nullptr)
     , m_checks_action(nullptr)
@@ -267,6 +268,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     connect(m_scene_model, &GarmentSceneModel::avatarChanged, this, &GarmentViewWidget::updateActions);
     connect(m_runner, &DrapeRunner::frameReady, this, &GarmentViewWidget::drapeFrame);
     connect(m_runner, &DrapeRunner::settled, this, &GarmentViewWidget::drapeSettled);
+    connect(m_runner, &DrapeRunner::computing, this, &GarmentViewWidget::showComputing);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1418,6 +1420,38 @@ void GarmentViewWidget::setFine(bool fine)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// Drapes on the graphics card or on the processor; a drape going on goes on on the other.
+void GarmentViewWidget::setOnDevice(bool on_device)
+{
+    m_runner->setOnDevice(on_device);
+    if (m_runner->isRunning())
+    {
+        startSimulation();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Says in the switch's tip what the drape is worked out on: the graphics card named, or the processor.
+void GarmentViewWidget::showComputing(int generation, const QString& device)
+{
+    if (generation == m_runner->generation())
+    {
+        if (!device.isEmpty())
+        {
+            m_device_action->setToolTip(tr("Working out the drape on the graphics card: %1").arg(device));
+        }
+        else if (m_device_action->isChecked())
+        {
+            m_device_action->setToolTip(tr("No graphics card here can work out the drape, so the processor does"));
+        }
+        else
+        {
+            m_device_action->setToolTip(tr("Working out the drape on the processor"));
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // While topstitching, a click near a piece's edge stitches it or takes its stitches out. Topstitching, sewing and
 // arranging take turns.
 void GarmentViewWidget::setStitching(bool stitching)
@@ -1861,6 +1895,12 @@ void GarmentViewWidget::createToolBar()
                                  "show in finer detail. A drape goes on from where it hangs.")
                                   .arg(fine_edge_length).arg(PieceMesher::defaultEdgeLength()));
     connect(m_fine_action, &QAction::toggled, this, &GarmentViewWidget::setFine);
+    m_device_action = simulate_menu->addAction(tr("Drape on the Graphics Card"));
+    m_device_action->setCheckable(true);
+    m_device_action->setChecked(true);
+    m_device_action->setToolTip(tr("Work out the drape on the graphics card, which is much faster, if it can; "
+                                   "otherwise on the processor"));
+    connect(m_device_action, &QAction::toggled, this, &GarmentViewWidget::setOnDevice);
     m_simulate_action->setMenu(simulate_menu);
     if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_simulate_action)))
     {

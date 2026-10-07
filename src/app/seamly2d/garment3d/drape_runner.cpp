@@ -28,6 +28,7 @@
 #include <QThread>
 
 #include "../vgarment/cloth_solver.h"
+#include "../vgarment/compute_device.h"
 
 namespace
 {
@@ -66,6 +67,8 @@ DrapeRunner::DrapeRunner(QObject* parent)
     , m_generation(0)
     , m_stopping(false)
     , m_frame_pending(false)
+    , m_on_device(true)
+    , m_device()
 {}
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -82,9 +85,16 @@ void DrapeRunner::start(const QSharedPointer<ClothSolver>& solver)
     m_stopping = false;
     m_frame_pending = false;
     const int generation = ++m_generation;
-    m_thread = QThread::create([this, solver, generation]()
+
+    // Set up on this thread, as some graphics APIs need, once.
+    if (m_on_device && m_device == nullptr)
     {
-        run(solver, generation);
+        m_device.reset(new ComputeDevice());
+    }
+    ComputeDevice* device = m_on_device ? m_device.get() : nullptr;
+    m_thread = QThread::create([this, solver, generation, device]()
+    {
+        run(solver, generation, device);
     });
     m_thread->start();
 }
@@ -126,13 +136,24 @@ void DrapeRunner::frameShown()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief Whether the sweeps run on the graphics card, if there is one, from the next start on.
+void DrapeRunner::setOnDevice(bool on_device)
+{
+    m_on_device = on_device;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // The simulation loop, on the runner's thread. Pieces held up in the air would fall past where they belong before
 // their seams close, so they are sewn first and only then let go. While being sewn they may pass through each other
 // to get to their seams, and they keep no speed from one step to the next: the seams pull hard, and cloth flung
 // against the body by them would glance off it and slide away, such as trousers whose crotch is pulled up against
-// the body's. Once let go, the cloth keeps from passing through itself.
-void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation)
+// the body's. Once let go, the cloth keeps from passing through itself. Says what it computes on: the graphics card,
+// or with no name the processor, also when the card fails.
+void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation, ComputeDevice* device)
 {
+    const bool on_device = device != nullptr && solver->useDevice(device->open());
+    emit computing(generation, on_device ? device->name() : QString());
+
     QElapsedTimer since_frame;
     since_frame.start();
     int steps = 0;
@@ -194,5 +215,15 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation)
             emit settled(generation);
             m_stopping = true;
         }
+    }
+
+    if (on_device && !solver->isOnDevice())
+    {
+        emit computing(generation, QString());
+    }
+    solver->useDevice(nullptr);
+    if (device != nullptr)
+    {
+        device->close();
     }
 }
