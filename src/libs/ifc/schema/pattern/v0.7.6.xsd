@@ -149,6 +149,10 @@
             <xs:sequence minOccurs="0" maxOccurs="unbounded">
               <xs:element name="seam" minOccurs="0" maxOccurs="unbounded">
                 <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="first" type="seamStretch" minOccurs="0" maxOccurs="unbounded"/>
+                    <xs:element name="second" type="seamStretch" minOccurs="0" maxOccurs="unbounded"/>
+                  </xs:sequence>
                   <xs:attribute name="firstPiece" type="xs:unsignedInt" use="required"/>
                   <xs:attribute name="firstStart" type="xs:unsignedInt" use="required"/>
                   <xs:attribute name="firstEnd" type="xs:unsignedInt" use="required"/>
@@ -164,6 +168,8 @@
                       </xs:restriction>
                     </xs:simpleType>
                   </xs:attribute>
+                  <xs:attribute name="firstBackward" type="xs:boolean"/>
+                  <xs:attribute name="secondBackward" type="xs:boolean"/>
                 </xs:complexType>
               </xs:element>
             </xs:sequence>
@@ -975,6 +981,12 @@
         <xs:attribute name="width" type="xs:double" use="required"/>
       </xs:extension>
     </xs:simpleContent>
+  </xs:complexType>
+  <xs:complexType name="seamStretch">
+    <xs:attribute name="piece" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="start" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="end" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="backward" type="xs:boolean"/>
   </xs:complexType>
   <xs:simpleType name="imageExtension">
     <xs:restriction base="xs:string">

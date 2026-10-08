@@ -36,6 +36,7 @@ public:
 private slots:
     void seamsAreReadBack() const;
     void seamsFollowTheSchema() const;
+    void seamsOverSeveralStretchesAreReadBack() const;
     void noSeamsLeaveNoElement() const;
     void undoRestoresSeams() const;
     void foldsAreReadBack() const;

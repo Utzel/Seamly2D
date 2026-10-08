@@ -233,7 +233,11 @@ void TST_PatternSeams::seamsFollowTheSchema() const
     SeamsPattern pattern;
     VSeam turned = seam(30, 40, true);
     turned.angle = 360;
-    pattern.setSeams({seam(10, 20, false), turned});
+    VSeam gathered = seam(50, 60, false);
+    gathered.first.backward = true;
+    gathered.first_more = {{51, 3, 4, false}, {50u | 0x80000000u, 5, 6, true}};
+    gathered.second_more = {{61, 7, 8, true}};
+    pattern.setSeams({seam(10, 20, false), turned, gathered});
 
     QCOMPARE(childTags(pattern.documentElement()),
              QStringList({QStringLiteral("version"), QStringLiteral("unit"), QStringLiteral("measurements"),
@@ -252,6 +256,39 @@ void TST_PatternSeams::seamsFollowTheSchema() const
     {
         QFAIL(qUtf8Printable(error.ErrorMessage()));
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A seam going on over several stretches on either side keeps them in order, each the way it runs, and on the mirror
+// image of a piece cut twice by its mirrored id. A seam of one stretch a side has no more.
+void TST_PatternSeams::seamsOverSeveralStretchesAreReadBack() const
+{
+    SeamsPattern pattern;
+    VSeam gathered = seam(50, 60, true);
+    gathered.first.backward = true;
+    gathered.first_more = {{51, 3, 4, false}, {50u | 0x80000000u, 5, 6, true}};
+    gathered.second_more = {{61, 7, 8, true}};
+    pattern.setSeams({gathered, seam(10, 20, false)});
+
+    const QVector<VSeam> read = pattern.getSeams();
+    QCOMPARE(read, QVector<VSeam>({gathered, seam(10, 20, false)}));
+    QCOMPARE(read.first().firstSide().size(), 3);
+    QCOMPARE(read.first().secondSide().last(), VSeamSide({61, 7, 8, true}));
+
+    const QDomElement first = pattern.documentElement().firstChildElement(VAbstractPattern::TagSeams)
+                                                       .firstChildElement(VAbstractPattern::TagSeam);
+    QCOMPARE(first.elementsByTagName(VAbstractPattern::TagFirstStretch).size(), 2);
+    QCOMPARE(first.elementsByTagName(VAbstractPattern::TagSecondStretch).size(), 1);
+    QCOMPARE(first.attribute(VAbstractPattern::AttrFirstBackward), QStringLiteral("true"));
+    QVERIFY(!first.hasAttribute(VAbstractPattern::AttrSecondBackward));
+    QVERIFY(first.nextSiblingElement().firstChildElement().isNull());
+
+    VSeam other = gathered;
+    other.second_more.clear();
+    QVERIFY(!(other == gathered));
+    other = gathered;
+    other.first_more[1].backward = false;
+    QVERIFY(!(other == gathered));
 }
 
 //---------------------------------------------------------------------------------------------------------------------

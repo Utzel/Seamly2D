@@ -106,12 +106,14 @@ struct VFinalMeasurement
 };
 
 /// One side of a seam: the stretch of a piece's seam line from one point of the piece's path to another, going the
-/// way the path goes. The ids are the piece's and its path nodes'.
+/// way the path goes, or backward. The ids are the piece's and its path nodes'; on the mirror image of a piece cut
+/// twice, the piece's with the highest bit set.
 struct VSeamSide
 {
     quint32 piece_id {NULL_ID};
     quint32 start_node {NULL_ID};
     quint32 end_node {NULL_ID};
+    bool    backward {false};
 
     bool    operator==(const VSeamSide& other) const;
 };
@@ -119,15 +121,20 @@ struct VSeamSide
 /// Two stretches of seam line sewn together. The sides' starts meet and their ends meet; with reverse the first
 /// side's start meets the second side's end. The seam can hold the pieces at an angle on the first side's right side,
 /// as VFold says: 180 flat, 360 turned, as at the edge of a collar; less than 0 for none, letting them bend across it
-/// as they will.
+/// as they will. As CLO's M:N sewing, either side can go on over more stretches, of the same piece or others, one
+/// after the other, the other side eased onto all of them evenly, as a waistband onto gathered panels.
 struct VSeam
 {
-    VSeamSide first {};
-    VSeamSide second {};
-    bool      reverse {false};
-    qreal     angle {-1};
+    VSeamSide          first {};
+    VSeamSide          second {};
+    bool               reverse {false};
+    qreal              angle {-1};
+    QVector<VSeamSide> first_more {};
+    QVector<VSeamSide> second_more {};
 
-    bool      operator==(const VSeam& other) const;
+    bool               operator==(const VSeam& other) const;
+    QVector<VSeamSide> firstSide() const;
+    QVector<VSeamSide> secondSide() const;
 };
 
 /// A fold along one of a piece's internal paths: the angle the cloth makes across it on its right side, the side the
@@ -525,6 +532,8 @@ public:
     static const QString TagFinalMeasurement;
     static const QString TagSeams;
     static const QString TagSeam;
+    static const QString TagFirstStretch;
+    static const QString TagSecondStretch;
     static const QString TagFolds;
     static const QString TagFold;
     static const QString TagArrangements;
@@ -631,6 +640,9 @@ public:
     static const QString AttrSecondPiece;
     static const QString AttrSecondStart;
     static const QString AttrSecondEnd;
+    static const QString AttrFirstBackward;
+    static const QString AttrSecondBackward;
+    static const QString AttrBackward;
     static const QString AttrPiece;
     static const QString AttrPart;
     static const QString AttrDefault;

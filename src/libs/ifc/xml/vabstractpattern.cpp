@@ -101,6 +101,8 @@ const QString VAbstractPattern::TagFinalMeasurements    = QStringLiteral("finalM
 const QString VAbstractPattern::TagFinalMeasurement     = QStringLiteral("finalMeasurement");
 const QString VAbstractPattern::TagSeams                = QStringLiteral("seams");
 const QString VAbstractPattern::TagSeam                 = QStringLiteral("seam");
+const QString VAbstractPattern::TagFirstStretch         = QStringLiteral("first");
+const QString VAbstractPattern::TagSecondStretch        = QStringLiteral("second");
 const QString VAbstractPattern::TagFolds                = QStringLiteral("folds");
 const QString VAbstractPattern::TagFold                 = QStringLiteral("fold");
 const QString VAbstractPattern::TagArrangements         = QStringLiteral("arrangements");
@@ -207,6 +209,9 @@ const QString VAbstractPattern::AttrFirstEnd            = QStringLiteral("firstE
 const QString VAbstractPattern::AttrSecondPiece         = QStringLiteral("secondPiece");
 const QString VAbstractPattern::AttrSecondStart         = QStringLiteral("secondStart");
 const QString VAbstractPattern::AttrSecondEnd           = QStringLiteral("secondEnd");
+const QString VAbstractPattern::AttrFirstBackward       = QStringLiteral("firstBackward");
+const QString VAbstractPattern::AttrSecondBackward      = QStringLiteral("secondBackward");
+const QString VAbstractPattern::AttrBackward            = QStringLiteral("backward");
 const QString VAbstractPattern::AttrPiece               = QStringLiteral("piece");
 const QString VAbstractPattern::AttrPart                = QStringLiteral("part");
 const QString VAbstractPattern::AttrDefault             = QStringLiteral("default");
@@ -2270,14 +2275,30 @@ void VAbstractPattern::setFinalMeasurements(const QVector<VFinalMeasurement> &me
 //---------------------------------------------------------------------------------------------------------------------
 bool VSeamSide::operator==(const VSeamSide& other) const
 {
-    return piece_id == other.piece_id && start_node == other.start_node && end_node == other.end_node;
+    return piece_id == other.piece_id && start_node == other.start_node && end_node == other.end_node
+           && backward == other.backward;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 bool VSeam::operator==(const VSeam& other) const
 {
     return first == other.first && second == other.second && reverse == other.reverse
-           && qFuzzyCompare(1.0 + angle, 1.0 + other.angle);
+           && qFuzzyCompare(1.0 + angle, 1.0 + other.angle) && first_more == other.first_more
+           && second_more == other.second_more;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The stretches of the first side, in the order it goes on over them.
+QVector<VSeamSide> VSeam::firstSide() const
+{
+    return QVector<VSeamSide>{first} + first_more;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The stretches of the second side, in the order it goes on over them.
+QVector<VSeamSide> VSeam::secondSide() const
+{
+    return QVector<VSeamSide>{second} + second_more;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2464,8 +2485,26 @@ QVector<VSeam> VAbstractPattern::getSeams() const
         seam.second.piece_id = GetParametrUInt(element, AttrSecondPiece, NULL_ID_STR);
         seam.second.start_node = GetParametrUInt(element, AttrSecondStart, NULL_ID_STR);
         seam.second.end_node = GetParametrUInt(element, AttrSecondEnd, NULL_ID_STR);
+        seam.first.backward = getParameterBool(element, AttrFirstBackward, falseStr);
+        seam.second.backward = getParameterBool(element, AttrSecondBackward, falseStr);
         seam.reverse = getParameterBool(element, AttrNodeReverse, falseStr);
         seam.angle = GetParametrDouble(element, AttrAngle, QStringLiteral("-1"));
+        for (QDomElement more = element.firstChildElement(); !more.isNull(); more = more.nextSiblingElement())
+        {
+            VSeamSide stretch;
+            stretch.piece_id = GetParametrUInt(more, AttrPiece, NULL_ID_STR);
+            stretch.start_node = GetParametrUInt(more, AttrStart, NULL_ID_STR);
+            stretch.end_node = GetParametrUInt(more, AttrEnd, NULL_ID_STR);
+            stretch.backward = getParameterBool(more, AttrBackward, falseStr);
+            if (more.tagName() == TagFirstStretch)
+            {
+                seam.first_more.append(stretch);
+            }
+            else if (more.tagName() == TagSecondStretch)
+            {
+                seam.second_more.append(stretch);
+            }
+        }
         seams.append(seam);
 
         element = element.nextSiblingElement(TagSeam);
@@ -2515,6 +2554,30 @@ void VAbstractPattern::setSeams(const QVector<VSeam>& seams)
             if (seam.angle >= 0)
             {
                 SetAttribute(tag, AttrAngle, seam.angle);
+            }
+            if (seam.first.backward)
+            {
+                SetAttribute(tag, AttrFirstBackward, seam.first.backward);
+            }
+            if (seam.second.backward)
+            {
+                SetAttribute(tag, AttrSecondBackward, seam.second.backward);
+            }
+            for (const auto& more : {std::make_pair(TagFirstStretch, &seam.first_more),
+                                     std::make_pair(TagSecondStretch, &seam.second_more)})
+            {
+                for (const VSeamSide& stretch : *more.second)
+                {
+                    QDomElement stretch_tag = createElement(more.first);
+                    SetAttribute(stretch_tag, AttrPiece, stretch.piece_id);
+                    SetAttribute(stretch_tag, AttrStart, stretch.start_node);
+                    SetAttribute(stretch_tag, AttrEnd, stretch.end_node);
+                    if (stretch.backward)
+                    {
+                        SetAttribute(stretch_tag, AttrBackward, stretch.backward);
+                    }
+                    tag.appendChild(stretch_tag);
+                }
             }
             element.appendChild(tag);
         }
