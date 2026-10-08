@@ -288,6 +288,9 @@ void TST_PatternSeams::arrangementsAreReadBack() const
     turned.rotation = 90;
     turned.turned_over = true;
     turned.point = QStringLiteral("body-waist-front");
+    turned.distance = 1.5;
+    turned.lean = -20;
+    turned.swing = 12.5;
     const QVector<VPieceArrangement> arrangements = {arrangement(10, QStringLiteral("body"), 0, 120.5),
                                                      arrangement(20, QStringLiteral("leftLeg"), 180, 60), turned};
     pattern.setArrangements(arrangements);
@@ -296,7 +299,8 @@ void TST_PatternSeams::arrangementsAreReadBack() const
     const QDomElement plain = pattern.documentElement().firstChildElement(QStringLiteral("arrangements"))
                                   .firstChildElement(QStringLiteral("arrangement"));
     QVERIFY(!plain.hasAttribute(QStringLiteral("rotation")) && !plain.hasAttribute(QStringLiteral("turnedOver"))
-            && !plain.hasAttribute(QStringLiteral("point")));
+            && !plain.hasAttribute(QStringLiteral("point")) && !plain.hasAttribute(QStringLiteral("distance"))
+            && !plain.hasAttribute(QStringLiteral("lean")) && !plain.hasAttribute(QStringLiteral("swing")));
 
     VPieceArrangement moved = turned;
     moved.point.clear();
@@ -306,6 +310,15 @@ void TST_PatternSeams::arrangementsAreReadBack() const
     QVERIFY(!(moved == turned));
     moved = turned;
     moved.turned_over = false;
+    QVERIFY(!(moved == turned));
+    moved = turned;
+    moved.distance = 0;
+    QVERIFY(!(moved == turned));
+    moved = turned;
+    moved.lean = 0;
+    QVERIFY(!(moved == turned));
+    moved = turned;
+    moved.swing = 0;
     QVERIFY(!(moved == turned));
 }
 
@@ -337,6 +350,9 @@ void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
     arrangements[0].rotation = 270;
     arrangements[0].turned_over = true;
     arrangements[0].point = QStringLiteral("body-bust-front");
+    arrangements[0].distance = 2;
+    arrangements[0].lean = 30;
+    arrangements[0].swing = -45;
     pattern.setArrangements(arrangements);
     pattern.setSeams({seam(10, 20, false)});
 

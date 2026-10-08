@@ -211,6 +211,9 @@ const QString VAbstractPattern::AttrWaist               = QStringLiteral("waist"
 const QString VAbstractPattern::AttrHip                 = QStringLiteral("hip");
 const QString VAbstractPattern::AttrTurnedOver          = QStringLiteral("turnedOver");
 const QString VAbstractPattern::AttrArrangementPoint    = QStringLiteral("point");
+const QString VAbstractPattern::AttrDistance            = QStringLiteral("distance");
+const QString VAbstractPattern::AttrLean                = QStringLiteral("lean");
+const QString VAbstractPattern::AttrSwing               = QStringLiteral("swing");
 
 const QString VAbstractPattern::AttrAll                 = QStringLiteral("all");
 
@@ -2225,7 +2228,9 @@ bool VPieceArrangement::operator==(const VPieceArrangement& other) const
 {
     return piece_id == other.piece_id && part == other.part && qFuzzyCompare(1.0 + angle, 1.0 + other.angle)
            && qFuzzyCompare(1.0 + height, 1.0 + other.height) && qFuzzyCompare(1.0 + rotation, 1.0 + other.rotation)
-           && turned_over == other.turned_over && point == other.point;
+           && turned_over == other.turned_over && point == other.point
+           && qFuzzyCompare(1.0 + distance, 1.0 + other.distance) && qFuzzyCompare(1.0 + lean, 1.0 + other.lean)
+           && qFuzzyCompare(1.0 + swing, 1.0 + other.swing);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2433,6 +2438,9 @@ QVector<VPieceArrangement> VAbstractPattern::getArrangements() const
         arrangement.rotation = GetParametrDouble(element, AttrRotation, QStringLiteral("0"));
         arrangement.turned_over = getParameterBool(element, AttrTurnedOver, falseStr);
         arrangement.point = GetParametrEmptyString(element, AttrArrangementPoint);
+        arrangement.distance = GetParametrDouble(element, AttrDistance, QStringLiteral("0"));
+        arrangement.lean = GetParametrDouble(element, AttrLean, QStringLiteral("0"));
+        arrangement.swing = GetParametrDouble(element, AttrSwing, QStringLiteral("0"));
         arrangements.append(arrangement);
 
         element = element.nextSiblingElement(TagArrangement);
@@ -2483,6 +2491,18 @@ void VAbstractPattern::setArrangements(const QVector<VPieceArrangement>& arrange
             if (!arrangement.point.isEmpty())
             {
                 SetAttribute(tag, AttrArrangementPoint, arrangement.point);
+            }
+            if (!qFuzzyIsNull(arrangement.distance))
+            {
+                SetAttribute(tag, AttrDistance, arrangement.distance);
+            }
+            if (!qFuzzyIsNull(arrangement.lean))
+            {
+                SetAttribute(tag, AttrLean, arrangement.lean);
+            }
+            if (!qFuzzyIsNull(arrangement.swing))
+            {
+                SetAttribute(tag, AttrSwing, arrangement.swing);
             }
             element.appendChild(tag);
         }

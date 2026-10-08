@@ -173,6 +173,9 @@
                   <xs:attribute name="rotation" type="xs:double"/>
                   <xs:attribute name="turnedOver" type="xs:boolean"/>
                   <xs:attribute name="point" type="xs:string"/>
+                  <xs:attribute name="distance" type="xs:double"/>
+                  <xs:attribute name="lean" type="xs:double"/>
+                  <xs:attribute name="swing" type="xs:double"/>
                 </xs:complexType>
               </xs:element>
             </xs:sequence>

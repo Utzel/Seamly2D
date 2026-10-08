@@ -131,7 +131,8 @@ struct VSeam
 /// "leftArm" or "rightArm", at an angle around it in degrees, 0 in front, and with its middle at a height in cm above
 /// the floor; on an arm, the height of the point of the arm's middle line the piece's middle is at. The piece can be
 /// rotated clockwise, in degrees as seen from outside, and turned over, its other side out. Put at one of the avatar's
-/// arrangement points, such as "body-waist-front", it goes where that point is on whichever avatar wears it.
+/// arrangement points, such as "body-waist-front", it goes where that point is on whichever avatar wears it. It can
+/// start out further from the body, in cm, and lean its top out and swing a side out, in degrees.
 struct VPieceArrangement
 {
     quint32 piece_id {NULL_ID};
@@ -141,6 +142,9 @@ struct VPieceArrangement
     qreal   rotation {0};
     bool    turned_over {false};
     QString point {};
+    qreal   distance {0};
+    qreal   lean {0};
+    qreal   swing {0};
 
     bool    operator==(const VPieceArrangement& other) const;
 };
@@ -556,6 +560,9 @@ public:
     static const QString AttrHip;
     static const QString AttrTurnedOver;
     static const QString AttrArrangementPoint;
+    static const QString AttrDistance;
+    static const QString AttrLean;
+    static const QString AttrSwing;
 
     static const QString AttrAll;
 
