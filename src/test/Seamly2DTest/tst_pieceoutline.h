@@ -46,6 +46,7 @@ private slots:
     void unevenNotchesMatchOnlyTheEnds() const;
     void stitchesSewBothSides() const;
     void stitchesFollowNotches() const;
+    void joinedStretchesSewAsOne() const;
 
 private:
     Q_DISABLE_COPY(TST_PieceOutline)

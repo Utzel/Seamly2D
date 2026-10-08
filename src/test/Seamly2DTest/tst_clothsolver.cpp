@@ -720,6 +720,74 @@ void TST_ClothSolver::layersKeepTheirOrder() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+void TST_ClothSolver::piecesGatherIntoOneSeam_data() const
+{
+    onProcessorAndDevice();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Two panels 20 cm wide sewn along their tops, one after the other, to the 20 cm lower edge of a band held up, as a
+// gathered skirt's panels are to a waistband: the seam closes, the panels' 40 cm gathered into the band's 20, the
+// first panel's outer corner at the band's start and the second's at its end.
+void TST_ClothSolver::piecesGatherIntoOneSeam() const
+{
+    QFETCH(bool, on_device);
+    ClothSettings settings;
+    settings.floor = false;
+    ClothSolver solver(settings);
+    const PieceMesher mesher;
+    const GarmentMesh band = mesher.meshOutline(rectangle(0, -4, 20, 4, 1));
+    const GarmentMesh left = mesher.meshOutline(rectangle(-10, 0, 20, 15, 11));
+    const GarmentMesh right = mesher.meshOutline(rectangle(10, 0, 20, 15, 21));
+    const quint32 band_offset = solver.addMesh(band, standing(band));
+    const quint32 left_offset = solver.addMesh(left, standing(left));
+    const quint32 right_offset = solver.addMesh(right, standing(right));
+
+    // The band's lower edge runs from its right end to its left, so it is turned to run as the panels' tops do.
+    const SeamStretch tops = SeamStretch::joined({left.stretch(11, 12, left_offset),
+                                                  right.stretch(21, 22, right_offset)});
+    solver.addStitches(SeamStretch::stitches(tops, band.stretch(3, 4, band_offset).reversed()));
+    for (int i = 0; i < band.vertexCount(); ++i)
+    {
+        if (band.rest_positions.at(i).y() < -3.99)
+        {
+            solver.setPinned(band_offset + static_cast<quint32>(i), true);
+        }
+    }
+    ComputeDevice device;
+    if (on_device && !solver.useDevice(device.open()))
+    {
+        QSKIP("No graphics card here can compute");
+    }
+    for (int i = 0; i < 300; ++i)
+    {
+        solver.step(frame);
+    }
+    QCOMPARE(solver.isOnDevice(), on_device);
+    const qreal widest = solver.widestStitch();
+    solver.useDevice(nullptr);
+
+    const QVector<QVector3D> positions = solver.positions();
+    auto at = [&positions](const GarmentMesh& mesh, quint32 offset, const QPointF& rest)
+    {
+        int nearest = 0;
+        for (int i = 0; i < mesh.vertexCount(); ++i)
+        {
+            nearest = QLineF(mesh.rest_positions.at(i), rest).length()
+                              < QLineF(mesh.rest_positions.at(nearest), rest).length() ? i : nearest;
+        }
+        return positions.at(static_cast<int>(offset) + nearest);
+    };
+    const float start_apart = (at(left, left_offset, QPointF(-10, 0)) - at(band, band_offset, QPointF(0, 0))).length();
+    const float end_apart = (at(right, right_offset, QPointF(30, 0)) - at(band, band_offset, QPointF(20, 0))).length();
+    const float gathered = (at(right, right_offset, QPointF(30, 0)) - at(left, left_offset, QPointF(-10, 0))).length();
+    QVERIFY2(widest < 0.5 && start_apart < 0.5f && end_apart < 0.5f && gathered < 21.0f,
+             qUtf8Printable(QStringLiteral("the widest stitch is %1 cm, the panels' outer corners %2 and %3 cm from "
+                                           "the band's ends, %4 cm apart").arg(widest).arg(start_apart).arg(end_apart)
+                                .arg(gathered)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void TST_ClothSolver::seamsCloseDespiteSelfContact_data() const
 {
     onProcessorAndDevice();

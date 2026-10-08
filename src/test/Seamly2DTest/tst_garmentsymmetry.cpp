@@ -289,3 +289,66 @@ void TST_GarmentSymmetry::sideSewnToItselfMeetsItsMirror() const
 
     QVERIFY(GarmentSymmetry().madeUp({seam(10, 1, 2, 10, 1, 2, false)}).isEmpty());
 }
+
+//---------------------------------------------------------------------------------------------------------------------
+// A sleeve's cap sewn to the front's armhole and on to the back's, the back cut on the fold: the twin sews the other
+// sleeve to the other front and on to the back's mirrored half, which runs the other way there.
+void TST_GarmentSymmetry::seamsOverSeveralStretchesGetTwins() const
+{
+    GarmentSymmetry symmetry;
+    symmetry.setPiece(10, PieceSymmetry::Pair);
+    symmetry.setPiece(20, PieceSymmetry::Pair);
+    symmetry.setPiece(30, PieceSymmetry::Fold, 7, 8);
+
+    GarmentSeam cap = seam(10, 1, 2, 20, 3, 4, false);
+    cap.second_more = {{30, 5, 6, false}};
+    cap.angle = 180;
+    QVector<GarmentSeam> made_up = symmetry.madeUp({cap});
+    QCOMPARE(made_up.size(), 2);
+    const GarmentSeam& twin = made_up.at(1);
+    QCOMPARE(twin.first, GarmentSeamSide({PieceOutline::mirrorId(10), 1, 2, false}));
+    QCOMPARE(twin.second, GarmentSeamSide({PieceOutline::mirrorId(20), 3, 4, false}));
+    QCOMPARE(twin.second_more,
+             QVector<GarmentSeamSide>({{30, PieceOutline::mirrorId(6), PieceOutline::mirrorId(5), true}}));
+    QVERIFY(twin.first_more.isEmpty());
+    QVERIFY(!twin.reverse);
+    QCOMPARE(twin.angle, 180.0);
+
+    // Starting on the back, the twin's second side starts on its mirrored half, running backward there, and goes on
+    // to the other front in the same order.
+    GarmentSeam from_back = seam(10, 1, 2, 30, 5, 6, true);
+    from_back.second_more = {{20, 3, 4, false}};
+    made_up = symmetry.madeUp({from_back});
+    QCOMPARE(made_up.size(), 2);
+    QCOMPARE(made_up.at(1).second, GarmentSeamSide({30, PieceOutline::mirrorId(6), PieceOutline::mirrorId(5), true}));
+    QCOMPARE(made_up.at(1).second_more, QVector<GarmentSeamSide>({{PieceOutline::mirrorId(20), 3, 4, false}}));
+    QVERIFY(made_up.at(1).reverse);
+
+    // On a mirror image, a stretch's mirror image is on the piece itself.
+    GarmentSeamSide mirror;
+    bool turned = true;
+    QVERIFY(symmetry.mirrored({PieceOutline::mirrorId(20), 3, 4, false}, &mirror, &turned));
+    QCOMPARE(mirror, GarmentSeamSide({20, 3, 4, false}));
+    QVERIFY(!turned);
+
+    QCOMPARE(reversedSide({{20, 3, 4, false}, {30, 5, 6, true}}),
+             QVector<GarmentSeamSide>({{30, 5, 6, false}, {20, 3, 4, true}}));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A waistband sewn to both fronts, the second a mirror image, has no twin: it would sew the same fronts again. Nor
+// does a seam with a stretch on a piece cut once.
+void TST_GarmentSymmetry::seamsAroundTheBodyHaveNoTwins() const
+{
+    GarmentSymmetry symmetry;
+    symmetry.setPiece(20, PieceSymmetry::Pair);
+    symmetry.setPiece(40, PieceSymmetry::Pair);
+
+    GarmentSeam around = seam(20, 3, 4, 40, 1, 2, false);
+    around.first_more = {{PieceOutline::mirrorId(20), 3, 4, true}};
+    QCOMPARE(symmetry.madeUp({around}).size(), 1);
+
+    GarmentSeam on_single = seam(20, 3, 4, 50, 1, 2, false);
+    on_single.first_more = {{40, 5, 6, false}};
+    QCOMPARE(symmetry.madeUp({on_single}).size(), 1);
+}

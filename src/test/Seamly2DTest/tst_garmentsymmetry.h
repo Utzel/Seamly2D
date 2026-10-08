@@ -44,6 +44,8 @@ private slots:
     void seamsOnFoldsGetTurnedTwins() const;
     void piecesCutOnceHaveNoTwins() const;
     void sideSewnToItselfMeetsItsMirror() const;
+    void seamsOverSeveralStretchesGetTwins() const;
+    void seamsAroundTheBodyHaveNoTwins() const;
 
 private:
     Q_DISABLE_COPY(TST_GarmentSymmetry)

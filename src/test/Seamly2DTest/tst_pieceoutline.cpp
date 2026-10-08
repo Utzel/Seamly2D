@@ -302,3 +302,37 @@ void TST_PieceOutline::stitchesFollowNotches() const
     QCOMPARE(middle->edge_end, 13u);
     QVERIFY(qAbs(middle->along - (9.0 + 3.0 * 3.0 / 8.0 - 8.0) / 4.0) < 1e-9);
 }
+
+//---------------------------------------------------------------------------------------------------------------------
+// A 10 cm stretch and a 20 cm one far apart, joined, are one 30 cm stretch, the second taking up where the first ends,
+// with both's vertices and notches. A 15 cm stretch sewn to them is eased onto both evenly: where they join, 10 of
+// the 30 cm, is a third of the way along it.
+void TST_PieceOutline::joinedStretchesSewAsOne() const
+{
+    const SeamStretch first({QPointF(0, 0), QPointF(10, 0)}, {}, {0, 1});
+    const SeamStretch second({QPointF(100, 50), QPointF(100, 60), QPointF(100, 70)}, {5}, {10, 11, 12});
+    const SeamStretch joined = SeamStretch::joined({first, second});
+    QCOMPARE(joined.length(), 30.0);
+    QCOMPARE(joined.vertices(), QVector<quint32>({0, 1, 10, 11, 12}));
+    QCOMPARE(joined.notches(), QVector<qreal>({15.0}));
+    QCOMPARE(joined.distances(), QVector<qreal>({0.0, 10.0, 10.0, 20.0, 30.0}));
+    QVERIFY(SeamStretch::joined({first, SeamStretch({QPointF(0, 0), QPointF(5, 0)})}).vertices().isEmpty());
+
+    const SeamStretch other({QPointF(0, -10), QPointF(5, -10), QPointF(10, -10), QPointF(15, -10)}, {}, {20, 21, 22, 23});
+    const QVector<Stitch> stitches = SeamStretch::stitches(joined, other);
+    auto stitch_of = [&stitches](quint32 vertex)
+    {
+        const auto found = std::find_if(stitches.cbegin(), stitches.cend(), [vertex](const Stitch& stitch)
+        {
+            return stitch.vertex == vertex;
+        });
+        return found != stitches.cend() ? *found : Stitch();
+    };
+    QCOMPARE(stitch_of(1).edge_start, 21u);
+    QCOMPARE(stitch_of(1).edge_end, 21u);
+    QCOMPARE(stitch_of(10).edge_start, 21u);
+    QCOMPARE(stitch_of(10).edge_end, 21u);
+    QCOMPARE(stitch_of(11).edge_start, 22u);
+    QCOMPARE(stitch_of(11).edge_end, 22u);
+    QCOMPARE(stitch_of(12).edge_start, 23u);
+}

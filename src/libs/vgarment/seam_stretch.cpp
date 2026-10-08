@@ -221,6 +221,39 @@ SeamStretch SeamStretch::reversed() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief Stretches sewn one after the other as one, as the side of a seam that goes on over several, as CLO's M:N
+/// sewing: each takes up where the one before ends, however far apart they lie as drafted, so the other side is eased
+/// onto all of them evenly. It has their notches, and knows its vertices if they all do.
+SeamStretch SeamStretch::joined(const QVector<SeamStretch>& stretches)
+{
+    QVector<QPointF> points;
+    QVector<qreal> notches;
+    QVector<quint32> vertices;
+    bool all_vertices = true;
+    qreal before = 0;
+    for (const SeamStretch& stretch : stretches)
+    {
+        if (stretch.points().isEmpty())
+        {
+            continue;
+        }
+        const QPointF shift = points.isEmpty() ? QPointF() : points.last() - stretch.points().first();
+        for (const QPointF& point : stretch.points())
+        {
+            points.append(point + shift);
+        }
+        for (const qreal notch : stretch.notches())
+        {
+            notches.append(before + notch);
+        }
+        all_vertices = all_vertices && stretch.vertices().size() == stretch.points().size();
+        vertices += stretch.vertices();
+        before += stretch.length();
+    }
+    return SeamStretch(points, notches, all_vertices ? vertices : QVector<quint32>());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief Where two stretches sewn together meet: at their starts, at their notches, and at their ends.
 ///
 /// Notches are matched in order, the way they are lined up when sewing, so only when both stretches have as many.

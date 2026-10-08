@@ -67,6 +67,7 @@ public:
     QPointF                   pointAt(qreal distance) const;
     SeamStretch               reversed() const;
 
+    static SeamStretch        joined(const QVector<SeamStretch>& stretches);
     static QVector<SeamMatch> matches(const SeamStretch& first, const SeamStretch& second);
     static QVector<Stitch>    stitches(const SeamStretch& first, const SeamStretch& second);
 
