@@ -113,6 +113,7 @@ const QString VAbstractPattern::TagLayers               = QStringLiteral("layers
 const QString VAbstractPattern::TagLayer                = QStringLiteral("layer");
 const QString VAbstractPattern::TagFabrics              = QStringLiteral("fabrics");
 const QString VAbstractPattern::TagFabric               = QStringLiteral("fabric");
+const QString VAbstractPattern::TagCustomFabric         = QStringLiteral("customFabric");
 const QString VAbstractPattern::TagTexture              = QStringLiteral("texture");
 const QString VAbstractPattern::TagTopstitches          = QStringLiteral("topstitches");
 const QString VAbstractPattern::TagTopstitch            = QStringLiteral("topstitch");
@@ -233,6 +234,13 @@ const QString VAbstractPattern::AttrNumber              = QStringLiteral("number
 const QString VAbstractPattern::AttrRatio               = QStringLiteral("ratio");
 const QString VAbstractPattern::AttrShrinkageWeft       = QStringLiteral("shrinkageWeft");
 const QString VAbstractPattern::AttrShrinkageWarp       = QStringLiteral("shrinkageWarp");
+const QString VAbstractPattern::AttrWeight              = QStringLiteral("weight");
+const QString VAbstractPattern::AttrWarp                = QStringLiteral("warp");
+const QString VAbstractPattern::AttrWeft                = QStringLiteral("weft");
+const QString VAbstractPattern::AttrBias                = QStringLiteral("bias");
+const QString VAbstractPattern::AttrBendingWarp         = QStringLiteral("bendingWarp");
+const QString VAbstractPattern::AttrBendingWeft         = QStringLiteral("bendingWeft");
+const QString VAbstractPattern::AttrThickness           = QStringLiteral("thickness");
 const QString VAbstractPattern::AttrAvatar              = QStringLiteral("avatar");
 const QString VAbstractPattern::AttrEdgeLength          = QStringLiteral("edgeLength");
 const QString VAbstractPattern::AttrCopy                = QStringLiteral("copy");
@@ -2361,6 +2369,18 @@ bool VFabricShrinkage::operator==(const VFabricShrinkage& other) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+bool VCustomFabric::operator==(const VCustomFabric& other) const
+{
+    auto same = [](qreal value, qreal other_value)
+    {
+        return qFuzzyCompare(1.0 + value, 1.0 + other_value);
+    };
+    return name == other.name && same(weight, other.weight) && same(warp, other.warp) && same(weft, other.weft)
+           && same(bias, other.bias) && same(bending_warp, other.bending_warp)
+           && same(bending_weft, other.bending_weft) && same(thickness, other.thickness);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 bool VPieceFabric::operator==(const VPieceFabric& other) const
 {
     return piece_id == other.piece_id && fabric == other.fabric && texture == other.texture
@@ -2371,7 +2391,7 @@ bool VPieceFabric::operator==(const VPieceFabric& other) const
 bool VGarmentFabrics::operator==(const VGarmentFabrics& other) const
 {
     return garment == other.garment && texture == other.texture && pieces == other.pieces
-           && shrinkage == other.shrinkage;
+           && shrinkage == other.shrinkage && custom == other.custom;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2424,6 +2444,20 @@ VFabricShrinkage VGarmentFabrics::shrinkageOf(quint32 piece_id) const
         }
     }
     return shrinkage;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The pattern's own fabric of that name; one with no name for none.
+VCustomFabric VGarmentFabrics::customFabric(const QString& name) const
+{
+    for (const VCustomFabric& fabric : custom)
+    {
+        if (!name.isEmpty() && fabric.name == name)
+        {
+            return fabric;
+        }
+    }
+    return VCustomFabric();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2934,6 +2968,22 @@ VGarmentFabrics VAbstractPattern::getFabrics() const
     fabrics.garment = fabrics_element.isNull() ? QString() : GetParametrEmptyString(fabrics_element, AttrDefault);
     fabrics.texture = readFabricTexture(fabrics_element);
     fabrics.shrinkage = read_shrinkage(fabrics_element);
+    QDomElement custom = fabrics_element.firstChildElement(TagCustomFabric);
+    while (!custom.isNull())
+    {
+        VCustomFabric fabric;
+        fabric.name = GetParametrEmptyString(custom, AttrName);
+        fabric.weight = GetParametrDouble(custom, AttrWeight, QStringLiteral("0"));
+        fabric.warp = GetParametrDouble(custom, AttrWarp, QStringLiteral("0"));
+        fabric.weft = GetParametrDouble(custom, AttrWeft, QStringLiteral("0"));
+        fabric.bias = GetParametrDouble(custom, AttrBias, QStringLiteral("0"));
+        fabric.bending_warp = GetParametrDouble(custom, AttrBendingWarp, QStringLiteral("0"));
+        fabric.bending_weft = GetParametrDouble(custom, AttrBendingWeft, QStringLiteral("0"));
+        fabric.thickness = GetParametrDouble(custom, AttrThickness, QStringLiteral("0"));
+        fabrics.custom.append(fabric);
+
+        custom = custom.nextSiblingElement(TagCustomFabric);
+    }
     QDomElement element = fabrics_element.firstChildElement(TagFabric);
     while (!element.isNull())
     {
@@ -2950,7 +3000,8 @@ VGarmentFabrics VAbstractPattern::getFabrics() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-/// @brief Replaces the fabrics, one per piece at most. Meant to be called by the SaveFabrics undo command.
+/// @brief Replaces the fabrics, one per piece at most, and the pattern's own. Meant to be called by the SaveFabrics
+/// undo command.
 void VAbstractPattern::setFabrics(const VGarmentFabrics& fabrics)
 {
     QDomElement pattern = documentElement();
@@ -2981,7 +3032,8 @@ void VAbstractPattern::setFabrics(const VGarmentFabrics& fabrics)
         }
     };
 
-    if (fabrics.garment.isEmpty() && fabrics.texture.isNull() && fabrics.pieces.isEmpty() && fabrics.shrinkage.isNull())
+    if (fabrics.garment.isEmpty() && fabrics.texture.isNull() && fabrics.pieces.isEmpty() && fabrics.shrinkage.isNull()
+        && fabrics.custom.isEmpty())
     {
         if (!element.isNull())
         {
@@ -3008,6 +3060,19 @@ void VAbstractPattern::setFabrics(const VGarmentFabrics& fabrics)
             SetAttribute(element, AttrDefault, fabrics.garment);
         }
         set_shrinkage(element, fabrics.shrinkage);
+        for (const VCustomFabric& fabric : fabrics.custom)
+        {
+            QDomElement tag = createElement(TagCustomFabric);
+            SetAttribute(tag, AttrName, fabric.name);
+            SetAttribute(tag, AttrWeight, fabric.weight);
+            SetAttribute(tag, AttrWarp, fabric.warp);
+            SetAttribute(tag, AttrWeft, fabric.weft);
+            SetAttribute(tag, AttrBias, fabric.bias);
+            SetAttribute(tag, AttrBendingWarp, fabric.bending_warp);
+            SetAttribute(tag, AttrBendingWeft, fabric.bending_weft);
+            SetAttribute(tag, AttrThickness, fabric.thickness);
+            element.appendChild(tag);
+        }
         append_texture(element, fabrics.texture);
         for (const VPieceFabric& fabric : fabrics.pieces)
         {

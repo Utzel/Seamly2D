@@ -265,6 +265,18 @@
         <xs:element name="fabrics" minOccurs="0" maxOccurs="1">
           <xs:complexType>
             <xs:sequence>
+              <xs:element name="customFabric" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="name" type="customFabricName" use="required"/>
+                  <xs:attribute name="weight" type="fabricProperty" use="required"/>
+                  <xs:attribute name="warp" type="fabricProperty" use="required"/>
+                  <xs:attribute name="weft" type="fabricProperty" use="required"/>
+                  <xs:attribute name="bias" type="fabricProperty" use="required"/>
+                  <xs:attribute name="bendingWarp" type="fabricProperty" use="required"/>
+                  <xs:attribute name="bendingWeft" type="fabricProperty" use="required"/>
+                  <xs:attribute name="thickness" type="fabricProperty" use="required"/>
+                </xs:complexType>
+              </xs:element>
               <xs:element name="texture" type="fabricTexture" minOccurs="0" maxOccurs="1"/>
               <xs:element name="fabric" minOccurs="0" maxOccurs="unbounded">
                 <xs:complexType>
@@ -285,6 +297,10 @@
           <xs:unique name="fabricPiece">
             <xs:selector xpath="fabric"/>
             <xs:field xpath="@piece"/>
+          </xs:unique>
+          <xs:unique name="fabricName">
+            <xs:selector xpath="customFabric"/>
+            <xs:field xpath="@name"/>
           </xs:unique>
         </xs:element>
         <xs:element name="topstitches" minOccurs="0" maxOccurs="1">
@@ -1008,6 +1024,16 @@
       </xs:extension>
     </xs:simpleContent>
   </xs:complexType>
+  <xs:simpleType name="customFabricName">
+    <xs:restriction base="xs:string">
+      <xs:minLength value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="fabricProperty">
+    <xs:restriction base="xs:double">
+      <xs:minExclusive value="0"/>
+    </xs:restriction>
+  </xs:simpleType>
   <xs:simpleType name="shrinkage">
     <xs:restriction base="xs:double">
       <xs:minInclusive value="0.5"/>

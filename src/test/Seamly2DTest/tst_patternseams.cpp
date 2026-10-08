@@ -490,6 +490,7 @@ void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
     fabrics.pieces = {{20, QStringLiteral("chiffon"), {}}, {30, QString(), texture(QByteArrayLiteral("print"), 30)},
                       {40, QString(), {}, {0.8, 1.0}}};
     fabrics.shrinkage = {0.95, 1.1};
+    fabrics.custom = {{QStringLiteral("Heavy twill"), 380, 3500, 2200, 280, 55, 40, 0.9}};
     pattern.setFabrics(fabrics);
     pattern.setArrangements({arrangement(10, QStringLiteral("body"), 0, 120),
                              arrangement(20, QStringLiteral("leftLeg"), 0, 60),
@@ -658,6 +659,38 @@ void TST_PatternSeams::fabricShrinkageIsReadBack() const
     shrinkage_only.shrinkage = {1.0, 0.85};
     pattern.setFabrics(shrinkage_only);
     QCOMPARE(pattern.getFabrics(), shrinkage_only);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The pattern keeps fabrics of its own, which the garment and its pieces are cut from by name, as from the 3D View's.
+// They alone are stored.
+void TST_PatternSeams::customFabricsAreReadBack() const
+{
+    SeamsPattern pattern;
+    VGarmentFabrics fabrics;
+    fabrics.custom = {{QStringLiteral("Heavy twill"), 380, 3500, 2200, 280, 55, 40, 0.9},
+                      {QStringLiteral("Rib knit"), 220, 90, 40, 60, 2.5, 1.5, 1.1}};
+    fabrics.garment = QStringLiteral("Heavy twill");
+    fabrics.pieces = {{10, QStringLiteral("Rib knit"), {}, {}}};
+    pattern.setFabrics(fabrics);
+
+    const VGarmentFabrics read = pattern.getFabrics();
+    QCOMPARE(read, fabrics);
+    QCOMPARE(read.customFabric(read.of(10)).bending_weft, 1.5);
+    QCOMPARE(read.customFabric(read.of(20)).warp, 3500.0);
+    QVERIFY(read.customFabric(QStringLiteral("denim")).name.isEmpty());
+    QVERIFY(read.customFabric(QString()).name.isEmpty());
+    const QDomElement custom = pattern.documentElement().firstChildElement(QStringLiteral("fabrics"))
+                                   .firstChildElement(QStringLiteral("customFabric"));
+    QCOMPARE(custom.attribute(QStringLiteral("bendingWarp")), QStringLiteral("55"));
+    VCustomFabric changed = fabrics.custom.at(0);
+    changed.bending_weft = 41;
+    QVERIFY(!(changed == fabrics.custom.at(0)));
+
+    VGarmentFabrics custom_only;
+    custom_only.custom = {fabrics.custom.at(1)};
+    pattern.setFabrics(custom_only);
+    QCOMPARE(pattern.getFabrics(), custom_only);
 }
 
 //---------------------------------------------------------------------------------------------------------------------

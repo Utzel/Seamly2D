@@ -221,8 +221,25 @@ struct VFabricShrinkage
     bool  operator==(const VFabricShrinkage& other) const;
 };
 
-/// A piece cut from another fabric than the rest of the garment, the name of one of the 3D View's fabrics, or empty
-/// for the garment's, and an image of its own of the fabric and how much it shrinks, if any.
+/// A fabric of the pattern's own, as CLO's fabric properties: its name, which the garment and its pieces are cut from
+/// as from the 3D View's fabrics, how heavy it is, how hard it is to stretch along its grain, across it and on the
+/// bias, how stiffly it bends along its grain and across it, and how thick it is.
+struct VCustomFabric
+{
+    QString name {};
+    qreal   weight {0};        ///< in g per square metre
+    qreal   warp {0};          ///< how hard it is to stretch along the grain, in N/m
+    qreal   weft {0};          ///< across the grain
+    qreal   bias {0};          ///< at 45 degrees to the grain
+    qreal   bending_warp {0};  ///< bending rigidity curving the grain, in micro newton metres
+    qreal   bending_weft {0};  ///< curving across the grain
+    qreal   thickness {0};     ///< in mm
+
+    bool    operator==(const VCustomFabric& other) const;
+};
+
+/// A piece cut from another fabric than the rest of the garment, the name of one of the 3D View's fabrics or of the
+/// pattern's own, or empty for the garment's, and an image of its own of the fabric and how much it shrinks, if any.
 struct VPieceFabric
 {
     quint32          piece_id {NULL_ID};
@@ -235,18 +252,20 @@ struct VPieceFabric
 
 /// The fabrics a garment is cut from, for the 3D View's drape: one for all its pieces, empty for the 3D View's
 /// default, and another for any piece cut from something else; each with an image of it and how much it shrinks, if
-/// any.
+/// any; and the fabrics of the pattern's own they may be.
 struct VGarmentFabrics
 {
-    QString               garment {};
-    VFabricTexture        texture {};
-    QVector<VPieceFabric> pieces {};
-    VFabricShrinkage      shrinkage {};
+    QString                garment {};
+    VFabricTexture         texture {};
+    QVector<VPieceFabric>  pieces {};
+    VFabricShrinkage       shrinkage {};
+    QVector<VCustomFabric> custom {};
 
-    bool                  operator==(const VGarmentFabrics& other) const;
-    QString               of(quint32 piece_id) const;
-    VFabricTexture        textureOf(quint32 piece_id) const;
-    VFabricShrinkage      shrinkageOf(quint32 piece_id) const;
+    bool                   operator==(const VGarmentFabrics& other) const;
+    QString                of(quint32 piece_id) const;
+    VFabricTexture         textureOf(quint32 piece_id) const;
+    VFabricShrinkage       shrinkageOf(quint32 piece_id) const;
+    VCustomFabric          customFabric(const QString& name) const;
 };
 
 /// A segment of a piece's seam line, from one point of the piece's path to the next, topstitched in the 3D View in a
@@ -578,6 +597,7 @@ public:
     static const QString TagLayer;
     static const QString TagFabrics;
     static const QString TagFabric;
+    static const QString TagCustomFabric;
     static const QString TagTexture;
     static const QString TagTopstitches;
     static const QString TagTopstitch;
@@ -698,6 +718,13 @@ public:
     static const QString AttrRatio;
     static const QString AttrShrinkageWeft;
     static const QString AttrShrinkageWarp;
+    static const QString AttrWeight;
+    static const QString AttrWarp;
+    static const QString AttrWeft;
+    static const QString AttrBias;
+    static const QString AttrBendingWarp;
+    static const QString AttrBendingWeft;
+    static const QString AttrThickness;
     static const QString AttrAvatar;
     static const QString AttrEdgeLength;
     static const QString AttrCopy;
