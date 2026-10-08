@@ -220,3 +220,34 @@ void TST_GarmentMesh::drapeCarriesOverToAFinerMesh() const
     }
     QVERIFY2(worst < 0.1, qUtf8Printable(QStringLiteral("a vertex is %1 cm off").arg(worst)));
 }
+
+//---------------------------------------------------------------------------------------------------------------------
+// A drape kept only as where its vertices were in the flat and draped, as a pattern keeps it, carries over to the piece
+// lengthened by 4 cm as well as from the mesh itself: the vertices' Delaunay triangles stand in for the mesh's.
+void TST_GarmentMesh::drapeKnownByItsVerticesCarriesOver() const
+{
+    const qreal radius = 15;
+    auto wrapped = [radius](const QPointF& point)
+    {
+        const qreal angle = point.x() / radius;
+        return QVector3D(static_cast<float>(radius * qSin(angle)), static_cast<float>(-point.y()),
+                         static_cast<float>(radius * qCos(angle)));
+    };
+    const GarmentMesh before = rectangleMesh();
+    const GarmentMesh known = PieceMesher::meshPoints(before.rest_positions);
+    QCOMPARE(known.vertexCount(), before.vertexCount());
+    QVERIFY(known.triangleCount() > 0);
+
+    const GarmentMesh after = PieceMesher().meshPolygon({QPointF(0, 0), QPointF(30, 0), QPointF(30, 24),
+                                                         QPointF(0, 24)});
+    const QVector<QVector3D> carried = known.carry(placed(before, wrapped), after);
+    QCOMPARE(carried.size(), after.vertexCount());
+    qreal worst = 0;
+    for (int i = 0; i < after.vertexCount(); ++i)
+    {
+        worst = qMax(worst, static_cast<qreal>((carried.at(i) - wrapped(after.rest_positions.at(i))).length()));
+    }
+    QVERIFY2(worst < 0.1, qUtf8Printable(QStringLiteral("a vertex is %1 cm off").arg(worst)));
+
+    QVERIFY(PieceMesher::meshPoints({QPointF(0, 0), QPointF(1, 0)}).indices.isEmpty());
+}

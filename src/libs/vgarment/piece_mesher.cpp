@@ -520,3 +520,14 @@ GarmentMesh PieceMesher::meshPiece(quint32 piece_id, const VPiece& piece, const 
     mesh.piece_id = piece_id;
     return mesh;
 }
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The Delaunay triangles of points as they are, such as the vertices of a mesh known only by them, without an
+/// outline: the triangles fill their convex hull. Points that can't be triangulated give a mesh without triangles.
+GarmentMesh PieceMesher::meshPoints(const QVector<QPointF>& points)
+{
+    GarmentMesh mesh;
+    mesh.rest_positions = points;
+    mesh.indices = delaunayTriangles(points);
+    return mesh;
+}

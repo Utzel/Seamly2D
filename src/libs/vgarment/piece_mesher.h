@@ -56,6 +56,8 @@ public:
     GarmentMesh        meshOutline(const PieceOutline& outline) const;
     GarmentMesh        meshPiece(quint32 piece_id, const VPiece& piece, const VContainer* data) const;
 
+    static GarmentMesh meshPoints(const QVector<QPointF>& points);
+
 private:
     qreal              m_edge_length;
 };

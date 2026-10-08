@@ -42,6 +42,7 @@ private slots:
     void positionsOfAnotherMeshAreIgnored() const;
     void drapeCarriesOverToAChangedPiece() const;
     void drapeCarriesOverToAFinerMesh() const;
+    void drapeKnownByItsVerticesCarriesOver() const;
 
 private:
     Q_DISABLE_COPY(TST_GarmentMesh)
