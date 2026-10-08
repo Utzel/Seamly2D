@@ -117,12 +117,15 @@ struct VSeamSide
 };
 
 /// Two stretches of seam line sewn together. The sides' starts meet and their ends meet; with reverse the first
-/// side's start meets the second side's end.
+/// side's start meets the second side's end. The seam can hold the pieces at an angle on the first side's right side,
+/// as VFold says: 180 flat, 360 turned, as at the edge of a collar; less than 0 for none, letting them bend across it
+/// as they will.
 struct VSeam
 {
     VSeamSide first {};
     VSeamSide second {};
     bool      reverse {false};
+    qreal     angle {-1};
 
     bool      operator==(const VSeam& other) const;
 };

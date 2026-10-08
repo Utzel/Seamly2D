@@ -2273,7 +2273,8 @@ bool VSeamSide::operator==(const VSeamSide& other) const
 //---------------------------------------------------------------------------------------------------------------------
 bool VSeam::operator==(const VSeam& other) const
 {
-    return first == other.first && second == other.second && reverse == other.reverse;
+    return first == other.first && second == other.second && reverse == other.reverse
+           && qFuzzyCompare(1.0 + angle, 1.0 + other.angle);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2455,6 +2456,7 @@ QVector<VSeam> VAbstractPattern::getSeams() const
         seam.second.start_node = GetParametrUInt(element, AttrSecondStart, NULL_ID_STR);
         seam.second.end_node = GetParametrUInt(element, AttrSecondEnd, NULL_ID_STR);
         seam.reverse = getParameterBool(element, AttrNodeReverse, falseStr);
+        seam.angle = GetParametrDouble(element, AttrAngle, QStringLiteral("-1"));
         seams.append(seam);
 
         element = element.nextSiblingElement(TagSeam);
@@ -2500,6 +2502,10 @@ void VAbstractPattern::setSeams(const QVector<VSeam>& seams)
             if (seam.reverse)
             {
                 SetAttribute(tag, AttrNodeReverse, seam.reverse);
+            }
+            if (seam.angle >= 0)
+            {
+                SetAttribute(tag, AttrAngle, seam.angle);
             }
             element.appendChild(tag);
         }

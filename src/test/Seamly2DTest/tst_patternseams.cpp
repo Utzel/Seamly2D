@@ -33,6 +33,7 @@
 #include <QtTest>
 
 #include "../ifc/exception/vexception.h"
+#include "../ifc/ifcdef.h"
 #include "../ifc/xml/vabstractpattern.h"
 #include "../ifc/xml/vpatternconverter.h"
 #include "../vtools/undocommands/save_arrangements.h"
@@ -208,16 +209,20 @@ TST_PatternSeams::TST_PatternSeams(QObject* parent)
 void TST_PatternSeams::seamsAreReadBack() const
 {
     SeamsPattern pattern;
-    const QVector<VSeam> seams = {seam(10, 20, false), seam(30, 30, true)};
+    QVector<VSeam> seams = {seam(10, 20, false), seam(30, 30, true), seam(40, 50, false)};
+    seams[1].angle = 360;
+    seams[2].angle = 0;
     pattern.setSeams(seams);
 
     QCOMPARE(pattern.getSeams(), seams);
 
-    // Seams sewn the usual way don't spell it out.
+    // Seams sewn the usual way, letting the pieces bend across them, don't spell it out.
     const QDomElement first = pattern.documentElement().firstChildElement(VAbstractPattern::TagSeams)
                                                        .firstChildElement(VAbstractPattern::TagSeam);
     QVERIFY(!first.hasAttribute(VAbstractPattern::AttrNodeReverse));
+    QVERIFY(!first.hasAttribute(AttrAngle));
     QCOMPARE(first.nextSiblingElement().attribute(VAbstractPattern::AttrNodeReverse), QStringLiteral("true"));
+    QCOMPARE(first.nextSiblingElement().attribute(AttrAngle), QStringLiteral("360"));
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -225,7 +230,9 @@ void TST_PatternSeams::seamsAreReadBack() const
 void TST_PatternSeams::seamsFollowTheSchema() const
 {
     SeamsPattern pattern;
-    pattern.setSeams({seam(10, 20, false), seam(30, 40, true)});
+    VSeam turned = seam(30, 40, true);
+    turned.angle = 360;
+    pattern.setSeams({seam(10, 20, false), turned});
 
     QCOMPARE(childTags(pattern.documentElement()),
              QStringList({QStringLiteral("version"), QStringLiteral("unit"), QStringLiteral("measurements"),

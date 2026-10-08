@@ -156,6 +156,14 @@
                   <xs:attribute name="secondStart" type="xs:unsignedInt" use="required"/>
                   <xs:attribute name="secondEnd" type="xs:unsignedInt" use="required"/>
                   <xs:attribute name="reverse" type="xs:boolean"/>
+                  <xs:attribute name="angle">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:double">
+                        <xs:minInclusive value="0"/>
+                        <xs:maxInclusive value="360"/>
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
                 </xs:complexType>
               </xs:element>
             </xs:sequence>
