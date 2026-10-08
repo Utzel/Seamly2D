@@ -38,6 +38,8 @@ private slots:
     void seamsFollowTheSchema() const;
     void noSeamsLeaveNoElement() const;
     void undoRestoresSeams() const;
+    void foldsAreReadBack() const;
+    void undoRestoresFolds() const;
     void olderPatternsAreConverted() const;
     void arrangementsAreReadBack() const;
     void garmentDataKeepsSchemaOrder() const;

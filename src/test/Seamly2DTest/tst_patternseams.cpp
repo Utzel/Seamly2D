@@ -38,6 +38,7 @@
 #include "../vtools/undocommands/save_arrangements.h"
 #include "../vtools/undocommands/save_avatar.h"
 #include "../vtools/undocommands/save_fabrics.h"
+#include "../vtools/undocommands/save_folds.h"
 #include "../vtools/undocommands/save_seams.h"
 #include "../vtools/undocommands/save_topstitches.h"
 
@@ -278,6 +279,41 @@ void TST_PatternSeams::undoRestoresSeams() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// Folds keep the path and the angle; none leave no element.
+void TST_PatternSeams::foldsAreReadBack() const
+{
+    SeamsPattern pattern;
+    QVERIFY(pattern.getFolds().isEmpty());
+
+    const QVector<VFold> folds = {{10, 31, 0}, {10, 32, 90}, {20, 41, 337.5}};
+    pattern.setFolds(folds);
+    QCOMPARE(pattern.getFolds(), folds);
+    QCOMPARE(pattern.documentElement().elementsByTagName(QStringLiteral("fold")).size(), 3);
+
+    pattern.setFolds(QVector<VFold>());
+    QVERIFY(pattern.documentElement().firstChildElement(QStringLiteral("folds")).isNull());
+    QVERIFY(pattern.getFolds().isEmpty());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_PatternSeams::undoRestoresFolds() const
+{
+    SeamsPattern pattern;
+    const QVector<VFold> before = {{10, 31, 0}};
+    const QVector<VFold> after = {{10, 31, 360}, {20, 41, 90}};
+    pattern.setFolds(before);
+
+    QSignalSpy changes(&pattern, &VAbstractPattern::foldsChanged);
+    QUndoStack stack;
+    stack.push(new SaveFolds(QStringLiteral("fold"), before, after, &pattern));
+    QCOMPARE(pattern.getFolds(), after);
+
+    stack.undo();
+    QCOMPARE(pattern.getFolds(), before);
+    QCOMPARE(changes.count(), 2);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Patterns saved before seams existed open as they are.
 void TST_PatternSeams::olderPatternsAreConverted() const
 {
@@ -347,13 +383,14 @@ void TST_PatternSeams::arrangementsAreReadBack() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Whichever is made first, the seams come before the arrangements, those before the fabrics, those before the
-// topstitching, that before the avatar, that before the drape, and all before the draft blocks. Pieces can be arranged
-// on every part of the body.
+// Whichever is made first, the seams come before the folds, those before the arrangements, those before the fabrics,
+// those before the topstitching, that before the avatar, that before the drape, and all before the draft blocks.
+// Pieces can be arranged on every part of the body.
 void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
 {
     SeamsPattern pattern;
     pattern.setDrape(drape());
+    pattern.setFolds({{10, 31, 0}, {20, 32, 270.5}});
     pattern.setAvatar(avatar(true, 52, 180.5, 104, 92, 108));
     VTopstitches topstitches;
     topstitches.all = true;
@@ -383,7 +420,8 @@ void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
 
     QCOMPARE(childTags(pattern.documentElement()),
              QStringList({QStringLiteral("version"), QStringLiteral("unit"), QStringLiteral("measurements"),
-                          QStringLiteral("finalMeasurements"), QStringLiteral("seams"), QStringLiteral("arrangements"),
+                          QStringLiteral("finalMeasurements"), QStringLiteral("seams"), QStringLiteral("folds"),
+                          QStringLiteral("arrangements"),
                           QStringLiteral("fabrics"), QStringLiteral("topstitches"), QStringLiteral("avatar"),
                           QStringLiteral("drape"), QStringLiteral("draftBlock"), QStringLiteral("draftBlock")}));
 

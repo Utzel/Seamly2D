@@ -127,6 +127,18 @@ struct VSeam
     bool      operator==(const VSeam& other) const;
 };
 
+/// A fold along one of a piece's internal paths: the angle the cloth makes across it on its right side, the side the
+/// piece is drafted from, in degrees. 180 lies flat, less folds the right side in and more the wrong side; 0 and 360
+/// fold it onto itself.
+struct VFold
+{
+    quint32 piece_id {NULL_ID};
+    quint32 path_id {NULL_ID};
+    qreal   angle {180};
+
+    bool    operator==(const VFold& other) const;
+};
+
 /// Where a piece starts out on the avatar: wrapped around a part of the body, "body", "leftLeg", "rightLeg",
 /// "leftArm" or "rightArm", at an angle around it in degrees, 0 in front, and with its middle at a height in cm above
 /// the floor; on an arm, the height of the point of the arm's middle line the piece's middle is at. The piece can be
@@ -297,6 +309,9 @@ public:
 
     QVector<VSeam>                 getSeams() const;
     void                           setSeams(const QVector<VSeam>& seams);
+
+    QVector<VFold>                 getFolds() const;
+    void                           setFolds(const QVector<VFold>& folds);
 
     QVector<VPieceArrangement>     getArrangements() const;
     void                           setArrangements(const QVector<VPieceArrangement>& arrangements);
@@ -493,6 +508,8 @@ public:
     static const QString TagFinalMeasurement;
     static const QString TagSeams;
     static const QString TagSeam;
+    static const QString TagFolds;
+    static const QString TagFold;
     static const QString TagArrangements;
     static const QString TagArrangement;
     static const QString TagFabrics;
@@ -730,6 +747,7 @@ signals:
     void           UpdateInLayoutList(quint32 id);
     void           showPiece(quint32 id);
     void           seamsChanged();
+    void           foldsChanged();
     void           arrangementsChanged();
     void           fabricsChanged();
     void           topstitchesChanged();

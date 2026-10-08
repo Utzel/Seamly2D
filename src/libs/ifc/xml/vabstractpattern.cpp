@@ -101,6 +101,8 @@ const QString VAbstractPattern::TagFinalMeasurements    = QStringLiteral("finalM
 const QString VAbstractPattern::TagFinalMeasurement     = QStringLiteral("finalMeasurement");
 const QString VAbstractPattern::TagSeams                = QStringLiteral("seams");
 const QString VAbstractPattern::TagSeam                 = QStringLiteral("seam");
+const QString VAbstractPattern::TagFolds                = QStringLiteral("folds");
+const QString VAbstractPattern::TagFold                 = QStringLiteral("fold");
 const QString VAbstractPattern::TagArrangements         = QStringLiteral("arrangements");
 const QString VAbstractPattern::TagArrangement          = QStringLiteral("arrangement");
 const QString VAbstractPattern::TagFabrics              = QStringLiteral("fabrics");
@@ -2275,6 +2277,12 @@ bool VSeam::operator==(const VSeam& other) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+bool VFold::operator==(const VFold& other) const
+{
+    return piece_id == other.piece_id && path_id == other.path_id && qFuzzyCompare(1.0 + angle, 1.0 + other.angle);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 bool VPieceArrangement::operator==(const VPieceArrangement& other) const
 {
     return piece_id == other.piece_id && part == other.part && qFuzzyCompare(1.0 + angle, 1.0 + other.angle)
@@ -2498,6 +2506,64 @@ void VAbstractPattern::setSeams(const QVector<VSeam>& seams)
     }
 
     emit seamsChanged();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The internal paths the pieces are folded along. A fold can name a piece or path that is gone; it is kept,
+/// so undoing the deletion brings it back, and whoever uses it has to skip it.
+QVector<VFold> VAbstractPattern::getFolds() const
+{
+    QVector<VFold> folds;
+    QDomElement element = documentElement().firstChildElement(TagFolds).firstChildElement(TagFold);
+    while (!element.isNull())
+    {
+        VFold fold;
+        fold.piece_id = GetParametrUInt(element, AttrPiece, NULL_ID_STR);
+        fold.path_id = GetParametrUInt(element, AttrPath, NULL_ID_STR);
+        fold.angle = GetParametrDouble(element, AttrAngle, QStringLiteral("180"));
+        folds.append(fold);
+
+        element = element.nextSiblingElement(TagFold);
+    }
+    return folds;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Replaces the folds, one per internal path at most. Meant to be called by the SaveFolds undo command.
+void VAbstractPattern::setFolds(const QVector<VFold>& folds)
+{
+    QDomElement pattern = documentElement();
+    QDomElement element = pattern.firstChildElement(TagFolds);
+
+    if (folds.isEmpty())
+    {
+        if (!element.isNull())
+        {
+            pattern.removeChild(element);
+        }
+    }
+    else
+    {
+        if (element.isNull())
+        {
+            element = createGarmentElement(TagFolds);
+        }
+        else
+        {
+            RemoveAllChildren(element);
+        }
+
+        for (const VFold& fold : folds)
+        {
+            QDomElement tag = createElement(TagFold);
+            SetAttribute(tag, AttrPiece, fold.piece_id);
+            SetAttribute(tag, AttrPath, fold.path_id);
+            SetAttribute(tag, AttrAngle, fold.angle);
+            element.appendChild(tag);
+        }
+    }
+
+    emit foldsChanged();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2912,11 +2978,11 @@ void VAbstractPattern::setDrape(const VGarmentDrape& drape)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Adds an empty element for the 3D garment's data where the schema wants it: the seams, the arrangements, the fabrics,
-// the topstitching, the avatar, then the drape, all before the draft blocks, which are added at the end.
+// Adds an empty element for the 3D garment's data where the schema wants it: the seams, the folds, the arrangements,
+// the fabrics, the topstitching, the avatar, then the drape, all before the draft blocks, which are added at the end.
 QDomElement VAbstractPattern::createGarmentElement(const QString& tag)
 {
-    const QStringList order = {TagSeams, TagArrangements, TagFabrics, TagTopstitches, TagAvatar, TagDrape,
+    const QStringList order = {TagSeams, TagFolds, TagArrangements, TagFabrics, TagTopstitches, TagAvatar, TagDrape,
                                TagDraftBlock};
     QDomElement pattern = documentElement();
 

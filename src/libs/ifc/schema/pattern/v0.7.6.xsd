@@ -161,6 +161,31 @@
             </xs:sequence>
           </xs:complexType>
         </xs:element>
+        <xs:element name="folds" minOccurs="0" maxOccurs="1">
+          <xs:complexType>
+            <xs:sequence minOccurs="0" maxOccurs="unbounded">
+              <xs:element name="fold" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="piece" type="xs:unsignedInt" use="required"/>
+                  <xs:attribute name="path" type="xs:unsignedInt" use="required"/>
+                  <xs:attribute name="angle" use="required">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:double">
+                        <xs:minInclusive value="0"/>
+                        <xs:maxInclusive value="360"/>
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+          <xs:unique name="foldPath">
+            <xs:selector xpath="fold"/>
+            <xs:field xpath="@piece"/>
+            <xs:field xpath="@path"/>
+          </xs:unique>
+        </xs:element>
         <xs:element name="arrangements" minOccurs="0" maxOccurs="1">
           <xs:complexType>
             <xs:sequence minOccurs="0" maxOccurs="unbounded">

@@ -17,6 +17,7 @@ HEADERS += \
     $$PWD/save_arrangements.h \
     $$PWD/save_avatar.h \
     $$PWD/save_fabrics.h \
+    $$PWD/save_folds.h \
     $$PWD/save_topstitches.h \
     $$PWD/save_seams.h \
     $$PWD/savetooloptions.h \
@@ -56,6 +57,7 @@ SOURCES += \
     $$PWD/save_arrangements.cpp \
     $$PWD/save_avatar.cpp \
     $$PWD/save_fabrics.cpp \
+    $$PWD/save_folds.cpp \
     $$PWD/save_topstitches.cpp \
     $$PWD/save_seams.cpp \
     $$PWD/savetooloptions.cpp \
