@@ -1001,3 +1001,87 @@ void TST_BodyModel::piecesTurnAndTurnOver() const
     QVERIFY(sleeve.at(vertex(top_left)).y() > sleeve.at(vertex(bottom_left)).y());
     QVERIFY(sleeve_turned.at(vertex(top_left)).y() < sleeve_turned.at(vertex(bottom_left)).y());
 }
+
+//---------------------------------------------------------------------------------------------------------------------
+// A piece faces out at its middle, across towards larger angles and up towards its top. Put further out, it is that
+// much further off the body; leaning, its top comes out; swinging, its side towards larger angles comes out. Leaning
+// and swinging turn it as it is, on the body or an arm.
+void TST_BodyModel::piecesMoveAndTilt() const
+{
+    const BodyModel model;
+    const QVector<QVector3D> positions = model.evaluate(female());
+    const BodyWrap wrap(model, positions);
+    const QPointF top_left(0, 0);
+    const QPointF top_right(20, 0);
+    const QPointF bottom_left(0, 30);
+    const GarmentMesh mesh = PieceMesher().meshPolygon({top_left, top_right, QPointF(20, 30), bottom_left});
+    auto vertex = [&mesh](const QPointF& rest)
+    {
+        int found = -1;
+        for (int i = 0; i < mesh.vertexCount(); ++i)
+        {
+            found = QLineF(mesh.rest_positions.at(i), rest).length() < 1e-6 ? i : found;
+        }
+        return found;
+    };
+    auto worstStrain = [&mesh](const QVector<QVector3D>& placed)
+    {
+        qreal worst = 0;
+        for (int t = 0; t + 2 < mesh.indices.size(); t += 3)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                const int a = static_cast<int>(mesh.indices.at(t + k));
+                const int b = static_cast<int>(mesh.indices.at(t + (k + 1) % 3));
+                const qreal rest = QLineF(mesh.rest_positions.at(a), mesh.rest_positions.at(b)).length();
+                worst = qMax(worst, qAbs((placed.at(a) - placed.at(b)).length() / rest - 1.0));
+            }
+        }
+        return worst;
+    };
+
+    // In front of the waist.
+    const PieceArrangement front = wrap.points().at(wrap.pointNamed(QStringLiteral("body-waist-front"))).arrangement;
+    const PieceFrame frame = wrap.frameOf(mesh, front);
+    QVERIFY(frame.out.z() > 0.99f && frame.up.y() > 0.99f && frame.across.x() > 0.99f);
+    QVERIFY(qAbs(QVector3D::dotProduct(frame.across, frame.up)) < 1e-4f);
+    QVERIFY(qAbs(frame.middle.y() - front.height) < 1e-3);
+    const QVector<QVector3D> as_put = wrap.place(mesh, front);
+    QVERIFY(as_put.at(vertex(top_left)).z() < frame.middle.z());
+
+    PieceArrangement further = front;
+    further.distance = 3;
+    const PieceFrame further_frame = wrap.frameOf(mesh, further);
+    QVERIFY2(qAbs((further_frame.middle - frame.middle).z() - 3.0f) < 1e-3f,
+             qUtf8Printable(QString::number((further_frame.middle - frame.middle).z())));
+
+    // Leaning right out, the piece lies level, its top in front; swinging right out, its right side is in front.
+    PieceArrangement leaning = front;
+    leaning.lean = 90;
+    const QVector<QVector3D> leant = wrap.place(mesh, leaning);
+    QVERIFY2(qAbs(leant.at(vertex(top_left)).y() - frame.middle.y()) < 5.0f
+                 && leant.at(vertex(top_left)).z() > frame.middle.z() + 12.0f
+                 && leant.at(vertex(bottom_left)).z() < frame.middle.z() - 12.0f,
+             qUtf8Printable(QStringLiteral("top left at %1, %2").arg(leant.at(vertex(top_left)).y())
+                                .arg(leant.at(vertex(top_left)).z())));
+    QVERIFY(worstStrain(leant) < 0.01);
+
+    PieceArrangement swinging = front;
+    swinging.swing = 90;
+    const QVector<QVector3D> swung = wrap.place(mesh, swinging);
+    QVERIFY(swung.at(vertex(top_right)).z() > frame.middle.z() + 7.0f);
+    QVERIFY(swung.at(vertex(top_left)).z() < frame.middle.z() - 7.0f);
+    QVERIFY(qAbs(swung.at(vertex(top_left)).y() - as_put.at(vertex(top_left)).y()) < 1e-3f);
+    QVERIFY(worstStrain(swung) < 0.01);
+
+    // On an arm: the frame faces out from the arm, up towards the shoulder.
+    const ArrangementPoint elbow = wrap.points().at(wrap.pointNamed(QStringLiteral("leftArm-elbow-outside")));
+    const PieceFrame arm_frame = wrap.frameOf(mesh, elbow.arrangement);
+    QVERIFY2(QVector3D::dotProduct(arm_frame.out, elbow.normal) > 0.95f,
+             qUtf8Printable(QString::number(QVector3D::dotProduct(arm_frame.out, elbow.normal))));
+    QVERIFY(arm_frame.up.y() > 0.3f);
+    PieceArrangement arm_leaning = elbow.arrangement;
+    arm_leaning.lean = 30;
+    arm_leaning.swing = -20;
+    QVERIFY(worstStrain(wrap.place(mesh, arm_leaning)) - worstStrain(wrap.place(mesh, elbow.arrangement)) < 1e-3);
+}

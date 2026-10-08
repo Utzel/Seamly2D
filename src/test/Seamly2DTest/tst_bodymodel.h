@@ -59,6 +59,7 @@ private slots:
     void arrangementPointsSitOnTheBody() const;
     void arrangementPointsFollowTheAvatar() const;
     void piecesTurnAndTurnOver() const;
+    void piecesMoveAndTilt() const;
 
 private:
     Q_DISABLE_COPY(TST_BodyModel)

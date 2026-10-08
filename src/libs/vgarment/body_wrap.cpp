@@ -78,6 +78,9 @@ const qreal point_band = 2.0;
 // The calf's arrangement points are this share of the way down from the knee to the ankle.
 const qreal calf_share = 0.3;
 
+// The frame at a piece's middle is found from points this many cm to either side of the middle and above and below it.
+const qreal frame_step = 0.5;
+
 // An arm's arrangement points sit as far from its middle line as its skin reaches up to this many cm up and down the
 // arm from them, and up to this many degrees around it either way.
 const qreal arm_point_reach = 2.0;
@@ -290,14 +293,34 @@ PieceArrangement BodyWrap::resolved(const PieceArrangement& arrangement) const
 
 //---------------------------------------------------------------------------------------------------------------------
 /// @brief Where the mesh's vertices start out: the piece, turned over and rotated as the arrangement says, wrapped
-/// around the part at the arrangement's height, its middle at the arrangement's angle. Its horizontal lines run around
-/// the part, its vertical lines down it, and distances along it are kept. Put further out by `out` cm, it shows in
-/// front of pieces already put there, as a preview does.
+/// around the part at the arrangement's height and distance, its middle at the arrangement's angle, then leaning and
+/// swinging out about its middle as it is. Its horizontal lines run around the part, its vertical lines down it, and
+/// distances along it are kept. Put further out by `out` cm, it shows in front of pieces already put there, as a
+/// preview does.
 QVector<QVector3D> BodyWrap::place(const GarmentMesh& mesh, const PieceArrangement& arrangement, qreal out) const
 {
-    const QVector<QPointF> flat = arranged(mesh, arrangement);
-    return armSide(arrangement.part) >= 0 ? placeOnArm(flat, arrangement, out)
-                                          : placeUpright(flat, arrangement, out);
+    PieceFrame frame;
+    QVector<QVector3D> placed = placeFlat(arranged(mesh, arrangement), arrangement, out, &frame);
+    if (!qFuzzyIsNull(arrangement.lean) || !qFuzzyIsNull(arrangement.swing))
+    {
+        // Leaning turns its top towards the outside, swinging its side towards larger angles.
+        const QQuaternion turn = QQuaternion::fromAxisAndAngle(-frame.up, static_cast<float>(arrangement.swing))
+                                 * QQuaternion::fromAxisAndAngle(frame.across, static_cast<float>(arrangement.lean));
+        for (QVector3D& point : placed)
+        {
+            point = frame.middle + turn.rotatedVector(point - frame.middle);
+        }
+    }
+    return placed;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Which way a piece put on the avatar as the arrangement says faces at its middle, before it leans or swings.
+PieceFrame BodyWrap::frameOf(const GarmentMesh& mesh, const PieceArrangement& arrangement) const
+{
+    PieceFrame frame;
+    placeFlat(arranged(mesh, arrangement), arrangement, 0, &frame);
+    return frame;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -365,6 +388,30 @@ BodyPart BodyWrap::partFromName(const QString& name)
         }
     }
     return part;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Wraps the piece's flat points around its part, at the arrangement's distance and out cm further out, and finds the
+// frame at its middle from points of its own put to either side of the middle and above and below it.
+QVector<QVector3D> BodyWrap::placeFlat(QVector<QPointF> flat, const PieceArrangement& arrangement, qreal out,
+                                      PieceFrame* frame) const
+{
+    const int count = flat.size();
+    const QPointF middle = QPolygonF(flat).boundingRect().center();
+    flat << middle << middle + QPointF(frame_step, 0) << middle - QPointF(frame_step, 0)
+         << middle - QPointF(0, frame_step) << middle + QPointF(0, frame_step);
+    const qreal further = out + arrangement.distance;
+    QVector<QVector3D> placed = armSide(arrangement.part) >= 0 ? placeOnArm(flat, arrangement, further)
+                                                               : placeUpright(flat, arrangement, further);
+
+    // The piece scene's y axis points down, so the point above the middle is the one with the smaller y.
+    frame->middle = placed.at(count);
+    frame->across = (placed.at(count + 1) - placed.at(count + 2)).normalized();
+    const QVector3D up = placed.at(count + 3) - placed.at(count + 4);
+    frame->up = (up - frame->across * QVector3D::dotProduct(up, frame->across)).normalized();
+    frame->out = QVector3D::crossProduct(frame->across, frame->up);
+    placed.resize(count);
+    return placed;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

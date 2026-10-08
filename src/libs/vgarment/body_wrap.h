@@ -27,6 +27,7 @@
 
 #include <QPair>
 #include <QPointF>
+#include <QQuaternion>
 #include <QString>
 #include <QVector3D>
 #include <QVector>
@@ -56,6 +57,19 @@ struct PieceArrangement
     qreal    rotation = 0;         ///< degrees the piece is turned clockwise about its middle, as seen from outside
     bool     turned_over = false;  ///< the piece's other side out, as if cut from the cloth turned over
     QString  point;                ///< the arrangement point it was put at, if any; it goes there on any avatar
+    qreal    distance = 0;         ///< cm further out from the body than pieces start out
+    qreal    lean = 0;             ///< degrees its top leans out, about the line across its middle
+    qreal    swing = 0;            ///< degrees its side towards larger angles swings out, about the line up its middle
+};
+
+/// @brief Which way a piece put on the avatar faces at its middle, as wrapped before it leans or swings: across it
+/// towards larger angles around its part, up it towards its top, and out from the body.
+struct PieceFrame
+{
+    QVector3D middle;
+    QVector3D across;
+    QVector3D up;
+    QVector3D out;
 };
 
 /// @brief A place on the avatar to put pieces at, as CLO's arrangement points. Left and right are the avatar's own,
@@ -84,7 +98,7 @@ struct ArrangementPoint
 /// except where the tube bends or narrows, most of all around the elbow, where it starts out stretched on the outside
 /// of the bend and squeezed on the inside. No piece wraps all the way around, so its sides don't overlap. Seen from
 /// outside, a placed piece looks as it does in the piece scene, its top towards the shoulder on an arm, unless it is
-/// rotated or turned over.
+/// rotated or turned over. It can also be put further out, and lean or swing out as it is, as CLO's gizmo turns it.
 ///
 /// Pieces can be put anywhere on the avatar, or at its arrangement points: in front, at the sides and behind the body
 /// at the neck, the bust, the waist, the hip and halfway down the thighs, and around each leg and arm where its
@@ -99,6 +113,7 @@ public:
     PieceArrangement   arrangementOn(BodyPart part, const QVector3D& point) const;
     PieceArrangement   resolved(const PieceArrangement& arrangement) const;
     QVector<QVector3D> place(const GarmentMesh& mesh, const PieceArrangement& arrangement, qreal out = 0) const;
+    PieceFrame         frameOf(const GarmentMesh& mesh, const PieceArrangement& arrangement) const;
     QVector3D          mirrored(const QVector3D& point) const;
 
     const QVector<ArrangementPoint>& points() const;
@@ -130,6 +145,8 @@ private:
     QVector<bool>      m_skin_on_arm;       // for each skin vertex whether it is close to an arm's bones
     QVector<ArrangementPoint> m_points;
 
+    QVector<QVector3D> placeFlat(QVector<QPointF> flat, const PieceArrangement& arrangement, qreal out,
+                                 PieceFrame* frame) const;
     QVector<QVector3D> placeUpright(const QVector<QPointF>& flat, const PieceArrangement& arrangement,
                                     qreal out) const;
     QVector3D          axisAt(BodyPart part, qreal height) const;
