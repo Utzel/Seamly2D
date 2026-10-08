@@ -116,6 +116,7 @@ private slots:
     void               chooseFabricImage();
     void               changeFabricImageWidth();
     void               removeFabricImage();
+    void               chooseShrinkage();
     void               flipSeam();
     void               chooseSeamType(QAction* action);
     void               removeSelected();
@@ -318,6 +319,7 @@ private:
     QAction*                   m_image_action;
     QAction*                   m_image_width_action;
     QAction*                   m_remove_image_action;
+    QAction*                   m_shrinkage_action;
     QQuickView*                m_quick_view;
     QWidget*                   m_view_container;
     QLabel*                    m_message_label;

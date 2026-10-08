@@ -30,6 +30,10 @@
 #include <QColor>
 #include <QColorDialog>
 #include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDoubleSpinBox>
+#include <QFormLayout>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QEvent>
@@ -196,6 +200,10 @@ const qreal widest_image_width = 500.0;
 
 // Images of fabrics are kept in the pattern at most this many pixels across and along; larger ones are scaled down.
 const int kept_image_limit = 2048;
+
+// A fabric shrinks to no less than this share of its drafted size, and stretches out to no more than this one.
+const qreal least_shrinkage = 0.5;
+const qreal most_shrinkage = 1.5;
 
 // Edge length of the triangles in cm for a final drape; CLO recommends 20 mm while editing and 5 to 10 mm for the
 // final drape.
@@ -411,6 +419,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_image_action(nullptr)
     , m_image_width_action(nullptr)
     , m_remove_image_action(nullptr)
+    , m_shrinkage_action(nullptr)
     , m_quick_view(nullptr)
     , m_view_container(nullptr)
     , m_message_label(new QLabel(this))
@@ -2330,11 +2339,17 @@ void GarmentViewWidget::startSimulation()
             DrapePiece drape_piece;
             drape_piece.id = garment_piece.id;
             const quint32 piece = patternPiece(garment_piece.id);
+            Fabric fabric = Fabric::preset(fabrics.of(piece));
+            const VFabricShrinkage shrinkage = fabrics.shrinkageOf(piece);
+            if (!shrinkage.isNull())
+            {
+                fabric.shrinkage_weft = shrinkage.weft;
+                fabric.shrinkage_warp = shrinkage.warp;
+            }
             ClothLayer layer;
             layer.number = layers.value(piece, 0);
             layer.turned_over = m_arrangements.value(piece).turned_over;
-            drape_piece.offset = static_cast<int>(solver->addMesh(garment_piece.mesh, positions,
-                                                                  Fabric::preset(fabrics.of(piece)),
+            drape_piece.offset = static_cast<int>(solver->addMesh(garment_piece.mesh, positions, fabric,
                                                                   garment_piece.grain_angle,
                                                                   m_fold_editor->clothFolds(piece, garment_piece.mesh,
                                                                                             fold_strength),
@@ -2637,7 +2652,7 @@ void GarmentViewWidget::chooseFabric(int index)
                 after.pieces.append({selected, fabric, VFabricTexture()});
             }
         }
-        else if (fabric.isEmpty() && own->texture.isNull())
+        else if (fabric.isEmpty() && own->texture.isNull() && own->shrinkage.isNull())
         {
             after.pieces.erase(own);
         }
@@ -2719,6 +2734,99 @@ void GarmentViewWidget::removeFabricImage()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// How much the fabric shrinks was asked for, as CLO's shrinkage: the selected piece's, or the whole garment's when no
+// piece is selected, across the grain and along it, as a percentage of the drafted size. A piece shrinking as it
+// would anyway, as the garment's fabric does or not at all, keeps no shrinkage of its own.
+void GarmentViewWidget::chooseShrinkage()
+{
+    const VGarmentFabrics before = m_doc->getFabrics();
+    const quint32 selected = m_scene_model->selectedPiece();
+    VFabricShrinkage inherited;
+    if (selected != 0)
+    {
+        inherited = before.of(selected) == before.garment ? before.shrinkage : VFabricShrinkage();
+    }
+    const VFabricShrinkage none{1.0, 1.0};
+    auto shown = [&none](const VFabricShrinkage& shrinkage)
+    {
+        return shrinkage.isNull() ? none : shrinkage;
+    };
+    const VFabricShrinkage now = shown(selected != 0 ? before.shrinkageOf(selected) : before.shrinkage);
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Shrinkage"));
+    auto* layout = new QFormLayout(&dialog);
+    auto* note = new QLabel(selected != 0
+                            ? tr("How much the fabric of the selected piece shrinks, as a share of its drafted size: "
+                                 "less than 100% shrinks it, as a rib knit worn snug does, more stretches it out.")
+                            : tr("How much the fabric of the whole garment shrinks, as a share of its drafted size: "
+                                 "less than 100% shrinks it, as a rib knit worn snug does, more stretches it out."),
+                            &dialog);
+    note->setWordWrap(true);
+    layout->addRow(note);
+    auto percent_box = [&dialog](const QString& name, qreal share)
+    {
+        auto* box = new QDoubleSpinBox(&dialog);
+        box->setObjectName(name);
+        box->setRange(least_shrinkage * 100.0, most_shrinkage * 100.0);
+        box->setDecimals(0);
+        box->setSuffix(QStringLiteral("%"));
+        box->setValue(share * 100.0);
+        return box;
+    };
+    QDoubleSpinBox* weft = percent_box(QStringLiteral("shrinkageWeft"), now.weft);
+    QDoubleSpinBox* warp = percent_box(QStringLiteral("shrinkageWarp"), now.warp);
+    layout->addRow(tr("Across the grain:"), weft);
+    layout->addRow(tr("Along the grain:"), warp);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted)
+    {
+        return;
+    }
+
+    VFabricShrinkage chosen{weft->value() / 100.0, warp->value() / 100.0};
+    if (chosen == shown(inherited))
+    {
+        chosen = VFabricShrinkage();
+    }
+    VGarmentFabrics after = before;
+    if (selected == 0)
+    {
+        after.shrinkage = chosen;
+    }
+    else
+    {
+        auto own = std::find_if(after.pieces.begin(), after.pieces.end(), [selected](const VPieceFabric& piece)
+        {
+            return piece.piece_id == selected;
+        });
+        if (own == after.pieces.end())
+        {
+            if (!chosen.isNull())
+            {
+                after.pieces.append({selected, QString(), VFabricTexture(), chosen});
+            }
+        }
+        else if (own->fabric.isEmpty() && own->texture.isNull() && chosen.isNull())
+        {
+            after.pieces.erase(own);
+        }
+        else
+        {
+            own->shrinkage = chosen;
+        }
+    }
+
+    if (!(after == before))
+    {
+        qApp->getUndoStack()->push(new SaveFabrics(tr("change shrinkage"), before, after, m_doc));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // The image of the fabric the selected piece has of its own, or with no piece selected the garment's; null for none.
 VFabricTexture GarmentViewWidget::ownFabricImage() const
 {
@@ -2763,7 +2871,7 @@ void GarmentViewWidget::saveFabricImage(const VFabricTexture& texture, const QSt
                 after.pieces.append({selected, QString(), texture});
             }
         }
-        else if (own->fabric.isEmpty() && texture.isNull())
+        else if (own->fabric.isEmpty() && texture.isNull() && own->shrinkage.isNull())
         {
             after.pieces.erase(own);
         }
@@ -4026,6 +4134,12 @@ void GarmentViewWidget::createToolBar()
     m_remove_image_action = image_menu->addAction(tr("Remove Image"));
     m_remove_image_action->setToolTip(tr("Show the fabric in the piece's color again"));
     connect(m_remove_image_action, &QAction::triggered, this, &GarmentViewWidget::removeFabricImage);
+    image_menu->addSeparator();
+    m_shrinkage_action = image_menu->addAction(tr("Shrinkage..."));
+    m_shrinkage_action->setToolTip(tr("How much the fabric of the selected piece, or of the whole garment when no piece "
+                                      "is selected, shrinks across the grain and along it, as a rib knit worn snug "
+                                      "does"));
+    connect(m_shrinkage_action, &QAction::triggered, this, &GarmentViewWidget::chooseShrinkage);
     m_image_action->setMenu(image_menu);
     if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_image_action)))
     {
