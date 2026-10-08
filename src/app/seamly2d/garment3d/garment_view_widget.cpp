@@ -30,6 +30,7 @@
 #include <QColor>
 #include <QColorDialog>
 #include <QComboBox>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QEvent>
 #include <QFile>
@@ -195,6 +196,12 @@ const int kept_image_limit = 2048;
 // final drape.
 const qreal fine_edge_length = 1.0;
 
+// An avatar's fingerprint is this many hex digits of a SHA-1 of what it is fitted to.
+const int fingerprint_length = 16;
+
+// The pattern keeps its cloth's vertices as 32-bit floats: one that close to a vertex of a mesh is that vertex, in cm.
+const qreal same_vertex_tolerance = 1e-3;
+
 // The avatar's grey, as garment_scene.qml draws it.
 const char* const avatar_color = "#b9b4ad";
 
@@ -206,6 +213,18 @@ const char* const thread_colors[] = {"#f2f0eb", "#202020", "#c8962d", "#b3261e"}
 // outline.
 const int dark_lightness = 128;
 const int black_level = 60;
+
+//---------------------------------------------------------------------------------------------------------------------
+// Whether points are the vertices of a mesh, the same number of them, each near enough where the mesh has it.
+bool sameVertices(const QVector<QPointF>& points, const GarmentMesh& mesh)
+{
+    bool same = points.size() == mesh.vertexCount();
+    for (int i = 0; same && i < points.size(); ++i)
+    {
+        same = QLineF(points.at(i), mesh.rest_positions.at(i)).length() < same_vertex_tolerance;
+    }
+    return same;
+}
 
 //---------------------------------------------------------------------------------------------------------------------
 // The image file as an image of a fabric to keep in the pattern: a PNG or JPG file as it is, any other image, and any
@@ -279,6 +298,23 @@ bool GarmentViewWidget::AvatarRequest::hasMeasurements() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// A short fingerprint of what the avatar is fitted to, so a drape the pattern keeps is known to be draped on an avatar
+// like this one. The age is left out: worked out from a birth date, it changes from day to day.
+QString GarmentViewWidget::AvatarRequest::fingerprint() const
+{
+    const QVector<qreal> values = {wanted.height, wanted.bust, wanted.waist, wanted.hip, wanted.neck, wanted.upper_arm,
+                                   wanted.lower_arm, wanted.arm, wanted.crotch, wanted.knee_height, wanted.knee,
+                                   wanted.calf, gender};
+    QStringList texts;
+    for (const qreal value : values)
+    {
+        texts.append(QString::number(value, 'f', 2));
+    }
+    const QByteArray hash = QCryptographicHash::hash(texts.join(QLatin1Char(' ')).toLatin1(), QCryptographicHash::Sha1);
+    return QString::fromLatin1(hash.toHex().left(fingerprint_length));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QWidget* parent)
     : QWidget(parent)
     , m_data(data)
@@ -347,6 +383,10 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_pins()
     , m_resting(false)
     , m_pull()
+    , m_avatar_fingerprint()
+    , m_drape_taken_in(false)
+    , m_cloths_taken_in()
+    , m_pattern_drape()
 {
     QVBoxLayout* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -443,10 +483,15 @@ void GarmentViewWidget::selectPiece(quint32 id)
 //---------------------------------------------------------------------------------------------------------------------
 void GarmentViewWidget::clear()
 {
+    m_drape_taken_in = false;  // nothing more goes into the pattern being closed
+    m_cloths_taken_in.clear();
+    m_pattern_drape = VGarmentDrape();
+    m_avatar_fingerprint.clear();
     m_simulate_action->setChecked(false);
     m_arrange_action->setChecked(false);
     m_runner->stop();
     m_draped.clear();
+    m_pins.clear();
     m_arrangements.clear();
     m_wrap.reset();
     m_collider = BodyCollider();
@@ -589,6 +634,7 @@ void GarmentViewWidget::rebuildScene()
     {
         draped = m_mesh_cache.contains(patternPiece(draped.key())) ? std::next(draped) : m_draped.erase(draped);
     }
+    carried = dressTakenIn() || carried;
     m_turned_pairs.clear();  // turnedPairs() places body pieces, and those are never turned
     m_turned_pairs = turnedPairs(false);
     m_turned_pairs = turnedPairs(true);  // then pieces sewn only to pieces on arms or legs follow those
@@ -699,6 +745,7 @@ void GarmentViewWidget::rebuildScene()
         startSimulation();
     }
     updateActions();
+    keepDrape();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -712,6 +759,134 @@ bool GarmentViewWidget::carryDrape(quint32 id, const GarmentMesh& before, const 
         m_draped.insert(id, carried);
     }
     return !carried.isEmpty();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Takes in the drape the pattern was saved with, if it was draped on an avatar fitted to what this one is: the pieces
+// are meshed as finely as they were then, their cloth goes onto the meshes when the scene is built next, and the pins
+// hold it again.
+void GarmentViewWidget::takeInDrape()
+{
+    m_cloths_taken_in.clear();
+    const VGarmentDrape drape = m_doc->getDrape();
+    if (drape.isNull() || drape.avatar != m_avatar_fingerprint)
+    {
+        return;
+    }
+
+    if (drape.edge_length > 0 && !qFuzzyCompare(drape.edge_length, m_mesher.edgeLength()))
+    {
+        m_mesher.setEdgeLength(drape.edge_length);
+        const QSignalBlocker blocker(m_fine_action);
+        m_fine_action->setChecked(m_mesher.edgeLength() < PieceMesher::defaultEdgeLength());
+    }
+    m_cloths_taken_in = drape.cloths;
+    for (const VClothPin& pin : drape.pins)
+    {
+        m_pins.append({pin.copy ? PieceOutline::mirrorId(pin.piece_id) : pin.piece_id, QPointF(pin.x, pin.y),
+                       QVector3D(static_cast<float>(pin.at_x), static_cast<float>(pin.at_y),
+                                 static_cast<float>(pin.at_z))});
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Puts the cloth taken in from the pattern onto the pieces' meshes, those of pieces still on the avatar. Onto a piece
+// meshed differently since, edited or meshed finer or coarser, the cloth carries over; says whether any did.
+bool GarmentViewWidget::dressTakenIn()
+{
+    bool carried = false;
+    for (const VDrapedCloth& cloth : std::as_const(m_cloths_taken_in))
+    {
+        const CachedMesh cached = m_mesh_cache.value(cloth.piece_id);
+        const GarmentMesh& mesh = cloth.copy ? cached.mirror_mesh : cached.garment_mesh;
+        if (mesh.isEmpty() || !m_arrangements.contains(cloth.piece_id))
+        {
+            continue;
+        }
+
+        QVector<QPointF> rest;
+        QVector<QVector3D> positions;
+        const int count = qMin(cloth.rest.size() / 2, cloth.positions.size() / 3);
+        for (int i = 0; i < count; ++i)
+        {
+            rest.append(QPointF(static_cast<qreal>(cloth.rest.at(2 * i)), static_cast<qreal>(cloth.rest.at(2 * i + 1))));
+            positions.append(QVector3D(cloth.positions.at(3 * i), cloth.positions.at(3 * i + 1),
+                                       cloth.positions.at(3 * i + 2)));
+        }
+
+        const quint32 id = cloth.copy ? PieceOutline::mirrorId(cloth.piece_id) : cloth.piece_id;
+        if (sameVertices(rest, mesh))
+        {
+            m_draped.insert(id, positions);
+        }
+        else
+        {
+            const QVector<QVector3D> moved = PieceMesher::meshPoints(rest).carry(positions, mesh);
+            if (!moved.isEmpty())
+            {
+                m_draped.insert(id, moved);
+                carried = true;
+            }
+        }
+    }
+    m_cloths_taken_in.clear();
+    return carried;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The drape as it is now, for the pattern to keep: the cloth of each piece on the avatar that has draped, where its
+// mesh's vertices lie in the flat and where they hang, and the pins.
+VGarmentDrape GarmentViewWidget::currentDrape() const
+{
+    VGarmentDrape drape;
+    for (const GarmentPiece& garment_piece : m_garment_pieces)
+    {
+        const QVector<QVector3D> positions = m_draped.value(garment_piece.id);
+        if (!positions.isEmpty() && positions.size() == garment_piece.mesh.vertexCount())
+        {
+            VDrapedCloth cloth;
+            cloth.piece_id = patternPiece(garment_piece.id);
+            cloth.copy = PieceOutline::isMirrorId(garment_piece.id);
+            cloth.rest.reserve(2 * positions.size());
+            cloth.positions.reserve(3 * positions.size());
+            for (int i = 0; i < positions.size(); ++i)
+            {
+                const QPointF& rest = garment_piece.mesh.rest_positions.at(i);
+                const QVector3D& position = positions.at(i);
+                cloth.rest << static_cast<float>(rest.x()) << static_cast<float>(rest.y());
+                cloth.positions << position.x() << position.y() << position.z();
+            }
+            drape.cloths.append(cloth);
+        }
+    }
+    for (const ClothPin& pin : m_pins)
+    {
+        drape.pins.append({patternPiece(pin.piece), PieceOutline::isMirrorId(pin.piece), pin.rest.x(), pin.rest.y(),
+                           pin.position.x(), pin.position.y(), pin.position.z()});
+    }
+
+    if (!drape.isNull())
+    {
+        drape.avatar = m_avatar_fingerprint;
+        drape.edge_length = m_mesher.edgeLength();
+    }
+    return drape;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Keeps the drape in the pattern while the cloth is still, so the pattern opens with the garment hanging as it does
+// now. Until the pattern's own drape was taken in for the avatar shown, that one is left as it is.
+void GarmentViewWidget::keepDrape()
+{
+    if (m_drape_taken_in && !isDraping())
+    {
+        const VGarmentDrape drape = currentDrape();
+        if (!(drape == m_pattern_drape))
+        {
+            m_pattern_drape = drape;
+            m_doc->setDrape(drape);
+        }
+    }
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -731,8 +906,10 @@ void GarmentViewWidget::updateAvatar()
             m_scene_model->clearAvatar();
             if (!m_wrap.isNull())
             {
-                // Without an avatar, arranged pieces go back on the board.
+                // Without an avatar, arranged pieces go back on the board; the pattern keeps its drape for when
+                // there is one again.
                 m_simulate_action->setChecked(false);
+                m_drape_taken_in = false;
                 m_draped.clear();
                 m_wrap.reset();
                 m_collider = BodyCollider();
@@ -779,15 +956,22 @@ void GarmentViewWidget::avatarFitted()
             m_scene_model->setAvatar(result.positions, m_body_model->triangles(), m_body_model->skinVertexCount(),
                                      avatarNote(result));
 
-            // A new body takes the drape and the pins with it; arranged pieces are put on it afresh.
+            // A new body takes the drape and the pins with it; arranged pieces are put on it afresh, or back where
+            // the pattern was draped, on an avatar fitted to the same. That is what the pattern has then, until the
+            // cloth moves.
             m_simulate_action->setChecked(false);
+            m_drape_taken_in = false;
             m_draped.clear();
             m_pins.clear();
             m_wrap.reset(new BodyWrap(*m_body_model, result.positions));
             m_collider = BodyCollider(result.positions.mid(0, m_body_model->skinVertexCount()),
                                       m_body_model->triangles());
             m_scene_model->setBody(m_collider);
+            m_avatar_fingerprint = result.request.fingerprint();
+            takeInDrape();
             rebuildScene();
+            m_pattern_drape = currentDrape();
+            m_drape_taken_in = true;
         }
     }
     else if (m_has_avatar_request)
@@ -1856,6 +2040,7 @@ void GarmentViewWidget::setSimulating(bool simulating)
     else
     {
         m_runner->stop();
+        keepDrape();
     }
     updateActions();
 }
@@ -1984,6 +2169,7 @@ void GarmentViewWidget::drapeSettled(int generation)
     {
         m_resting = true;
         updateHint();
+        keepDrape();
     }
 }
 
@@ -2645,6 +2831,7 @@ void GarmentViewWidget::unpin(int index)
         m_pins.remove(index);
         updateHolds();
         updateActions();
+        keepDrape();
     }
 }
 
@@ -2659,6 +2846,7 @@ void GarmentViewWidget::removeAllPins()
     }
     updateHolds();
     updateActions();
+    keepDrape();
 }
 
 //---------------------------------------------------------------------------------------------------------------------

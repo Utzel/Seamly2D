@@ -34,6 +34,7 @@
 #include <QVector>
 #include <QWidget>
 
+#include "../ifc/xml/vabstractpattern.h"
 #include "../vgarment/body_collider.h"
 #include "../vgarment/body_fitter.h"
 #include "../vgarment/body_model.h"
@@ -74,7 +75,7 @@ struct VTopstitches;
 /// pieces are only meshed while it is visible, so the view costs nothing until it is used. The avatar is fitted on a
 /// worker thread and only when the measurements change. Seams are sewn on the board of pieces and pieces arranged on
 /// the avatar, both through the undo stack like any other change to the pattern. The drape is simulated on a thread
-/// of its own.
+/// of its own, and kept in the pattern whenever the cloth is still, so the pattern opens with the garment draped.
 class GarmentViewWidget : public QWidget
 {
     Q_OBJECT
@@ -201,6 +202,7 @@ private:
 
         bool             operator==(const AvatarRequest& other) const;
         bool             hasMeasurements() const;
+        QString          fingerprint() const;
     };
 
     struct AvatarFit
@@ -318,6 +320,10 @@ private:
     QVector<ClothPin>          m_pins;
     bool                       m_resting;
     ClothPull                  m_pull;
+    QString                    m_avatar_fingerprint;  ///< of what the avatar shown was fitted to
+    bool                       m_drape_taken_in;      ///< whether the pattern's drape was taken in for this avatar
+    QVector<VDrapedCloth>      m_cloths_taken_in;     ///< the pattern's cloth, for the meshes about to be made
+    VGarmentDrape              m_pattern_drape;       ///< the drape the pattern has, as taken in or kept since
 
     void               createScene();
     void               createToolBar();
@@ -346,6 +352,10 @@ private:
     void               readArrangements();
     qreal              grainAngle(const VPiece& piece) const;
     bool               carryDrape(quint32 id, const GarmentMesh& before, const GarmentMesh& after);
+    void               takeInDrape();
+    bool               dressTakenIn();
+    VGarmentDrape      currentDrape() const;
+    void               keepDrape();
     QString            fabricTitle(const QString& fabric) const;
     QString            stitchStyleTitle(const TopstitchStyle& style) const;
     QVector<ExportMesh> exportMeshes() const;
