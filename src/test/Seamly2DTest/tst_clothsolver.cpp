@@ -1038,6 +1038,51 @@ void TST_ClothSolver::stifferFabricBendsLess() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// A fabric stiff to bend along its grain but limp across it, as some twills and ribbed knits are: held level along one
+// end, a strip cut along the grain reaches out about as far as one of a fabric that stiff every way, and one cut
+// across the grain droops about as far as one of a fabric that limp.
+void TST_ClothSolver::bendingFollowsTheGrain() const
+{
+    const GarmentMesh strip = PieceMesher().meshOutline(rectangle(0, 0, 7, 8, 1));
+    auto tip = [&strip](qreal bending_warp, qreal bending_weft, qreal grain_angle)
+    {
+        ClothSettings settings;
+        settings.floor = false;
+        ClothSolver solver(settings);
+        Fabric fabric = Fabric::preset(QStringLiteral("chiffon"));
+        fabric.bending_warp = bending_warp;
+        fabric.bending_weft = bending_weft;
+        solver.addMesh(strip, lyingFlat(strip, 0), fabric, grain_angle);
+        for (int i = 0; i < strip.vertexCount(); ++i)
+        {
+            solver.setPinned(static_cast<quint32>(i), strip.rest_positions.at(i).x() < 2.5);
+        }
+        for (int i = 0; i < 300; ++i)
+        {
+            solver.step(frame);
+        }
+        const QVector<QVector3D> positions = solver.positions();
+        int end = 0;
+        for (int i = 0; i < strip.vertexCount(); ++i)
+        {
+            end = QLineF(strip.rest_positions.at(i), QPointF(7, 4)).length()
+                          < QLineF(strip.rest_positions.at(end), QPointF(7, 4)).length() ? i : end;
+        }
+        return positions.at(end);
+    };
+
+    const QVector3D stiff = tip(30, 30, 0);
+    const QVector3D limp = tip(0.5, 0.5, 0);
+    const QVector3D along = tip(30, 0.5, 0);
+    const QVector3D across = tip(30, 0.5, 90);
+    QVERIFY2(stiff.y() > limp.y() + 1.5f && along.y() > limp.y() + 0.8f * (stiff.y() - limp.y())
+                 && across.y() < limp.y() + 0.2f * (stiff.y() - limp.y()),
+             qUtf8Printable(QStringLiteral("the tips droop to %1 cm stiff, %2 cm limp, %3 cm cut along the grain, "
+                                           "%4 cm cut across it").arg(stiff.y()).arg(limp.y()).arg(along.y())
+                                .arg(across.y())));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Pulled on the bias, a woven's threads turn rather than stretch: its shear stiffness follows from its bias
 // stiffness, and never comes out harder than stretching across the grain.
 void TST_ClothSolver::shearFollowsFromBias() const

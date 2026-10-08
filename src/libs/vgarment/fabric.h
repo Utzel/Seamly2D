@@ -30,9 +30,9 @@
 #include <QtGlobal>
 
 /// @brief A fabric as fabric testing describes it: how heavy it is, how much it resists being stretched along its
-/// grain, across it and on the bias, and how stiffly it bends; and, as CLO's shrinkage, the share of its drafted size
-/// the cloth wants to be across the grain and along it: less than 1 shrinks it, as a rib knit worn snug, more stretches
-/// it out.
+/// grain, across it and on the bias, and how stiffly it bends along its grain and across it; and, as CLO's shrinkage,
+/// the share of its drafted size the cloth wants to be across the grain and along it: less than 1 shrinks it, as a rib
+/// knit worn snug, more stretches it out.
 ///
 /// Woven fabrics barely stretch along or across their grain but give on the bias, where the threads only have to
 /// turn; knits give in every direction. The presets are typical values, in the ranges fabric tests such as KES-F
@@ -44,7 +44,8 @@ struct Fabric
     qreal   warp_stiffness = 2000.0; ///< how hard it is to stretch along the grain, in N/m
     qreal   weft_stiffness = 1200.0; ///< across the grain, in N/m
     qreal   bias_stiffness = 150.0;  ///< at 45 degrees to the grain, in N/m
-    qreal   bending = 8.0;           ///< bending rigidity, in micro newton metres
+    qreal   bending_warp = 8.0;      ///< bending rigidity curving the grain, in micro newton metres
+    qreal   bending_weft = 8.0;      ///< curving across the grain
     qreal   thickness = 0.3;         ///< how thick it is, in mm, as the 3D View draws it
     qreal   shrinkage_weft = 1.0;    ///< the share of its drafted size it wants to be across the grain
     qreal   shrinkage_warp = 1.0;    ///< along the grain

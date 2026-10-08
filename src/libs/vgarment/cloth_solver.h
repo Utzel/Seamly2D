@@ -254,7 +254,7 @@ private:
     QVector<int>       m_pieces;       // which piece each vertex is of, in the order they were added
     QVector<QPointF>   m_rest;         // where each vertex is in its flat piece
     QVector<int>       m_piece_start;  // where each piece's vertices start, and where the last one's end
-    QVector<double>    m_rigidity;     // how stiffly each piece's fabric bends, in g cm²/s²
+    QVector<double>    m_rigidity;     // how stiffly each piece's fabric bends, on average, in g cm²/s²
     QVector<int>       m_layers;       // which layer each piece is worn in
     QVector<double>    m_outside;      // which way each piece's outside faces from its triangles as wound, 1 or -1
     BodyCollider       m_collider;

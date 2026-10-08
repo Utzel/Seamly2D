@@ -59,6 +59,7 @@ private slots:
     void seamsCloseDespiteSelfContact() const;
     void biasGivesMoreThanGrain() const;
     void stifferFabricBendsLess() const;
+    void bendingFollowsTheGrain() const;
     void shearFollowsFromBias() const;
     void foldsHoldTheirAngle_data() const;
     void foldsHoldTheirAngle() const;

@@ -39,7 +39,8 @@ Fabric makeFabric(const QString& name, qreal weight, qreal warp, qreal weft, qre
     fabric.warp_stiffness = warp;
     fabric.weft_stiffness = weft;
     fabric.bias_stiffness = bias;
-    fabric.bending = bending;
+    fabric.bending_warp = bending;
+    fabric.bending_weft = bending;
     fabric.thickness = thickness;
     return fabric;
 }

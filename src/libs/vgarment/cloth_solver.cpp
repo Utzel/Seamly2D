@@ -124,6 +124,11 @@ const double shortest_elastic = 0.1;
 // Cloth shrinks to no less than this share of its drafted size.
 const double least_shrinkage = 0.1;
 
+// How much further each bending edge's stiffness leans to the way it lies across than its direction alone has it: as
+// much as edges running every way take up of each other's bending, so a fabric twice as stiff along its grain bends
+// nearly twice as stiffly there.
+const double grain_leaning = 0.25;
+
 //---------------------------------------------------------------------------------------------------------------------
 struct Vec3
 {
@@ -819,7 +824,11 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
     m_outside.append(layer.turned_over ? wrong_side : -wrong_side);
 
     // Across each inner edge the cloth resists bending. The weights are the cotangent ones of Bergou et al.; spread
-    // over the two triangles' area, they make bending as stiff as the fabric's rigidity, to within a few percent.
+    // over the two triangles' area, they make bending as stiff as the fabric's rigidity, to within a few percent. An
+    // edge across the grain bends the grain, one along it bends across it, and one in between some of each, as an
+    // orthotropic plate's rigidity turns with the direction it is bent in. As each edge also feels the bending the
+    // other ones across it take up, its stiffness leans further to the way it lies across, never below the limper
+    // way's: so the cloth bends nearly as stiffly each way as the fabric does.
     auto cotangent = [&mesh](int corner, int first, int second)
     {
         const QPointF u = mesh.rest_positions.at(first) - mesh.rest_positions.at(corner);
@@ -833,8 +842,17 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
         const QPointF v = mesh.rest_positions.at(c) - mesh.rest_positions.at(a);
         return qAbs(u.x() * v.y() - u.y() * v.x()) / 2.0;
     };
-    const double rigidity = fabric.bending * micro_newton_metre;
-    m_rigidity.append(rigidity);
+    const double warp_rigidity = fabric.bending_warp * micro_newton_metre;
+    const double weft_rigidity = fabric.bending_weft * micro_newton_metre;
+    auto rigidity_across = [&in_fabric, warp_rigidity, weft_rigidity](int a, int b)
+    {
+        const QPointF edge = in_fabric(static_cast<quint32>(b)) - in_fabric(static_cast<quint32>(a));
+        const double length_squared = QPointF::dotProduct(edge, edge);
+        const double across_grain = length_squared > tiny ? edge.x() * edge.x() / length_squared : 0.5;
+        const double leaning = (1.0 + grain_leaning) * across_grain - grain_leaning * (1.0 - across_grain);
+        return qMax(warp_rigidity * leaning + weft_rigidity * (1.0 - leaning), qMin(warp_rigidity, weft_rigidity));
+    };
+    m_rigidity.append((warp_rigidity + weft_rigidity) / 2.0);
 
     // The edges along folds, and which fold each is of.
     QHash<quint64, int> fold_of_edge;
@@ -881,7 +899,7 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
                 hinge.vertices[k] = offset + corners[k];
             }
             const double edge_squared = QPointF::dotProduct(at_b - at_a, at_b - at_a);
-            hinge.stiffness = folds.at(fold).strength * 6.0 * rigidity * edge_squared / areas;
+            hinge.stiffness = folds.at(fold).strength * 6.0 * rigidity_across(a, b) * edge_squared / areas;
             hinge.fold = true;
             const double fullest = M_PI - fold_short_of_flat;
             hinge.rest_angle = qBound(-fullest, M_PI - qDegreesToRadians(folds.at(fold).angle), fullest);
@@ -903,7 +921,7 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
                 hinge.vertices[k] = offset + corners[k];
                 hinge.weights[k] = weights[k];
             }
-            hinge.stiffness = rigidity / areas;
+            hinge.stiffness = rigidity_across(a, b) / areas;
             m_hinges.append(hinge);
         }
     }
