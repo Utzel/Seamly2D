@@ -52,6 +52,7 @@ class QActionGroup;
 class QComboBox;
 class QIcon;
 class QLabel;
+class QMenu;
 class QQuickView;
 class QTimer;
 class SeamEditor;
@@ -117,6 +118,14 @@ private slots:
     void               cancel();
     void               setArranging(bool arranging);
     void               placePiece(const QVector3D& point);
+    void               placePieceAtPoint(int index);
+    void               previewArrangement(int index, const QVector3D& point);
+    void               clearArrangementPreview();
+    void               rotatePieceClockwise();
+    void               rotatePieceCounterclockwise();
+    void               turnPieceOver();
+    void               takePieceOff();
+    void               showPieceMenu(const QPointF& at);
     void               grabPiece(quint32 id, const QVector3D& point);
     void               dragPiece(const QVector3D& point);
     void               dropPiece();
@@ -251,6 +260,11 @@ private:
     QAction*                   m_cancel_action;
     QAction*                   m_avatar_action;
     QAction*                   m_arrange_action;
+    QAction*                   m_rotate_clockwise_action;
+    QAction*                   m_rotate_counterclockwise_action;
+    QAction*                   m_turn_over_action;
+    QAction*                   m_take_off_action;
+    QMenu*                     m_piece_menu;
     QAction*                   m_simulate_action;
     QAction*                   m_reset_action;
     QAction*                   m_fine_action;
@@ -308,6 +322,9 @@ private:
     void               saveFabricImage(const VFabricTexture& texture, const QString& text);
     QVector<QVector<QPointF>> stitchedPaths(const VPiece& piece) const;
     void               storeArrangement(quint32 piece, const PieceArrangement& wanted, const QString& text);
+    PieceArrangement   sameWayRound(quint32 piece, PieceArrangement wanted) const;
+    void               rotatePiece(qreal degrees);
+    QString            pointTitle(const ArrangementPoint& point) const;
     void               showArrangement(quint32 piece, const PieceArrangement& arrangement);
     void               callOffDrag();
     void               showPlaced(quint32 piece);
@@ -318,7 +335,10 @@ private:
     QString            stitchStyleTitle(const TopstitchStyle& style) const;
     QVector<ExportMesh> exportMeshes() const;
     QVector<QVector3D> piecePositions(quint32 id, const GarmentMesh& mesh) const;
+    QVector<QVector3D> placedAt(quint32 id, const GarmentMesh& mesh, const PieceArrangement& arrangement,
+                                bool turned, qreal out = 0) const;
     QSet<quint32>      turnedPairs() const;
+    bool               isTurnedPair(quint32 piece, const PieceArrangement& arrangement) const;
     qreal              acrossBody(const GarmentMesh& mesh, const QVector<QVector3D>& positions,
                                   const VSeamSide& side) const;
     CachedMesh         garmentMeshes(quint32 id, const PieceOutline& outline, PieceSymmetry wanted) const;

@@ -28,6 +28,7 @@
 #include <QPainter>
 #include <QRectF>
 #include <QSet>
+#include <QVariantMap>
 #include <QtMath>
 #include <QtQuick3D/QQuick3DTextureData>
 
@@ -200,6 +201,9 @@ GarmentSceneModel::GarmentSceneModel(QObject* parent)
     , m_hidden_pieces()
     , m_simulating(false)
     , m_pins()
+    , m_arrangement_points()
+    , m_preview(nullptr)
+    , m_preview_shown(false)
     , m_thread_color()
     , m_images()
 {}
@@ -896,6 +900,119 @@ void GarmentSceneModel::setPins(const QVector<QVector3D>& pins)
     {
         m_pins = shown;
         emit pinsChanged();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The avatar's arrangement points, for QML: their names, where each is, in scene coordinates, and which way
+/// it faces.
+QVariantList GarmentSceneModel::arrangementPoints() const
+{
+    return m_arrangement_points;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentSceneModel::setArrangementPoints(const QVector<ArrangementPoint>& points)
+{
+    QVariantList shown;
+    for (const ArrangementPoint& point : points)
+    {
+        QVariantMap item;
+        item.insert(QStringLiteral("name"), point.name);
+        item.insert(QStringLiteral("position"), point.position);
+        item.insert(QStringLiteral("normal"), point.normal);
+        shown.append(item);
+    }
+    if (shown != m_arrangement_points)
+    {
+        m_arrangement_points = shown;
+        emit arrangementPointsChanged();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Where the selected piece would go while arranging, in scene coordinates as placed pieces, for QML.
+QObject* GarmentSceneModel::previewGeometry() const
+{
+    return m_preview;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool GarmentSceneModel::isPreviewShown() const
+{
+    return m_preview_shown;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Shows where the selected piece would go: its mesh, with a mirrored copy's after it, at these positions.
+void GarmentSceneModel::setPreview(const GarmentMesh& mesh, const QVector<QVector3D>& positions)
+{
+    if (m_preview == nullptr)
+    {
+        m_preview = new PieceGeometry();
+        m_preview->setParent(this);
+    }
+    m_preview->setMesh(mesh, positions);
+    m_preview_shown = true;
+    emit previewChanged();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentSceneModel::clearPreview()
+{
+    if (m_preview_shown)
+    {
+        m_preview_shown = false;
+        emit previewChanged();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML when an arrangement point is clicked while arranging: the selected piece goes there.
+void GarmentSceneModel::placeAtPoint(int index)
+{
+    if (index >= 0 && index < m_arrangement_points.size())
+    {
+        emit placePointRequested(index);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML while arranging when the mouse is over the avatar, at a point in scene coordinates: shows
+/// where the selected piece would go if it were put there.
+void GarmentSceneModel::previewAt(qreal x, qreal y, qreal z)
+{
+    emit previewRequested(-1, QVector3D(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML while arranging when the mouse is over an arrangement point: shows where the selected piece
+/// would go if it were put there.
+void GarmentSceneModel::previewAtPoint(int index)
+{
+    if (index >= 0 && index < m_arrangement_points.size())
+    {
+        emit previewRequested(index, m_arrangement_points.at(index).toMap().value(QStringLiteral("position"))
+                                         .value<QVector3D>());
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML while arranging when the mouse is off the avatar and its points.
+void GarmentSceneModel::leaveAvatar()
+{
+    emit previewLeft();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML when a piece on the avatar is right-clicked, at a point of the view: picks it, and asks for
+/// what can be done with it.
+void GarmentSceneModel::showPieceMenu(int id, qreal x, qreal y)
+{
+    if (id != 0 && isPlaced(static_cast<quint32>(id)))
+    {
+        pickPiece(id);
+        emit pieceMenuRequested(QPointF(x, y));
     }
 }
 

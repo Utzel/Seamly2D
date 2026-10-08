@@ -28,6 +28,7 @@
 #include <QAbstractListModel>
 #include <QColor>
 #include <QHash>
+#include <QPointF>
 #include <QRectF>
 #include <QSet>
 #include <QSize>
@@ -38,6 +39,7 @@
 #include <QVector>
 
 #include "../vgarment/body_collider.h"
+#include "../vgarment/body_wrap.h"
 #include "../vgarment/garment_mesh.h"
 #include "../vgarment/topstitch.h"
 
@@ -74,6 +76,9 @@ class GarmentSceneModel : public QAbstractListModel
     Q_PROPERTY(bool meshShown READ isMeshShown NOTIFY meshShownChanged)
     Q_PROPERTY(bool simulating READ isSimulating NOTIFY simulatingChanged)
     Q_PROPERTY(QVariantList pins READ pins NOTIFY pinsChanged)
+    Q_PROPERTY(QVariantList arrangementPoints READ arrangementPoints NOTIFY arrangementPointsChanged)
+    Q_PROPERTY(QObject* previewGeometry READ previewGeometry NOTIFY previewChanged)
+    Q_PROPERTY(bool previewShown READ isPreviewShown NOTIFY previewChanged)
     Q_PROPERTY(qreal checkRepeat READ checkRepeat CONSTANT)
 
 public:
@@ -182,9 +187,20 @@ public:
     void                   setSimulating(bool simulating);
     QVariantList           pins() const;
     void                   setPins(const QVector<QVector3D>& pins);
+    QVariantList           arrangementPoints() const;
+    void                   setArrangementPoints(const QVector<ArrangementPoint>& points);
+    QObject*               previewGeometry() const;
+    bool                   isPreviewShown() const;
+    void                   setPreview(const GarmentMesh& mesh, const QVector<QVector3D>& positions);
+    void                   clearPreview();
 
     Q_INVOKABLE void       pickPiece(int id);
     Q_INVOKABLE void       placeAt(qreal x, qreal y, qreal z);
+    Q_INVOKABLE void       placeAtPoint(int index);
+    Q_INVOKABLE void       previewAt(qreal x, qreal y, qreal z);
+    Q_INVOKABLE void       previewAtPoint(int index);
+    Q_INVOKABLE void       leaveAvatar();
+    Q_INVOKABLE void       showPieceMenu(int id, qreal x, qreal y);
     Q_INVOKABLE bool       grabPiece(int id, qreal x, qreal y, qreal z);
     Q_INVOKABLE void       dragTo(qreal x, qreal y, qreal z);
     Q_INVOKABLE void       dropPiece();
@@ -212,6 +228,8 @@ signals:
     void                   viewRequested(qreal pitch, qreal yaw);
     void                   simulatingChanged();
     void                   pinsChanged();
+    void                   arrangementPointsChanged();
+    void                   previewChanged();
     void                   pullRequested(quint32 id, const QVector3D& point);
     void                   pinPullRequested(int index);
     void                   pullMoved(const QVector3D& point);
@@ -219,6 +237,10 @@ signals:
     void                   pinRequested(quint32 id, const QVector3D& point);
     void                   unpinRequested(int index);
     void                   placeRequested(const QVector3D& point);
+    void                   placePointRequested(int index);
+    void                   previewRequested(int index, const QVector3D& point);
+    void                   previewLeft();
+    void                   pieceMenuRequested(const QPointF& at);
     void                   grabRequested(quint32 id, const QVector3D& point);
     void                   dragRequested(const QVector3D& point);
     void                   dropRequested();
@@ -277,6 +299,9 @@ private:
     QSet<quint32>          m_hidden_pieces;
     bool                   m_simulating;
     QVariantList           m_pins;
+    QVariantList           m_arrangement_points;
+    PieceGeometry*         m_preview;
+    bool                   m_preview_shown;
     QColor                 m_thread_color;
     QHash<QByteArray, FabricImage> m_images;
 

@@ -46,6 +46,22 @@ Rectangle {
     // How close, in pixels, the mouse has to come to a seam line to sew it or to pick a seam.
     readonly property real pickDistance: 8
 
+    // How close, in pixels, the mouse has to come to an arrangement point to put a piece there.
+    readonly property real snapDistance: 12
+
+    // While arranging with a piece picked, the avatar's arrangement points show, those facing the camera.
+    readonly property bool pointsShown: root.sceneModel.arranging && root.sceneModel.selectedPiece !== 0
+                                        && root.sceneModel.hasAvatar && !root.capturing
+
+    // The arrangement point under the mouse, -1 for none.
+    property int pointUnderMouse: -1
+
+    onPointsShownChanged: {
+        if (!root.pointsShown) {
+            root.pointUnderMouse = -1
+        }
+    }
+
     // Where the ray through a point of the view meets the board of pieces, in the board's coordinates, or undefined
     // if it misses the board.
     function boardPoint(x, y) {
@@ -126,6 +142,43 @@ Rectangle {
             }
         }
         return found
+    }
+
+    // Whether an arrangement point faces the camera, and so shows.
+    function facesCamera(point) {
+        return point.normal.dotProduct(camera.scenePosition.minus(point.position)) > 0
+    }
+
+    // The arrangement point shown within snapDistance pixels of a point of the view, the nearest; -1 for none.
+    function arrangementPointNear(x, y) {
+        let found = -1
+        if (root.pointsShown) {
+            const points = root.sceneModel.arrangementPoints
+            let nearest = root.snapDistance
+            for (let i = 0; i < points.length; ++i) {
+                const at = view.mapFrom3DScene(points[i].position)
+                const apart = Math.hypot(at.x - x, at.y - y)
+                if (apart <= nearest && root.facesCamera(points[i])) {
+                    nearest = apart
+                    found = i
+                }
+            }
+        }
+        return found
+    }
+
+    // While arranging, shows where the picked piece would go: at the arrangement point under the mouse, or where the
+    // mouse is on the avatar.
+    function previewArrangement(x, y) {
+        root.pointUnderMouse = root.arrangementPointNear(x, y)
+        const result = view.pick(x, y)
+        if (root.pointUnderMouse >= 0) {
+            root.sceneModel.previewAtPoint(root.pointUnderMouse)
+        } else if (result.objectHit && result.objectHit.isAvatar === true && !root.draggingPiece) {
+            root.sceneModel.previewAt(result.scenePosition.x, result.scenePosition.y, result.scenePosition.z)
+        } else {
+            root.sceneModel.leaveAvatar()
+        }
     }
 
     // The point along the ray through a point of the view as far from the eye as where the mouse took hold.
@@ -339,6 +392,22 @@ Rectangle {
             }
         }
 
+        // Where the picked piece would go while arranging, see-through, in scene coordinates as placed pieces.
+        Model {
+            visible: root.sceneModel.previewShown && root.sceneModel.arranging
+            geometry: root.sceneModel.previewGeometry
+            opacity: 0.5
+            castsShadows: false
+            pickable: false
+
+            materials: PrincipledMaterial {
+                baseColor: root.highlightColor
+                roughness: 0.85
+                metalness: 0.0
+                cullMode: Material.NoCulling
+            }
+        }
+
         // The pieces, flat on a board; with an avatar the board stands behind it.
         Node {
             position: root.sceneModel.boardOffset
@@ -545,13 +614,50 @@ Rectangle {
         }
     }
 
+    // The avatar's arrangement points while they show, as CLO's: small rings on the body, the one under the mouse
+    // filled.
+    Repeater {
+        model: root.pointsShown ? root.sceneModel.arrangementPoints : []
+
+        Rectangle {
+            required property var modelData
+            required property int index
+
+            // Where the point is in the view, and whether it faces the camera; worked out again whenever the camera
+            // or the view moves.
+            readonly property vector3d onView: {
+                camera.scenePosition
+                camera.sceneRotation
+                view.width
+                view.height
+                return view.mapFrom3DScene(modelData.position)
+            }
+            readonly property bool facing: {
+                camera.scenePosition
+                return root.facesCamera(modelData)
+            }
+            readonly property bool underMouse: root.pointUnderMouse === index
+
+            visible: facing
+            x: onView.x - width / 2
+            y: onView.y - height / 2
+            width: underMouse ? 12 : 8
+            height: width
+            radius: width / 2
+            color: underMouse ? root.highlightColor : "white"
+            border.color: root.highlightColor
+            border.width: 2
+        }
+    }
+
     OrbitCameraController {
         anchors.fill: parent
         origin: orbit_origin
         camera: camera
         mouseEnabled: !root.draggingPiece && !root.pulling
 
-        // While arranging, a placed piece pressed on follows the mouse around the avatar until it is let go.
+        // While arranging, a placed piece pressed on follows the mouse around the avatar until it is let go; pressed on
+        // where an arrangement point shows over it, it stays, as the point takes the click.
         PointHandler {
             id: piece_handler
             enabled: root.sceneModel.arranging
@@ -564,7 +670,7 @@ Rectangle {
                     const y = piece_handler.point.position.y
                     const results = view.pickAll(x, y)
                     const piece = results.length > 0 ? results[0].objectHit : null
-                    if (piece && piece.pieceId !== undefined) {
+                    if (piece && piece.pieceId !== undefined && root.arrangementPointNear(x, y) < 0) {
                         let held = results[0].scenePosition
                         for (let i = 1; i < results.length; ++i) {
                             if (results[i].objectHit && results[i].objectHit.isAvatar === true) {
@@ -662,6 +768,11 @@ Rectangle {
                     return
                 }
                 if (root.sceneModel.arranging) {
+                    const point = root.arrangementPointNear(x, y)
+                    if (point >= 0) {
+                        root.sceneModel.placeAtPoint(point)
+                        return
+                    }
                     const result = view.pick(x, y)
                     const target = result.objectHit
                     if (target && target.isAvatar === true) {
@@ -688,13 +799,33 @@ Rectangle {
             onDoubleTapped: root.frameAll()
         }
 
+        // A right-click on a piece on the avatar picks it and asks what to do with it: rotate it, turn it over, take
+        // it off.
+        TapHandler {
+            acceptedButtons: Qt.RightButton
+            enabled: !root.seamEditor.sewing && !root.stitchEditor.stitching
+
+            onTapped: (event_point) => {
+                const target = view.pick(event_point.position.x, event_point.position.y).objectHit
+                if (target && target.pieceId !== undefined) {
+                    root.sceneModel.showPieceMenu(target.pieceId, event_point.position.x, event_point.position.y)
+                }
+            }
+        }
+
         HoverHandler {
             id: hover_handler
-            cursorShape: root.seamEditor.sewing || root.stitchEditor.stitching ? Qt.CrossCursor : Qt.ArrowCursor
+            cursorShape: root.seamEditor.sewing || root.stitchEditor.stitching ? Qt.CrossCursor
+                         : root.pointUnderMouse >= 0 ? Qt.PointingHandCursor
+                                                     : Qt.ArrowCursor
 
             onPointChanged: {
                 const x = hover_handler.point.position.x
                 const y = hover_handler.point.position.y
+                if (root.sceneModel.arranging) {
+                    root.previewArrangement(x, y)
+                    return
+                }
                 if (root.stitchEditor.stitching) {
                     const spot = root.pieceSpot(x, y)
                     if (spot === undefined) {
@@ -721,6 +852,10 @@ Rectangle {
                 if (!hover_handler.hovered) {
                     root.seamEditor.leave()
                     root.stitchEditor.leave()
+                    if (root.sceneModel.arranging) {
+                        root.pointUnderMouse = -1
+                        root.sceneModel.leaveAvatar()
+                    }
                 }
             }
         }

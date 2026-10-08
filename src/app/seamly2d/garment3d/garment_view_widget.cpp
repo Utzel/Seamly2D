@@ -122,6 +122,15 @@ PieceSymmetry symmetryOf(const VPiece& piece)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// Whether two arrangements put a piece in the same place, the same way round.
+bool sameArrangement(const PieceArrangement& one, const PieceArrangement& other)
+{
+    return one.part == other.part && qFuzzyCompare(1.0 + one.angle, 1.0 + other.angle)
+           && qFuzzyCompare(1.0 + one.height, 1.0 + other.height)
+           && qFuzzyCompare(1.0 + one.rotation, 1.0 + other.rotation) && one.turned_over == other.turned_over;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // The pattern piece a piece of the garment is, or is the mirrored copy of.
 quint32 patternPiece(quint32 id)
 {
@@ -130,6 +139,10 @@ quint32 patternPiece(quint32 id)
 
 // Edits come in bursts (dragging a point sends one per mouse move), so re-mesh once they pause.
 const int rebuild_delay_ms = 150;
+
+// A preview of where a piece would go stands this many cm further out than a piece put there, so it shows in front of
+// the piece when that is there already.
+const qreal preview_out = 1.0;
 
 // Fitted measurements this far off, in cm, are mentioned in the avatar's note.
 const qreal note_tolerance = 1.0;
@@ -264,6 +277,11 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_cancel_action(nullptr)
     , m_avatar_action(nullptr)
     , m_arrange_action(nullptr)
+    , m_rotate_clockwise_action(nullptr)
+    , m_rotate_counterclockwise_action(nullptr)
+    , m_turn_over_action(nullptr)
+    , m_take_off_action(nullptr)
+    , m_piece_menu(nullptr)
     , m_simulate_action(nullptr)
     , m_reset_action(nullptr)
     , m_fine_action(nullptr)
@@ -338,6 +356,11 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     connect(m_stitch_editor, &StitchEditor::stitchesChanged, this, &GarmentViewWidget::showStitches);
     connect(m_stitch_editor, &StitchEditor::previewChanged, this, &GarmentViewWidget::showStitchPreview);
     connect(m_scene_model, &GarmentSceneModel::placeRequested, this, &GarmentViewWidget::placePiece);
+    connect(m_scene_model, &GarmentSceneModel::placePointRequested, this, &GarmentViewWidget::placePieceAtPoint);
+    connect(m_scene_model, &GarmentSceneModel::previewRequested, this, &GarmentViewWidget::previewArrangement);
+    connect(m_scene_model, &GarmentSceneModel::previewLeft, this, &GarmentViewWidget::clearArrangementPreview);
+    connect(m_scene_model, &GarmentSceneModel::selectedPieceChanged, m_scene_model, &GarmentSceneModel::clearPreview);
+    connect(m_scene_model, &GarmentSceneModel::pieceMenuRequested, this, &GarmentViewWidget::showPieceMenu);
     connect(m_scene_model, &GarmentSceneModel::grabRequested, this, &GarmentViewWidget::grabPiece);
     connect(m_scene_model, &GarmentSceneModel::dragRequested, this, &GarmentViewWidget::dragPiece);
     connect(m_scene_model, &GarmentSceneModel::dropRequested, this, &GarmentViewWidget::dropPiece);
@@ -623,6 +646,8 @@ void GarmentViewWidget::rebuildScene()
     }
 
     m_scene_model->setPieces(scene_pieces);
+    m_scene_model->setArrangementPoints(m_wrap.isNull() ? QVector<ArrangementPoint>() : m_wrap->points());
+    m_scene_model->clearPreview();
     m_seam_editor->setSeams(m_doc->getSeams());
     m_seam_editor->setUnit(qApp->patternUnit());
     m_seam_editor->setPieces(shown_pieces);
@@ -905,7 +930,8 @@ void GarmentViewWidget::updateArrangements()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Takes in the pattern's arrangements. A piece moved to another spot starts its drape over.
+// Takes in the pattern's arrangements; a piece put at an arrangement point goes where the point is on this avatar. A
+// piece moved to another spot, or turned another way, starts its drape over.
 void GarmentViewWidget::readArrangements()
 {
     QHash<quint32, PieceArrangement> arrangements;
@@ -915,17 +941,17 @@ void GarmentViewWidget::readArrangements()
         arrangement.part = BodyWrap::partFromName(stored.part);
         arrangement.angle = stored.angle;
         arrangement.height = stored.height;
-        arrangements.insert(stored.piece_id, arrangement);
+        arrangement.rotation = stored.rotation;
+        arrangement.turned_over = stored.turned_over;
+        arrangement.point = stored.point;
+        arrangements.insert(stored.piece_id, m_wrap.isNull() ? arrangement : m_wrap->resolved(arrangement));
     }
 
     for (auto draped = m_draped.begin(); draped != m_draped.end();)
     {
         const quint32 piece = patternPiece(draped.key());
-        const PieceArrangement before = m_arrangements.value(piece);
-        const PieceArrangement after = arrangements.value(piece);
-        const bool same = arrangements.contains(piece) && before.part == after.part
-                          && qFuzzyCompare(1.0 + before.angle, 1.0 + after.angle)
-                          && qFuzzyCompare(1.0 + before.height, 1.0 + after.height);
+        const bool same = arrangements.contains(piece)
+                          && sameArrangement(m_arrangements.value(piece), arrangements.value(piece));
         draped = same ? std::next(draped) : m_draped.erase(draped);
     }
     m_arrangements = arrangements;
@@ -944,75 +970,86 @@ QVector<QVector3D> GarmentViewWidget::piecePositions(quint32 id, const GarmentMe
         positions = m_draped.value(id);
         if (positions.size() != mesh.vertexCount())
         {
-            if (PieceOutline::isMirrorId(id) != m_turned_pairs.contains(piece))
-            {
-                const CachedMesh& cached = m_mesh_cache.value(piece);
-                const GarmentMesh& other = PieceOutline::isMirrorId(id) ? cached.garment_mesh : cached.mirror_mesh;
-                positions = m_wrap->place(other, m_arrangements.value(piece));
-                for (QVector3D& position : positions)
-                {
-                    position = m_wrap->mirrored(position);
-                }
-            }
-            else
-            {
-                positions = m_wrap->place(mesh, m_arrangements.value(piece));
-            }
+            positions = placedAt(id, mesh, m_arrangements.value(piece), m_turned_pairs.contains(piece));
         }
     }
     return positions;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Pieces cut twice that are arranged on an arm or a leg, but sewn mostly to body pieces on the other side of the
-// body: they are drafted for the other side. Turned, the mirrored copy goes where the piece was put, so a sleeve goes
-// to the armhole it is sewn to whichever arm it was put on.
+// Where a piece of the garment starts out arranged so: the piece where the arrangement puts it, a mirrored copy
+// mirrored to the other side of the body. Of a pair turned to its seams, the mirrored copy goes where the arrangement
+// puts the piece, and the piece to the other side. Further out by `out` cm for a preview.
+QVector<QVector3D> GarmentViewWidget::placedAt(quint32 id, const GarmentMesh& mesh,
+                                               const PieceArrangement& arrangement, bool turned, qreal out) const
+{
+    QVector<QVector3D> positions;
+    if (PieceOutline::isMirrorId(id) != turned)
+    {
+        const CachedMesh& cached = m_mesh_cache.value(patternPiece(id));
+        const GarmentMesh& other = PieceOutline::isMirrorId(id) ? cached.garment_mesh : cached.mirror_mesh;
+        positions = m_wrap->place(other, arrangement, out);
+        for (QVector3D& position : positions)
+        {
+            position = m_wrap->mirrored(position);
+        }
+    }
+    else
+    {
+        positions = m_wrap->place(mesh, arrangement, out);
+    }
+    return positions;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The pieces whose pairs are turned to their seams, as arranged.
 QSet<quint32> GarmentViewWidget::turnedPairs() const
 {
-    QHash<quint32, int> votes;
-    if (!m_wrap.isNull())
+    QSet<quint32> turned;
+    for (auto arranged = m_arrangements.constBegin(); arranged != m_arrangements.constEnd(); ++arranged)
     {
-        auto onLimb = [this](quint32 piece)
+        if (isTurnedPair(arranged.key(), arranged.value()))
         {
-            return m_arrangements.contains(piece) && m_arrangements.value(piece).part != BodyPart::Body
-                   && m_mesh_cache.value(piece).symmetry == PieceSymmetry::Pair;
-        };
-        auto onBody = [this](quint32 piece)
+            turned.insert(arranged.key());
+        }
+    }
+    return turned;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Whether a piece cut twice, arranged so on an arm or a leg, is sewn mostly to body pieces on the other side of the
+// body: it is drafted for the other side. Turned, the mirrored copy goes where the piece was put, so a sleeve goes to
+// the armhole it is sewn to whichever arm it was put on.
+bool GarmentViewWidget::isTurnedPair(quint32 piece, const PieceArrangement& arrangement) const
+{
+    int votes = 0;
+    const CachedMesh& own = m_mesh_cache.value(piece);
+    if (!m_wrap.isNull() && arrangement.part != BodyPart::Body && own.symmetry == PieceSymmetry::Pair)
+    {
+        auto onBody = [this](quint32 partner)
         {
-            return m_arrangements.contains(piece) && m_arrangements.value(piece).part == BodyPart::Body
-                   && !m_mesh_cache.value(piece).garment_mesh.isEmpty();
+            return m_arrangements.contains(partner) && m_arrangements.value(partner).part == BodyPart::Body
+                   && !m_mesh_cache.value(partner).garment_mesh.isEmpty();
         };
 
+        const QVector<QVector3D> placed = m_wrap->place(own.garment_mesh, arrangement);
         for (const VSeam& seam : m_doc->getSeams())
         {
             for (const auto& sides : {std::make_pair(seam.first, seam.second), std::make_pair(seam.second, seam.first)})
             {
-                const quint32 piece = sides.first.piece_id;
                 const quint32 partner = sides.second.piece_id;
-                if (onLimb(piece) && onBody(partner))
+                if (sides.first.piece_id == piece && onBody(partner))
                 {
-                    const CachedMesh& own = m_mesh_cache.value(piece);
                     const CachedMesh& other = m_mesh_cache.value(partner);
-                    const qreal own_across = acrossBody(own.garment_mesh,
-                                                        m_wrap->place(own.garment_mesh, m_arrangements.value(piece)),
-                                                        sides.first);
+                    const qreal own_across = acrossBody(own.garment_mesh, placed, sides.first);
                     const qreal other_across = acrossBody(other.garment_mesh,
                                                           piecePositions(partner, other.garment_mesh), sides.second);
-                    votes[piece] += own_across * other_across < 0 ? 1 : -1;
+                    votes += own_across * other_across < 0 ? 1 : -1;
                 }
             }
         }
     }
-
-    QSet<quint32> turned;
-    for (auto vote = votes.constBegin(); vote != votes.constEnd(); ++vote)
-    {
-        if (vote.value() > 0)
-        {
-            turned.insert(vote.key());
-        }
-    }
-    return turned;
+    return votes > 0;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1102,6 +1139,17 @@ void GarmentViewWidget::removeSelected()
     }
     else if (m_scene_model->isArranging() && m_scene_model->isPlaced(piece))
     {
+        takePieceOff();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Puts the selected piece on the avatar back on the board.
+void GarmentViewWidget::takePieceOff()
+{
+    const quint32 piece = m_scene_model->selectedPiece();
+    if (m_scene_model->isPlaced(piece))
+    {
         QVector<VPieceArrangement> arrangements = m_doc->getArrangements();
         arrangements.erase(std::remove_if(arrangements.begin(), arrangements.end(),
                                           [piece](const VPieceArrangement& arrangement)
@@ -1145,18 +1193,205 @@ void GarmentViewWidget::setArranging(bool arranging)
         m_topstitch_action->setChecked(false);
     }
     m_scene_model->setArranging(arranging);
+    if (!arranging)
+    {
+        m_scene_model->clearPreview();
+    }
     updateActions();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// The avatar was clicked while arranging: the selected piece goes there.
+// The avatar was clicked while arranging: the selected piece goes there, the way round it is.
 void GarmentViewWidget::placePiece(const QVector3D& point)
 {
     const quint32 piece = m_scene_model->selectedPiece();
     if (piece != 0 && !m_wrap.isNull())
     {
-        storeArrangement(piece, m_wrap->arrangementAt(point), tr("place piece"));
+        storeArrangement(piece, sameWayRound(piece, m_wrap->arrangementAt(point)), tr("place piece"));
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// An arrangement point was clicked while arranging: the selected piece goes there, the way round it is, and goes
+// there on any avatar.
+void GarmentViewWidget::placePieceAtPoint(int index)
+{
+    const quint32 piece = m_scene_model->selectedPiece();
+    if (piece != 0 && !m_wrap.isNull() && index >= 0 && index < m_wrap->points().size())
+    {
+        storeArrangement(piece, sameWayRound(piece, m_wrap->points().at(index).arrangement), tr("place piece"));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// While arranging, the mouse is over an arrangement point, or over the avatar somewhere else: shows where the selected
+// piece would go if it were put there, unless it is there already, and over a point what it is called.
+void GarmentViewWidget::previewArrangement(int index, const QVector3D& point)
+{
+    const quint32 piece = m_scene_model->selectedPiece();
+    const CachedMesh cached = m_mesh_cache.value(piece);
+    const bool at_point = !m_wrap.isNull() && index >= 0 && index < m_wrap->points().size();
+    PieceArrangement wanted;
+    bool shown = piece != 0 && !m_wrap.isNull() && m_drag.piece == 0 && !cached.garment_mesh.isEmpty();
+    if (shown)
+    {
+        wanted = sameWayRound(piece, at_point ? m_wrap->points().at(index).arrangement : m_wrap->arrangementAt(point));
+        shown = !m_scene_model->isPlaced(piece) || !sameArrangement(m_arrangements.value(piece), wanted);
+    }
+
+    if (shown)
+    {
+        // The piece, and its copy for a piece cut twice, as one mesh.
+        const bool turned = isTurnedPair(piece, wanted);
+        GarmentMesh preview;
+        QVector<QVector3D> positions;
+        for (const quint32 copy : {piece, PieceOutline::mirrorId(piece)})
+        {
+            const GarmentMesh& mesh = copy == piece ? cached.garment_mesh : cached.mirror_mesh;
+            if (!mesh.isEmpty())
+            {
+                const quint32 offset = static_cast<quint32>(preview.rest_positions.size());
+                preview.rest_positions += mesh.rest_positions;
+                for (const quint32 vertex : mesh.indices)
+                {
+                    preview.indices.append(vertex + offset);
+                }
+                positions += placedAt(copy, mesh, wanted, turned, preview_out);
+            }
+        }
+        m_scene_model->setPreview(preview, positions);
+    }
+    else
+    {
+        m_scene_model->clearPreview();
+    }
+
+    if (at_point && piece != 0)
+    {
+        m_scene_model->setHint(tr("%1: click to put the piece there.").arg(pointTitle(m_wrap->points().at(index))));
+    }
+    else
+    {
+        updateHint();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The mouse left the avatar while arranging.
+void GarmentViewWidget::clearArrangementPreview()
+{
+    m_scene_model->clearPreview();
+    updateHint();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Turns the selected piece on the avatar a quarter of the way around clockwise, as seen from outside.
+void GarmentViewWidget::rotatePieceClockwise()
+{
+    rotatePiece(90);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Turns the selected piece on the avatar a quarter of the way around anticlockwise, as seen from outside.
+void GarmentViewWidget::rotatePieceCounterclockwise()
+{
+    rotatePiece(-90);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::rotatePiece(qreal degrees)
+{
+    const quint32 piece = m_scene_model->selectedPiece();
+    if (m_scene_model->isPlaced(piece))
+    {
+        PieceArrangement arrangement = m_arrangements.value(piece);
+        arrangement.rotation = std::fmod(arrangement.rotation + degrees + 360.0, 360.0);
+        storeArrangement(piece, arrangement, tr("rotate piece"));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Turns the selected piece on the avatar over, its other side out, as if it were cut from the cloth turned over.
+void GarmentViewWidget::turnPieceOver()
+{
+    const quint32 piece = m_scene_model->selectedPiece();
+    if (m_scene_model->isPlaced(piece))
+    {
+        PieceArrangement arrangement = m_arrangements.value(piece);
+        arrangement.turned_over = !arrangement.turned_over;
+        storeArrangement(piece, arrangement, tr("turn piece over"));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A piece on the avatar was right-clicked, and with that picked, at a point of the view: what can be done with it.
+void GarmentViewWidget::showPieceMenu(const QPointF& at)
+{
+    updateActions();
+    m_piece_menu->popup(m_view_container->mapToGlobal(at.toPoint()));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A place for a piece, the way round the piece is on the avatar, if it is.
+PieceArrangement GarmentViewWidget::sameWayRound(quint32 piece, PieceArrangement wanted) const
+{
+    if (m_arrangements.contains(piece))
+    {
+        wanted.rotation = m_arrangements.value(piece).rotation;
+        wanted.turned_over = m_arrangements.value(piece).turned_over;
+    }
+    return wanted;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// What an arrangement point is called: the part of the body, the side of it and the level, left and right being the
+// avatar's own.
+QString GarmentViewWidget::pointTitle(const ArrangementPoint& point) const
+{
+    QString part;
+    switch (point.arrangement.part)
+    {
+        case BodyPart::LeftLeg:
+            part = tr("Left leg");
+            break;
+        case BodyPart::RightLeg:
+            part = tr("Right leg");
+            break;
+        case BodyPart::LeftArm:
+            part = tr("Left arm");
+            break;
+        case BodyPart::RightArm:
+            part = tr("Right arm");
+            break;
+        case BodyPart::Body:
+        default:
+            part = tr("Body");
+            break;
+    }
+
+    const QHash<QString, QString> sides = {
+        {QStringLiteral("front"), tr("front")},
+        {QStringLiteral("frontLeft"), tr("front left")},
+        {QStringLiteral("left"), tr("left side")},
+        {QStringLiteral("backLeft"), tr("back left")},
+        {QStringLiteral("back"), tr("back")},
+        {QStringLiteral("backRight"), tr("back right")},
+        {QStringLiteral("right"), tr("right side")},
+        {QStringLiteral("frontRight"), tr("front right")},
+        {QStringLiteral("outside"), tr("outside")},
+        {QStringLiteral("inside"), tr("inside")}};
+    const QHash<QString, QString> levels = {
+        {QStringLiteral("neck"), tr("at the neck")},
+        {QStringLiteral("bust"), tr("at the bust")},
+        {QStringLiteral("waist"), tr("at the waist")},
+        {QStringLiteral("hip"), tr("at the hip")},
+        {QStringLiteral("thigh"), tr("at the thigh")},
+        {QStringLiteral("knee"), tr("at the knee")},
+        {QStringLiteral("calf"), tr("at the calf")},
+        {QStringLiteral("upperArm"), tr("at the upper arm")},
+        {QStringLiteral("elbow"), tr("at the elbow")},
+        {QStringLiteral("wrist"), tr("at the wrist")}};
+    return tr("%1, %2, %3").arg(part, sides.value(point.side, point.side), levels.value(point.level, point.level));
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1196,6 +1431,7 @@ void GarmentViewWidget::dragPiece(const QVector3D& point)
                                                           m_drag.mirrored ? m_wrap->mirrored(point) : point);
         m_drag.current.angle = std::remainder(m_drag.start.angle + at.angle - m_drag.grabbed.angle, 360.0);
         m_drag.current.height = m_drag.start.height + at.height - m_drag.grabbed.height;
+        m_drag.current.point.clear();
         showArrangement(m_drag.piece, m_drag.current);
     }
 }
@@ -1275,6 +1511,9 @@ void GarmentViewWidget::storeArrangement(quint32 piece, const PieceArrangement& 
     arrangement.part = BodyWrap::partName(wanted.part);
     arrangement.angle = wanted.angle;
     arrangement.height = wanted.height;
+    arrangement.rotation = wanted.rotation;
+    arrangement.turned_over = wanted.turned_over;
+    arrangement.point = wanted.point;
 
     QVector<VPieceArrangement> arrangements = m_doc->getArrangements();
     auto existing = std::find_if(arrangements.begin(), arrangements.end(), [piece](const VPieceArrangement& other)
@@ -1477,6 +1716,11 @@ void GarmentViewWidget::updateActions()
                                  && m_scene_model->isPlaced(m_scene_model->selectedPiece());
     m_flip_action->setEnabled(seam_selected);
     m_remove_action->setEnabled(seam_selected || placed_selected);
+    const bool on_avatar = m_scene_model->isPlaced(m_scene_model->selectedPiece());
+    m_rotate_clockwise_action->setEnabled(on_avatar);
+    m_rotate_counterclockwise_action->setEnabled(on_avatar);
+    m_turn_over_action->setEnabled(on_avatar);
+    m_take_off_action->setEnabled(on_avatar);
 
     const bool has_avatar = m_scene_model->hasAvatar();
     m_avatar_action->setEnabled(!measuredAvatar().hasMeasurements());
@@ -2267,10 +2511,10 @@ void GarmentViewWidget::updateHint()
     else if (m_scene_model->isArranging())
     {
         hint = m_scene_model->selectedPiece() == 0
-               ? tr("Click a piece, then the spot on the avatar where it goes, or drag a placed piece around. Esc "
-                    "stops arranging.")
-               : tr("Click the spot on the avatar where the piece goes, or drag a placed piece around. Remove puts a "
-                    "placed piece back on the board.");
+               ? tr("Click a piece, then a point or any spot on the avatar where it goes, or drag a placed piece "
+                    "around. Esc stops arranging.")
+               : tr("Click a point or any spot on the avatar to put the piece there, or drag a placed piece around; "
+                    "right-click a placed piece to rotate it or turn it over.");
     }
     m_scene_model->setHint(hint);
 }
@@ -2456,9 +2700,43 @@ void GarmentViewWidget::createToolBar()
 
     m_arrange_action = tool_bar->addAction(tr("Arrange"));
     m_arrange_action->setCheckable(true);
-    m_arrange_action->setToolTip(tr("Put pieces on the avatar: click a piece, then the spot where it goes; drag a "
-                                    "placed piece to move it around"));
+    m_arrange_action->setToolTip(tr("Put pieces on the avatar: click a piece, then one of the points shown on the "
+                                    "avatar or any spot on it; drag a placed piece to move it around"));
     connect(m_arrange_action, &QAction::toggled, this, &GarmentViewWidget::setArranging);
+
+    // As CLO's arrangement: which way round a piece on the avatar is, in the Arrange menu and on a right-click on the
+    // piece.
+    m_rotate_clockwise_action = new QAction(tr("Rotate Clockwise"), this);
+    m_rotate_clockwise_action->setToolTip(tr("Turn the selected piece on the avatar a quarter of the way around "
+                                             "clockwise, as seen from outside"));
+    connect(m_rotate_clockwise_action, &QAction::triggered, this, &GarmentViewWidget::rotatePieceClockwise);
+    m_rotate_counterclockwise_action = new QAction(tr("Rotate Counterclockwise"), this);
+    m_rotate_counterclockwise_action->setToolTip(tr("Turn the selected piece on the avatar a quarter of the way "
+                                                    "around counterclockwise, as seen from outside"));
+    connect(m_rotate_counterclockwise_action, &QAction::triggered, this,
+            &GarmentViewWidget::rotatePieceCounterclockwise);
+    m_turn_over_action = new QAction(tr("Turn Over"), this);
+    m_turn_over_action->setToolTip(tr("Turn the selected piece on the avatar over, its other side out, as if it were "
+                                      "cut from the cloth turned over"));
+    connect(m_turn_over_action, &QAction::triggered, this, &GarmentViewWidget::turnPieceOver);
+    m_take_off_action = new QAction(tr("Take Off the Avatar"), this);
+    m_take_off_action->setToolTip(tr("Put the selected piece back on the board"));
+    connect(m_take_off_action, &QAction::triggered, this, &GarmentViewWidget::takePieceOff);
+
+    QMenu* arrange_menu = new QMenu(this);
+    arrange_menu->setToolTipsVisible(true);
+    arrange_menu->addActions({m_rotate_clockwise_action, m_rotate_counterclockwise_action, m_turn_over_action});
+    arrange_menu->addSeparator();
+    arrange_menu->addAction(m_take_off_action);
+    m_arrange_action->setMenu(arrange_menu);
+    if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_arrange_action)))
+    {
+        button->setPopupMode(QToolButton::MenuButtonPopup);
+    }
+
+    m_piece_menu = new QMenu(this);
+    m_piece_menu->setToolTipsVisible(true);
+    m_piece_menu->addActions(arrange_menu->actions());
 
     m_simulate_action = tool_bar->addAction(tr("Simulate"));
     m_simulate_action->setCheckable(true);
