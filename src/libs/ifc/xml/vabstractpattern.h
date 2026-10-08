@@ -209,28 +209,44 @@ struct VFabricTexture
     bool       operator==(const VFabricTexture& other) const;
 };
 
+/// How much a fabric shrinks, as CLO's shrinkage: the share of its drafted size the cloth wants to be across the grain,
+/// the weft, and along it, the warp, from 0.5 to 1.5; less shrinks it, as a rib knit worn snug, more stretches it out.
+/// Null, both 0, for none of its own.
+struct VFabricShrinkage
+{
+    qreal weft {0};
+    qreal warp {0};
+
+    bool  isNull() const;
+    bool  operator==(const VFabricShrinkage& other) const;
+};
+
 /// A piece cut from another fabric than the rest of the garment, the name of one of the 3D View's fabrics, or empty
-/// for the garment's, and an image of its own of the fabric, if any.
+/// for the garment's, and an image of its own of the fabric and how much it shrinks, if any.
 struct VPieceFabric
 {
-    quint32        piece_id {NULL_ID};
-    QString        fabric {};
-    VFabricTexture texture {};
+    quint32          piece_id {NULL_ID};
+    QString          fabric {};
+    VFabricTexture   texture {};
+    VFabricShrinkage shrinkage {};
 
-    bool           operator==(const VPieceFabric& other) const;
+    bool             operator==(const VPieceFabric& other) const;
 };
 
 /// The fabrics a garment is cut from, for the 3D View's drape: one for all its pieces, empty for the 3D View's
-/// default, and another for any piece cut from something else; each with an image of it, if any.
+/// default, and another for any piece cut from something else; each with an image of it and how much it shrinks, if
+/// any.
 struct VGarmentFabrics
 {
     QString               garment {};
     VFabricTexture        texture {};
     QVector<VPieceFabric> pieces {};
+    VFabricShrinkage      shrinkage {};
 
     bool                  operator==(const VGarmentFabrics& other) const;
     QString               of(quint32 piece_id) const;
     VFabricTexture        textureOf(quint32 piece_id) const;
+    VFabricShrinkage      shrinkageOf(quint32 piece_id) const;
 };
 
 /// A segment of a piece's seam line, from one point of the piece's path to the next, topstitched in the 3D View in a
@@ -680,6 +696,8 @@ public:
     static const QString AttrSwing;
     static const QString AttrNumber;
     static const QString AttrRatio;
+    static const QString AttrShrinkageWeft;
+    static const QString AttrShrinkageWarp;
     static const QString AttrAvatar;
     static const QString AttrEdgeLength;
     static const QString AttrCopy;

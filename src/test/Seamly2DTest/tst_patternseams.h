@@ -51,6 +51,7 @@ private slots:
     void undoRestoresLayers() const;
     void fabricsAreReadBack() const;
     void fabricTexturesAreReadBack() const;
+    void fabricShrinkageIsReadBack() const;
     void undoRestoresFabrics() const;
     void topstitchesAreReadBack() const;
     void undoRestoresTopstitches() const;

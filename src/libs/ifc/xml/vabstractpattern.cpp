@@ -231,6 +231,8 @@ const QString VAbstractPattern::AttrLean                = QStringLiteral("lean")
 const QString VAbstractPattern::AttrSwing               = QStringLiteral("swing");
 const QString VAbstractPattern::AttrNumber              = QStringLiteral("number");
 const QString VAbstractPattern::AttrRatio               = QStringLiteral("ratio");
+const QString VAbstractPattern::AttrShrinkageWeft       = QStringLiteral("shrinkageWeft");
+const QString VAbstractPattern::AttrShrinkageWarp       = QStringLiteral("shrinkageWarp");
 const QString VAbstractPattern::AttrAvatar              = QStringLiteral("avatar");
 const QString VAbstractPattern::AttrEdgeLength          = QStringLiteral("edgeLength");
 const QString VAbstractPattern::AttrCopy                = QStringLiteral("copy");
@@ -2346,15 +2348,30 @@ bool VFabricTexture::operator==(const VFabricTexture& other) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+bool VFabricShrinkage::isNull() const
+{
+    return weft <= 0 || warp <= 0;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool VFabricShrinkage::operator==(const VFabricShrinkage& other) const
+{
+    return (isNull() && other.isNull())
+           || (qFuzzyCompare(1.0 + weft, 1.0 + other.weft) && qFuzzyCompare(1.0 + warp, 1.0 + other.warp));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 bool VPieceFabric::operator==(const VPieceFabric& other) const
 {
-    return piece_id == other.piece_id && fabric == other.fabric && texture == other.texture;
+    return piece_id == other.piece_id && fabric == other.fabric && texture == other.texture
+           && shrinkage == other.shrinkage;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 bool VGarmentFabrics::operator==(const VGarmentFabrics& other) const
 {
-    return garment == other.garment && texture == other.texture && pieces == other.pieces;
+    return garment == other.garment && texture == other.texture && pieces == other.pieces
+           && shrinkage == other.shrinkage;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2388,6 +2405,25 @@ VFabricTexture VGarmentFabrics::textureOf(quint32 piece_id) const
         }
     }
     return texture;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief How much the fabric the piece is cut from shrinks: its own, or, cut from the garment's fabric, the
+/// garment's; null for none.
+VFabricShrinkage VGarmentFabrics::shrinkageOf(quint32 piece_id) const
+{
+    for (const VPieceFabric& fabric : pieces)
+    {
+        if (fabric.piece_id == piece_id)
+        {
+            if (!fabric.shrinkage.isNull() || !fabric.fabric.isEmpty())
+            {
+                return fabric.shrinkage;
+            }
+            break;
+        }
+    }
+    return shrinkage;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2882,10 +2918,22 @@ void VAbstractPattern::setLayers(const QVector<VPieceLayer>& layers)
 /// @brief The fabrics the garment is cut from.
 VGarmentFabrics VAbstractPattern::getFabrics() const
 {
+    auto read_shrinkage = [](const QDomElement& element)
+    {
+        VFabricShrinkage shrinkage;
+        if (!element.isNull())
+        {
+            shrinkage.weft = GetParametrDouble(element, AttrShrinkageWeft, QStringLiteral("0"));
+            shrinkage.warp = GetParametrDouble(element, AttrShrinkageWarp, QStringLiteral("0"));
+        }
+        return shrinkage;
+    };
+
     VGarmentFabrics fabrics;
     const QDomElement fabrics_element = documentElement().firstChildElement(TagFabrics);
     fabrics.garment = fabrics_element.isNull() ? QString() : GetParametrEmptyString(fabrics_element, AttrDefault);
     fabrics.texture = readFabricTexture(fabrics_element);
+    fabrics.shrinkage = read_shrinkage(fabrics_element);
     QDomElement element = fabrics_element.firstChildElement(TagFabric);
     while (!element.isNull())
     {
@@ -2893,6 +2941,7 @@ VGarmentFabrics VAbstractPattern::getFabrics() const
         fabric.piece_id = GetParametrUInt(element, AttrPiece, NULL_ID_STR);
         fabric.fabric = GetParametrEmptyString(element, AttrName);
         fabric.texture = readFabricTexture(element);
+        fabric.shrinkage = read_shrinkage(element);
         fabrics.pieces.append(fabric);
 
         element = element.nextSiblingElement(TagFabric);
@@ -2907,6 +2956,19 @@ void VAbstractPattern::setFabrics(const VGarmentFabrics& fabrics)
     QDomElement pattern = documentElement();
     QDomElement element = pattern.firstChildElement(TagFabrics);
 
+    auto set_shrinkage = [this](QDomElement& tag, const VFabricShrinkage& shrinkage)
+    {
+        if (shrinkage.isNull())
+        {
+            tag.removeAttribute(AttrShrinkageWeft);
+            tag.removeAttribute(AttrShrinkageWarp);
+        }
+        else
+        {
+            SetAttribute(tag, AttrShrinkageWeft, shrinkage.weft);
+            SetAttribute(tag, AttrShrinkageWarp, shrinkage.warp);
+        }
+    };
     auto append_texture = [this](QDomElement& parent, const VFabricTexture& texture)
     {
         if (!texture.isNull())
@@ -2919,7 +2981,7 @@ void VAbstractPattern::setFabrics(const VGarmentFabrics& fabrics)
         }
     };
 
-    if (fabrics.garment.isEmpty() && fabrics.texture.isNull() && fabrics.pieces.isEmpty())
+    if (fabrics.garment.isEmpty() && fabrics.texture.isNull() && fabrics.pieces.isEmpty() && fabrics.shrinkage.isNull())
     {
         if (!element.isNull())
         {
@@ -2945,6 +3007,7 @@ void VAbstractPattern::setFabrics(const VGarmentFabrics& fabrics)
         {
             SetAttribute(element, AttrDefault, fabrics.garment);
         }
+        set_shrinkage(element, fabrics.shrinkage);
         append_texture(element, fabrics.texture);
         for (const VPieceFabric& fabric : fabrics.pieces)
         {
@@ -2954,6 +3017,7 @@ void VAbstractPattern::setFabrics(const VGarmentFabrics& fabrics)
             {
                 SetAttribute(tag, AttrName, fabric.fabric);
             }
+            set_shrinkage(tag, fabric.shrinkage);
             append_texture(tag, fabric.texture);
             element.appendChild(tag);
         }

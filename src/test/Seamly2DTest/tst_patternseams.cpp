@@ -487,7 +487,9 @@ void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
     VGarmentFabrics fabrics;
     fabrics.garment = QStringLiteral("denim");
     fabrics.texture = texture(QByteArrayLiteral("PNG twill"), 12.5);
-    fabrics.pieces = {{20, QStringLiteral("chiffon"), {}}, {30, QString(), texture(QByteArrayLiteral("print"), 30)}};
+    fabrics.pieces = {{20, QStringLiteral("chiffon"), {}}, {30, QString(), texture(QByteArrayLiteral("print"), 30)},
+                      {40, QString(), {}, {0.8, 1.0}}};
+    fabrics.shrinkage = {0.95, 1.1};
     pattern.setFabrics(fabrics);
     pattern.setArrangements({arrangement(10, QStringLiteral("body"), 0, 120),
                              arrangement(20, QStringLiteral("leftLeg"), 0, 60),
@@ -625,6 +627,37 @@ void TST_PatternSeams::fabricTexturesAreReadBack() const
     pattern.setFabrics(image_only);
     QCOMPARE(pattern.getFabrics(), image_only);
     QCOMPARE(pattern.getFabrics().of(10), QString());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A piece cut from the garment's fabric shrinks as the garment's does, unless it shrinks its own way; a piece cut from
+// a fabric of its own, only its own way. Shrinkage alone is stored.
+void TST_PatternSeams::fabricShrinkageIsReadBack() const
+{
+    SeamsPattern pattern;
+    VGarmentFabrics fabrics;
+    fabrics.shrinkage = {0.9, 1.0};
+    fabrics.pieces = {{10, QStringLiteral("chiffon"), {}, {}},
+                      {20, QString(), {}, {0.8, 1.05}},
+                      {40, QStringLiteral("cottonJersey"), {}, {0.75, 0.95}}};
+    pattern.setFabrics(fabrics);
+
+    const VGarmentFabrics read = pattern.getFabrics();
+    QCOMPARE(read, fabrics);
+    QVERIFY(read.shrinkageOf(10).isNull());
+    QCOMPARE(read.shrinkageOf(20), VFabricShrinkage({0.8, 1.05}));
+    QCOMPARE(read.shrinkageOf(30), fabrics.shrinkage);
+    QCOMPARE(read.shrinkageOf(40), VFabricShrinkage({0.75, 0.95}));
+    const QDomElement element = pattern.documentElement().firstChildElement(QStringLiteral("fabrics"));
+    QCOMPARE(element.attribute(VAbstractPattern::AttrShrinkageWeft), QStringLiteral("0.9"));
+    QVERIFY(!element.firstChildElement(QStringLiteral("fabric")).hasAttribute(VAbstractPattern::AttrShrinkageWeft));
+    QVERIFY(!(VFabricShrinkage{0.9, 1.0} == VFabricShrinkage{0.9, 1.1}));
+    QVERIFY(VFabricShrinkage() == VFabricShrinkage({0, 1.0}));
+
+    VGarmentFabrics shrinkage_only;
+    shrinkage_only.shrinkage = {1.0, 0.85};
+    pattern.setFabrics(shrinkage_only);
+    QCOMPARE(pattern.getFabrics(), shrinkage_only);
 }
 
 //---------------------------------------------------------------------------------------------------------------------

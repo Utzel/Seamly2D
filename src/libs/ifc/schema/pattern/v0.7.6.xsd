@@ -273,10 +273,14 @@
                   </xs:sequence>
                   <xs:attribute name="piece" type="xs:unsignedInt" use="required"/>
                   <xs:attribute name="name" type="xs:string"/>
+                  <xs:attribute name="shrinkageWeft" type="shrinkage"/>
+                  <xs:attribute name="shrinkageWarp" type="shrinkage"/>
                 </xs:complexType>
               </xs:element>
             </xs:sequence>
             <xs:attribute name="default" type="xs:string"/>
+            <xs:attribute name="shrinkageWeft" type="shrinkage"/>
+            <xs:attribute name="shrinkageWarp" type="shrinkage"/>
           </xs:complexType>
           <xs:unique name="fabricPiece">
             <xs:selector xpath="fabric"/>
@@ -1004,6 +1008,12 @@
       </xs:extension>
     </xs:simpleContent>
   </xs:complexType>
+  <xs:simpleType name="shrinkage">
+    <xs:restriction base="xs:double">
+      <xs:minInclusive value="0.5"/>
+      <xs:maxInclusive value="1.5"/>
+    </xs:restriction>
+  </xs:simpleType>
   <xs:complexType name="seamStretch">
     <xs:attribute name="piece" type="xs:unsignedInt" use="required"/>
     <xs:attribute name="start" type="xs:unsignedInt" use="required"/>
