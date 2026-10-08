@@ -47,6 +47,7 @@
 #include "../vgarment/topstitch.h"
 
 class DrapeRunner;
+class ElasticEditor;
 class FoldEditor;
 class GarmentSceneModel;
 class QAction;
@@ -150,7 +151,10 @@ private slots:
     void               setFolding(bool folding);
     void               chooseFoldAngle(QAction* action);
     void               updateFolds();
-    void               showFoldLines();
+    void               setElasticEditing(bool editing);
+    void               chooseElasticRatio(QAction* action);
+    void               updateElastics();
+    void               showLines();
     void               stitchEveryEdge(bool every);
     void               chooseStitchStyle(QAction* action);
     void               chooseThread(QAction* action);
@@ -267,6 +271,7 @@ private:
     SeamEditor*                m_seam_editor;
     StitchEditor*              m_stitch_editor;
     FoldEditor*                m_fold_editor;
+    ElasticEditor*             m_elastic_editor;
     QAction*                   m_sew_action;
     QAction*                   m_flip_action;
     QActionGroup*              m_seam_types;
@@ -280,6 +285,9 @@ private:
     QAction*                   m_fold_action;
     QActionGroup*              m_fold_angles;
     QAction*                   m_other_angle_action;
+    QAction*                   m_elastic_action;
+    QActionGroup*              m_elastic_ratios;
+    QAction*                   m_other_ratio_action;
     QAction*                   m_cancel_action;
     QAction*                   m_avatar_action;
     QAction*                   m_arrange_action;
@@ -351,6 +359,7 @@ private:
     void               saveArrangements(const QString& text, const QVector<VPieceArrangement>& arrangements);
     void               saveTopstitches(const VTopstitches& topstitches, const QString& text);
     void               saveFolds(const QVector<VFold>& folds, const QString& text);
+    void               saveElastics(const QVector<VElastic>& elastics, const QString& text);
     int                layerOf(quint32 piece) const;
     VFabricTexture     ownFabricImage() const;
     void               saveFabricImage(const VFabricTexture& texture, const QString& text);

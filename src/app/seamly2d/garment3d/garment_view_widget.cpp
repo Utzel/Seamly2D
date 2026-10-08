@@ -94,6 +94,7 @@
 #include "../vtools/undocommands/save_arrangements.h"
 #include "../vtools/undocommands/save_avatar.h"
 #include "../vtools/undocommands/save_fabrics.h"
+#include "../vtools/undocommands/save_elastics.h"
 #include "../vtools/undocommands/save_folds.h"
 #include "../vtools/undocommands/save_layers.h"
 #include "../vtools/undocommands/save_seams.h"
@@ -101,6 +102,7 @@
 #include "avatar_dialog.h"
 #include "drape_runner.h"
 #include "flow_layout.h"
+#include "elastic_editor.h"
 #include "fold_editor.h"
 #include "garment_scene_model.h"
 #include "piece_geometry.h"
@@ -209,6 +211,9 @@ const qreal fold_angles[] = {360.0, 270.0, 90.0, 0.0};
 // The seam types the Sew menu offers, by the angle they hold the pieces at, as VSeam says: none, flat, turned and
 // right sides together.
 const qreal seam_angles[] = {-1.0, 180.0, 360.0, 0.0};
+
+// The elastic's lengths the Elastic menu offers, as shares of the line's length.
+const qreal elastic_ratios[] = {0.9, 0.8, 0.7, 0.6};
 
 // The menus offer the layers from 0, next to the body, to this one; a garment of a shell, its lining and pockets, worn
 // over another, rarely needs more.
@@ -359,6 +364,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_seam_editor(new SeamEditor(this))
     , m_stitch_editor(new StitchEditor(this))
     , m_fold_editor(new FoldEditor(this))
+    , m_elastic_editor(new ElasticEditor(this))
     , m_sew_action(nullptr)
     , m_flip_action(nullptr)
     , m_seam_types(nullptr)
@@ -372,6 +378,9 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_fold_action(nullptr)
     , m_fold_angles(nullptr)
     , m_other_angle_action(nullptr)
+    , m_elastic_action(nullptr)
+    , m_elastic_ratios(nullptr)
+    , m_other_ratio_action(nullptr)
     , m_cancel_action(nullptr)
     , m_avatar_action(nullptr)
     , m_arrange_action(nullptr)
@@ -465,8 +474,12 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     connect(m_stitch_editor, &StitchEditor::previewChanged, this, &GarmentViewWidget::showStitchPreview);
     connect(m_fold_editor, &FoldEditor::foldsEdited, this, &GarmentViewWidget::saveFolds);
     connect(m_fold_editor, &FoldEditor::foldingChanged, this, &GarmentViewWidget::updateActions);
-    connect(m_fold_editor, &FoldEditor::linesChanged, this, &GarmentViewWidget::showFoldLines);
+    connect(m_fold_editor, &FoldEditor::linesChanged, this, &GarmentViewWidget::showLines);
     connect(m_doc, &VAbstractPattern::foldsChanged, this, &GarmentViewWidget::updateFolds);
+    connect(m_elastic_editor, &ElasticEditor::elasticsEdited, this, &GarmentViewWidget::saveElastics);
+    connect(m_elastic_editor, &ElasticEditor::editingChanged, this, &GarmentViewWidget::updateActions);
+    connect(m_elastic_editor, &ElasticEditor::linesChanged, this, &GarmentViewWidget::showLines);
+    connect(m_doc, &VAbstractPattern::elasticsChanged, this, &GarmentViewWidget::updateElastics);
     connect(m_scene_model, &GarmentSceneModel::placeRequested, this, &GarmentViewWidget::placePiece);
     connect(m_scene_model, &GarmentSceneModel::placePointRequested, this, &GarmentViewWidget::placePieceAtPoint);
     connect(m_scene_model, &GarmentSceneModel::previewRequested, this, &GarmentViewWidget::previewArrangement);
@@ -558,6 +571,8 @@ void GarmentViewWidget::clear()
     m_stitch_editor->setPieces(QVector<ShownPiece>(), VTopstitches());
     m_fold_editor->setFolding(false);
     m_fold_editor->setPieces(QVector<ShownPiece>(), QVector<VFold>());
+    m_elastic_editor->setEditing(false);
+    m_elastic_editor->setPieces(QVector<ShownPiece>(), QVector<VElastic>());
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -766,12 +781,14 @@ void GarmentViewWidget::rebuildScene()
     const QHash<quint32, QVector<ThreadStitch>> stitches = m_stitch_editor->stitches();
     const QHash<quint32, QVector<ThreadStitch>> preview = m_stitch_editor->preview();
     m_fold_editor->setPieces(shown_pieces, m_doc->getFolds());
+    m_elastic_editor->setPieces(shown_pieces, m_doc->getElastics());
     const QHash<quint32, QVector<DrawnLine>> fold_lines = m_fold_editor->lines();
+    const QHash<quint32, QVector<DrawnLine>> elastic_lines = m_elastic_editor->lines();
     for (GarmentSceneModel::Piece& scene_piece : scene_pieces)
     {
         scene_piece.stitches = stitches.value(scene_piece.id);
         scene_piece.preview = preview.value(scene_piece.id);
-        scene_piece.lines = fold_lines.value(scene_piece.id);
+        scene_piece.lines = fold_lines.value(scene_piece.id) + elastic_lines.value(scene_piece.id);
     }
 
     m_scene_model->setPieces(scene_pieces);
@@ -1584,6 +1601,10 @@ void GarmentViewWidget::cancel()
     {
         m_fold_editor->cancel();
     }
+    else if (m_elastic_editor->isEditing())
+    {
+        m_elastic_editor->cancel();
+    }
     else
     {
         m_seam_editor->cancel();
@@ -1591,8 +1612,8 @@ void GarmentViewWidget::cancel()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// While arranging, a click on a piece picks it and a click on the avatar puts it there. Sewing, topstitching, folding
-// and arranging take turns.
+// While arranging, a click on a piece picks it and a click on the avatar puts it there. Sewing, topstitching, folding,
+// sewing elastic and arranging take turns.
 void GarmentViewWidget::setArranging(bool arranging)
 {
     if (arranging)
@@ -1600,6 +1621,7 @@ void GarmentViewWidget::setArranging(bool arranging)
         m_sew_action->setChecked(false);
         m_topstitch_action->setChecked(false);
         m_fold_action->setChecked(false);
+        m_elastic_action->setChecked(false);
     }
     m_scene_model->setArranging(arranging);
     if (!arranging)
@@ -2318,6 +2340,11 @@ void GarmentViewWidget::startSimulation()
                                                                                             fold_strength),
                                                                   layer));
             drape_piece.count = garment_piece.mesh.vertexCount();
+            for (const ClothElastic& elastic : m_elastic_editor->clothElastics(piece, garment_piece.mesh,
+                                                                              static_cast<quint32>(drape_piece.offset)))
+            {
+                solver->addElastic(elastic);
+            }
             m_drape_pieces.append(drape_piece);
             offsets.insert(garment_piece.id, static_cast<quint32>(drape_piece.offset));
             meshes.insert(garment_piece.id, garment_piece.mesh);
@@ -2462,6 +2489,10 @@ void GarmentViewWidget::updateActions()
     {
         m_fold_editor->setFolding(false);
     }
+    if (m_seam_editor->isSewing() && m_elastic_editor->isEditing())
+    {
+        m_elastic_editor->setEditing(false);
+    }
     const QSignalBlocker stitch_blocker(m_topstitch_action);
     m_topstitch_action->setChecked(m_stitch_editor->isStitching());
     const QSignalBlocker fold_blocker(m_fold_action);
@@ -2475,6 +2506,17 @@ void GarmentViewWidget::updateActions()
         known_angle = known_angle || chosen;
     }
     m_other_angle_action->setChecked(!known_angle);
+    const QSignalBlocker elastic_blocker(m_elastic_action);
+    m_elastic_action->setChecked(m_elastic_editor->isEditing());
+    bool known_ratio = false;
+    for (QAction* ratio : m_elastic_ratios->actions())
+    {
+        const bool chosen = ratio != m_other_ratio_action
+                            && qFuzzyCompare(1.0 + ratio->data().toDouble(), 1.0 + m_elastic_editor->ratio());
+        ratio->setChecked(chosen);
+        known_ratio = known_ratio || chosen;
+    }
+    m_other_ratio_action->setChecked(!known_ratio);
     const VTopstitches topstitches = m_doc->getTopstitches();
     m_every_edge_action->setChecked(topstitches.all);
     const QString chosen_style = TopstitchStyle::preset(topstitches.style).name;
@@ -2539,7 +2581,8 @@ void GarmentViewWidget::updateActions()
     m_show_pieces_action->setEnabled(!m_scene_model->hiddenPieces().isEmpty());
 
     // With nothing to step back from, Esc is left to the main window.
-    const bool stitching = m_stitch_editor->isStitching() || m_fold_editor->isFolding();
+    const bool stitching = m_stitch_editor->isStitching() || m_fold_editor->isFolding()
+                           || m_elastic_editor->isEditing();
     m_cancel_action->setEnabled(m_seam_editor->isSewing() || seam_selected || m_scene_model->isArranging()
                                 || stitching);
 
@@ -2837,6 +2880,7 @@ void GarmentViewWidget::setStitching(bool stitching)
         m_sew_action->setChecked(false);
         m_arrange_action->setChecked(false);
         m_fold_action->setChecked(false);
+        m_elastic_action->setChecked(false);
     }
     m_stitch_editor->setStitching(stitching);
 }
@@ -2851,6 +2895,7 @@ void GarmentViewWidget::setFolding(bool folding)
         m_sew_action->setChecked(false);
         m_arrange_action->setChecked(false);
         m_topstitch_action->setChecked(false);
+        m_elastic_action->setChecked(false);
     }
     m_fold_editor->setFolding(folding);
 }
@@ -2925,9 +2970,86 @@ void GarmentViewWidget::updateFolds()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-void GarmentViewWidget::showFoldLines()
+// While sewing elastic, the elastics and the pieces' internal paths show, and a click near an edge or a path sews
+// elastic along it or takes it out. Sewing elastic, folding, sewing, topstitching and arranging take turns.
+void GarmentViewWidget::setElasticEditing(bool editing)
 {
-    m_scene_model->setLines(m_fold_editor->lines());
+    if (editing)
+    {
+        m_sew_action->setChecked(false);
+        m_arrange_action->setChecked(false);
+        m_topstitch_action->setChecked(false);
+        m_fold_action->setChecked(false);
+    }
+    m_elastic_editor->setEditing(editing);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A length was chosen in the Elastic menu, the share of their lines' length elastics clicked get: one of those
+// offered, or any other.
+void GarmentViewWidget::chooseElasticRatio(QAction* action)
+{
+    if (action == m_other_ratio_action)
+    {
+        bool chosen = false;
+        const double percent = QInputDialog::getDouble(this, tr("Elastic Length"),
+                                                       tr("How long the elastic is, as a percentage of the length of "
+                                                          "the edge or line it is sewn along: the cloth gathers to "
+                                                          "that."),
+                                                       m_elastic_editor->ratio() * 100.0, 10.0, 100.0, 0, &chosen);
+        if (chosen)
+        {
+            m_elastic_editor->setRatio(percent / 100.0);
+        }
+    }
+    else
+    {
+        m_elastic_editor->setRatio(action->data().toDouble());
+    }
+    m_elastic_action->setChecked(true);
+    updateActions();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The pattern's elastics changed, by sewing elastic here or by undo and redo. Pieces on the avatar gather, or let go,
+// right away: the drape goes on with them, or starts if it was off.
+void GarmentViewWidget::updateElastics()
+{
+    const QVector<VElastic> before = m_elastic_editor->elastics();
+    const QVector<VElastic> after = m_doc->getElastics();
+    m_elastic_editor->setElastics(after);
+
+    bool placed = false;
+    for (const QVector<VElastic>* elastics : {&before, &after})
+    {
+        const QVector<VElastic>& others = elastics == &before ? after : before;
+        for (const VElastic& elastic : *elastics)
+        {
+            placed = placed || (!others.contains(elastic) && m_arrangements.contains(elastic.piece_id));
+        }
+    }
+    if (placed && m_runner->isRunning())
+    {
+        startSimulation();
+        updateActions();
+    }
+    else if (placed && m_simulate_action->isEnabled())
+    {
+        m_simulate_action->setChecked(true);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The lines the editors draw on the pieces: the folds and internal paths while folding, the elastics while sewing them.
+void GarmentViewWidget::showLines()
+{
+    QHash<quint32, QVector<DrawnLine>> lines = m_fold_editor->lines();
+    const QHash<quint32, QVector<DrawnLine>> elastic_lines = m_elastic_editor->lines();
+    for (auto piece = elastic_lines.constBegin(); piece != elastic_lines.constEnd(); ++piece)
+    {
+        lines[piece.key()] += piece.value();
+    }
+    m_scene_model->setLines(lines);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -3455,6 +3577,8 @@ void GarmentViewWidget::createScene()
     properties.insert(QStringLiteral("stitchEditor"), QVariant::fromValue(m_stitch_editor));
     properties.insert(QStringLiteral("foldEditor"), QVariant::fromValue(m_fold_editor));
     m_fold_editor->setHighlightColor(colors.color(QPalette::Highlight));
+    properties.insert(QStringLiteral("elasticEditor"), QVariant::fromValue(m_elastic_editor));
+    m_elastic_editor->setHighlightColor(colors.color(QPalette::Highlight));
     properties.insert(QStringLiteral("emptyText"), tr("Pieces included in the layout show up here."));
     properties.insert(QStringLiteral("hintText"),
                       tr("Drag to turn, Ctrl+drag to move, scroll to zoom, double-click to fit"));
@@ -3656,6 +3780,42 @@ void GarmentViewWidget::createToolBar()
     connect(m_fold_angles, &QActionGroup::triggered, this, &GarmentViewWidget::chooseFoldAngle);
     m_fold_action->setMenu(fold_menu);
     if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_fold_action)))
+    {
+        button->setPopupMode(QToolButton::MenuButtonPopup);
+    }
+
+    m_elastic_action = tool_bar->addAction(tr("Elastic"));
+    m_elastic_action->setCheckable(true);
+    m_elastic_action->setToolTip(tr("Sew elastic along edges of pieces and lines inside them, as at an elastic waist "
+                                    "or cuff, or for shirring: click near an edge or a line, on the board or on the "
+                                    "avatar, to gather the cloth along it to the length chosen in the menu, or to take "
+                                    "the elastic out"));
+    connect(m_elastic_action, &QAction::toggled, this, &GarmentViewWidget::setElasticEditing);
+
+    // The elastic's length, as CLO's elastic ratio: the one chosen is the one edges and lines clicked get.
+    QMenu* elastic_menu = new QMenu(this);
+    elastic_menu->setToolTipsVisible(true);
+    elastic_menu->addSection(tr("Length"));
+    m_elastic_ratios = new QActionGroup(this);
+    for (const qreal ratio : elastic_ratios)
+    {
+        QAction* action = elastic_menu->addAction(tr("%1% of the Length").arg(qRound(ratio * 100.0)));
+        action->setData(ratio);
+        action->setToolTip(tr("Gather the cloth along the edge or line to %1% of its length")
+                               .arg(qRound(ratio * 100.0)));
+        m_elastic_ratios->addAction(action);
+    }
+    m_other_ratio_action = elastic_menu->addAction(tr("Other Length..."));
+    m_other_ratio_action->setToolTip(tr("Gather the cloth to any share of the edge's or line's length, from 10 to 100 "
+                                        "percent"));
+    m_elastic_ratios->addAction(m_other_ratio_action);
+    for (QAction* action : m_elastic_ratios->actions())
+    {
+        action->setCheckable(true);
+    }
+    connect(m_elastic_ratios, &QActionGroup::triggered, this, &GarmentViewWidget::chooseElasticRatio);
+    m_elastic_action->setMenu(elastic_menu);
+    if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_elastic_action)))
     {
         button->setPopupMode(QToolButton::MenuButtonPopup);
     }
@@ -3964,6 +4124,7 @@ void GarmentViewWidget::updateIcons()
         m_remove_action->setIcon(toolIcon(QStringLiteral("remove")));
         m_topstitch_action->setIcon(toolIcon(QStringLiteral("topstitch")));
         m_fold_action->setIcon(toolIcon(QStringLiteral("fold")));
+        m_elastic_action->setIcon(toolIcon(QStringLiteral("elastic")));
         m_avatar_action->setIcon(toolIcon(QStringLiteral("avatar")));
         m_arrange_action->setIcon(toolIcon(QStringLiteral("arrange")));
         m_simulate_action->setIcon(toolIcon(QStringLiteral("simulate")));
@@ -4035,6 +4196,12 @@ void GarmentViewWidget::saveTopstitches(const VTopstitches& topstitches, const Q
 void GarmentViewWidget::saveFolds(const QVector<VFold>& folds, const QString& text)
 {
     qApp->getUndoStack()->push(new SaveFolds(text, m_doc->getFolds(), folds, m_doc));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::saveElastics(const QVector<VElastic>& elastics, const QString& text)
+{
+    qApp->getUndoStack()->push(new SaveElastics(text, m_doc->getElastics(), elastics, m_doc));
 }
 
 //---------------------------------------------------------------------------------------------------------------------

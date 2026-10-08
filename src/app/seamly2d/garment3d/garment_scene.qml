@@ -36,6 +36,7 @@ Rectangle {
     required property var seamEditor
     required property var stitchEditor
     required property var foldEditor
+    required property var elasticEditor
     required property string emptyText
     required property string hintText
     required property color backgroundColor
@@ -458,6 +459,7 @@ Rectangle {
             visible: root.sceneModel.hasAvatar && (root.sceneModel.avatarShown || root.sceneModel.arranging)
             opacity: root.seamEditor.sewing ? 0.25 : 1.0
             pickable: root.sceneModel.arranging || root.stitchEditor.stitching || root.foldEditor.folding
+                      || root.elasticEditor.editing
             geometry: root.sceneModel.avatarGeometry
 
             materials: PrincipledMaterial {
@@ -676,9 +678,9 @@ Rectangle {
                     }
 
                     // The piece's internal paths while folding, the folds and the path under the mouse each in a
-                    // color of their own.
+                    // color of their own; while sewing elastic, the elastics too.
                     Model {
-                        visible: root.foldEditor.folding
+                        visible: root.foldEditor.folding || root.elasticEditor.editing
                         geometry: piece_node.pieceLines
                         castsShadows: false
                         pickable: false
@@ -958,14 +960,15 @@ Rectangle {
         }
 
         // While arranging, a click on the avatar places the selected piece there; while topstitching, a click near an
-        // edge stitches it, and while folding a click near an internal path folds the piece along it. Otherwise seams
-        // get the click first, and what they leave selects a piece.
+        // edge stitches it, while folding a click near an internal path folds the piece along it, and while sewing
+        // elastic a click near an edge or a path sews elastic along it. Otherwise seams get the click first, and what
+        // they leave selects a piece.
         // While draping, cloth on the avatar pressed on is held by the mouse and pulled where it goes, at the distance
         // it was taken hold of; a pin pressed on moves with the mouse, the cloth with it.
         PointHandler {
             id: pull_handler
             enabled: root.sceneModel.simulating && !root.sceneModel.arranging && !root.seamEditor.sewing
-                     && !root.stitchEditor.stitching && !root.foldEditor.folding
+                     && !root.stitchEditor.stitching && !root.foldEditor.folding && !root.elasticEditor.editing
             acceptedButtons: Qt.LeftButton
             acceptedModifiers: Qt.NoModifier
 
@@ -1004,7 +1007,7 @@ Rectangle {
         TapHandler {
             acceptedModifiers: Qt.ShiftModifier
             enabled: !root.sceneModel.arranging && !root.seamEditor.sewing && !root.stitchEditor.stitching
-                     && !root.foldEditor.folding
+                     && !root.foldEditor.folding && !root.elasticEditor.editing
 
             onTapped: (event_point) => {
                 const pin = root.pinNear(event_point.position.x, event_point.position.y)
@@ -1058,6 +1061,13 @@ Rectangle {
                     }
                     return
                 }
+                if (root.elasticEditor.editing) {
+                    const spot = root.pieceSpot(x, y)
+                    if (spot !== undefined) {
+                        root.elasticEditor.click(spot.piece, spot.x, spot.y, spot.tolerance)
+                    }
+                    return
+                }
                 if (root.sceneModel.arranging) {
                     if (root.gizmoPartAt(x, y) >= 0) {
                         return
@@ -1098,6 +1108,7 @@ Rectangle {
         TapHandler {
             acceptedButtons: Qt.RightButton
             enabled: !root.seamEditor.sewing && !root.stitchEditor.stitching && !root.foldEditor.folding
+                     && !root.elasticEditor.editing
 
             onTapped: (event_point) => {
                 const target = view.pick(event_point.position.x, event_point.position.y).objectHit
@@ -1110,6 +1121,7 @@ Rectangle {
         HoverHandler {
             id: hover_handler
             cursorShape: root.seamEditor.sewing || root.stitchEditor.stitching || root.foldEditor.folding
+                         || root.elasticEditor.editing
                          ? Qt.CrossCursor
                          : root.pointUnderMouse >= 0 || root.gizmoUnderMouse >= 0 ? Qt.PointingHandCursor
                                                                                   : Qt.ArrowCursor
@@ -1150,6 +1162,15 @@ Rectangle {
                     }
                     return
                 }
+                if (root.elasticEditor.editing) {
+                    const spot = root.pieceSpot(x, y)
+                    if (spot === undefined) {
+                        root.elasticEditor.leave()
+                    } else {
+                        root.elasticEditor.hover(spot.piece, spot.x, spot.y, spot.tolerance)
+                    }
+                    return
+                }
                 if (!root.seamEditor.sewing) {
                     return
                 }
@@ -1168,6 +1189,7 @@ Rectangle {
                     root.seamEditor.leave()
                     root.stitchEditor.leave()
                     root.foldEditor.leave()
+                    root.elasticEditor.leave()
                     if (root.sceneModel.arranging) {
                         root.pointUnderMouse = -1
                         root.sceneModel.leaveAvatar()
@@ -1196,7 +1218,8 @@ Rectangle {
         readonly property string task: root.sceneModel.hint !== "" ? root.sceneModel.hint
                                        : root.stitchEditor.hint !== "" ? root.stitchEditor.hint
                                        : root.foldEditor.hint !== "" ? root.foldEditor.hint
-                                                                     : root.seamEditor.hint
+                                       : root.elasticEditor.hint !== "" ? root.elasticEditor.hint
+                                                                        : root.seamEditor.hint
 
         text: task !== "" ? task : root.hintText
         color: root.textColor
