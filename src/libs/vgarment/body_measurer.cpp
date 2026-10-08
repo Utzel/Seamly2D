@@ -216,19 +216,14 @@ qreal BodyMeasurer::height(const QVector<QVector3D>& positions) const
 /// @brief Fullest girth between the waist and the armpits, where the arms are still clear of the chest.
 qreal BodyMeasurer::bust(const QVector<QVector3D>& positions) const
 {
-    const float tall = static_cast<float>(height(positions));
-    return extremeGirth(positions, m_model.joint(positions, QStringLiteral("spine-2")).y(),
-                        m_model.joint(positions, QStringLiteral("l-shoulder")).y() - 0.04f * tall, true,
-                        chest_share * shoulderDistance(positions));
+    return findBust(positions, nullptr);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 /// @brief Smallest girth between the hips and the lower ribs.
 qreal BodyMeasurer::waist(const QVector<QVector3D>& positions) const
 {
-    const float tall = static_cast<float>(height(positions));
-    return extremeGirth(positions, m_model.joint(positions, QStringLiteral("pelvis")).y() + 0.03f * tall,
-                        m_model.joint(positions, QStringLiteral("spine-1")).y() - 0.03f * tall, false);
+    return findWaist(positions, nullptr);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -236,19 +231,84 @@ qreal BodyMeasurer::waist(const QVector<QVector3D>& positions) const
 /// not below the crotch, where the tape would go around the thighs.
 qreal BodyMeasurer::hip(const QVector<QVector3D>& positions) const
 {
-    const float tall = static_cast<float>(height(positions));
-    return extremeGirth(positions,
-                        qMax(m_model.joint(positions, QStringLiteral("l-upper-leg")).y() - 0.075f * tall,
-                             m_model.crotch(positions).y() + search_step),
-                        m_model.joint(positions, QStringLiteral("pelvis")).y() + 0.05f * tall, true);
+    return findHip(positions, nullptr);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 /// @brief Smallest girth between the base of the neck and the head.
 qreal BodyMeasurer::neck(const QVector<QVector3D>& positions) const
 {
+    return findNeck(positions, nullptr);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The height the bust is measured at, in the avatar's coordinates.
+qreal BodyMeasurer::bustLevel(const QVector<QVector3D>& positions) const
+{
+    qreal level = 0;
+    findBust(positions, &level);
+    return level;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The height the waist is measured at, in the avatar's coordinates.
+qreal BodyMeasurer::waistLevel(const QVector<QVector3D>& positions) const
+{
+    qreal level = 0;
+    findWaist(positions, &level);
+    return level;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The height the hip is measured at, in the avatar's coordinates.
+qreal BodyMeasurer::hipLevel(const QVector<QVector3D>& positions) const
+{
+    qreal level = 0;
+    findHip(positions, &level);
+    return level;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The height the neck is measured at, in the avatar's coordinates.
+qreal BodyMeasurer::neckLevel(const QVector<QVector3D>& positions) const
+{
+    qreal level = 0;
+    findNeck(positions, &level);
+    return level;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+qreal BodyMeasurer::findBust(const QVector<QVector3D>& positions, qreal* level) const
+{
+    const float tall = static_cast<float>(height(positions));
+    return extremeGirth(positions, m_model.joint(positions, QStringLiteral("spine-2")).y(),
+                        m_model.joint(positions, QStringLiteral("l-shoulder")).y() - 0.04f * tall, true,
+                        chest_share * shoulderDistance(positions), level);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+qreal BodyMeasurer::findWaist(const QVector<QVector3D>& positions, qreal* level) const
+{
+    const float tall = static_cast<float>(height(positions));
+    return extremeGirth(positions, m_model.joint(positions, QStringLiteral("pelvis")).y() + 0.03f * tall,
+                        m_model.joint(positions, QStringLiteral("spine-1")).y() - 0.03f * tall, false, 0, level);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+qreal BodyMeasurer::findHip(const QVector<QVector3D>& positions, qreal* level) const
+{
+    const float tall = static_cast<float>(height(positions));
+    return extremeGirth(positions,
+                        qMax(m_model.joint(positions, QStringLiteral("l-upper-leg")).y() - 0.075f * tall,
+                             m_model.crotch(positions).y() + search_step),
+                        m_model.joint(positions, QStringLiteral("pelvis")).y() + 0.05f * tall, true, 0, level);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+qreal BodyMeasurer::findNeck(const QVector<QVector3D>& positions, qreal* level) const
+{
     return extremeGirth(positions, m_model.joint(positions, QStringLiteral("neck")).y(),
-                        m_model.joint(positions, QStringLiteral("head")).y(), false);
+                        m_model.joint(positions, QStringLiteral("head")).y(), false, 0, level);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -281,9 +341,10 @@ qreal BodyMeasurer::tapeGirth(const QVector<QVector3D>& positions, const QVector
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Largest or smallest tape girth between two heights, leaving out unusable slices.
+// Largest or smallest tape girth between two heights, leaving out unusable slices; with a level, also the height it
+// is taken at.
 qreal BodyMeasurer::extremeGirth(const QVector<QVector3D>& positions, float from, float to, bool largest,
-                                 float max_extent_x) const
+                                 float max_extent_x, qreal* level) const
 {
     const float reach = torso_share * shoulderDistance(positions);
     auto girth = [this, &positions, reach, max_extent_x](float level)
@@ -297,24 +358,30 @@ qreal BodyMeasurer::extremeGirth(const QVector<QVector3D>& positions, float from
 
     float best_level = from;
     qreal best = girth(from);
-    for (float level = from + search_step; level <= to; level += search_step)
+    for (float at = from + search_step; at <= to; at += search_step)
     {
-        const qreal candidate = girth(level);
+        const qreal candidate = girth(at);
         if (better(candidate, best))
         {
             best = candidate;
-            best_level = level;
+            best_level = at;
         }
     }
 
     const float refine_step = search_step / 4.0f;
-    for (float level = best_level - search_step + refine_step; level < best_level + search_step; level += refine_step)
+    float refined_level = best_level;
+    for (float at = best_level - search_step + refine_step; at < best_level + search_step; at += refine_step)
     {
-        const qreal candidate = girth(level);
+        const qreal candidate = girth(at);
         if (better(candidate, best))
         {
             best = candidate;
+            refined_level = at;
         }
+    }
+    if (level != nullptr)
+    {
+        *level = refined_level;
     }
     return best;
 }

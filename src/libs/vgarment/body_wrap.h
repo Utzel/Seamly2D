@@ -25,6 +25,8 @@
 #ifndef BODY_WRAP_H
 #define BODY_WRAP_H
 
+#include <QPair>
+#include <QPointF>
 #include <QString>
 #include <QVector3D>
 #include <QVector>
@@ -44,12 +46,30 @@ enum class BodyPart : quint8
     RightArm
 };
 
-/// @brief Where a piece starts out on the avatar.
+/// @brief Where a piece starts out on the avatar, and which way round.
 struct PieceArrangement
 {
     BodyPart part = BodyPart::Body;
-    qreal    angle = 0;   ///< degrees around the part, 0 in front, 90 towards +x (on an arm see LimbLine)
-    qreal    height = 0;  ///< of the piece's middle above the floor, in cm; on an arm, of the arm's middle line there
+    qreal    angle = 0;            ///< degrees around the part, 0 in front, 90 towards +x (on an arm see LimbLine)
+    qreal    height = 0;           ///< of the piece's middle above the floor, in cm; on an arm, of the arm's middle
+                                   ///< line there
+    qreal    rotation = 0;         ///< degrees the piece is turned clockwise about its middle, as seen from outside
+    bool     turned_over = false;  ///< the piece's other side out, as if cut from the cloth turned over
+    QString  point;                ///< the arrangement point it was put at, if any; it goes there on any avatar
+};
+
+/// @brief A place on the avatar to put pieces at, as CLO's arrangement points. Left and right are the avatar's own,
+/// as for its legs and arms.
+struct ArrangementPoint
+{
+    QString          name;         ///< as the pattern file keeps it, the part, level and side: "body-waist-front"
+    QString          level;        ///< neck, bust, waist, hip or thigh on the body, thigh, knee or calf on a leg,
+                                   ///< upperArm, elbow or wrist on an arm
+    QString          side;         ///< front, frontLeft, left, backLeft, back, backRight, right or frontRight on the
+                                   ///< body, front, outside, back or inside on a leg or an arm
+    PieceArrangement arrangement;  ///< where a piece put there goes
+    QVector3D        position;     ///< on the body, where it shows
+    QVector3D        normal;       ///< outwards from the body there
 };
 
 /// @brief Puts flat pieces around a fitted avatar, wrapped around its body, a leg or an arm, the way they are held
@@ -63,7 +83,13 @@ struct PieceArrangement
 /// around a cylinder keeps the piece's lengths, so it starts out unstretched,
 /// except where the tube bends or narrows, most of all around the elbow, where it starts out stretched on the outside
 /// of the bend and squeezed on the inside. No piece wraps all the way around, so its sides don't overlap. Seen from
-/// outside, a placed piece looks as it does in the piece scene, its top towards the shoulder on an arm.
+/// outside, a placed piece looks as it does in the piece scene, its top towards the shoulder on an arm, unless it is
+/// rotated or turned over.
+///
+/// Pieces can be put anywhere on the avatar, or at its arrangement points: in front, at the sides and behind the body
+/// at the neck, the bust, the waist, the hip and halfway down the thighs, and around each leg and arm where its
+/// middles and joints are. A point is where its level is on this avatar, so a piece put there goes to the same place
+/// on any avatar.
 class BodyWrap
 {
 public:
@@ -71,16 +97,22 @@ public:
 
     PieceArrangement   arrangementAt(const QVector3D& point) const;
     PieceArrangement   arrangementOn(BodyPart part, const QVector3D& point) const;
-    QVector<QVector3D> place(const GarmentMesh& mesh, const PieceArrangement& arrangement) const;
+    PieceArrangement   resolved(const PieceArrangement& arrangement) const;
+    QVector<QVector3D> place(const GarmentMesh& mesh, const PieceArrangement& arrangement, qreal out = 0) const;
     QVector3D          mirrored(const QVector3D& point) const;
+
+    const QVector<ArrangementPoint>& points() const;
+    int                pointNamed(const QString& name) const;
 
     static QString     partName(BodyPart part);
     static BodyPart    partFromName(const QString& name);
 
 private:
-    // A skin vertex of an arm below the armpit: where along the arm's middle line it is, and how far from it.
+    // A skin vertex of an arm below the armpit: which it is, where along the arm's middle line it is, and how far from
+    // it.
     struct ArmSkin
     {
+        int   vertex = 0;
         float along = 0;
         float distance = 0;
     };
@@ -95,19 +127,31 @@ private:
     qreal              m_shoulder_tips[2];  // how far along its line each arm's shoulder tip is
     QVector<ArmSkin>   m_arm_skin[2];
     QVector<qint8>     m_skin_arms;         // for each skin vertex the arm below the armpit it is on, or -1
+    QVector<bool>      m_skin_on_arm;       // for each skin vertex whether it is close to an arm's bones
+    QVector<ArrangementPoint> m_points;
 
-    QVector<QVector3D> placeUpright(const GarmentMesh& mesh, const PieceArrangement& arrangement) const;
+    QVector<QVector3D> placeUpright(const QVector<QPointF>& flat, const PieceArrangement& arrangement,
+                                    qreal out) const;
     QVector3D          axisAt(BodyPart part, qreal height) const;
     qreal              radiusAround(BodyPart part, const QVector3D& axis, qreal from, qreal to) const;
     bool               onArm(const QVector3D& point) const;
+    bool               onPartsSide(BodyPart part, const QVector3D& point) const;
     BodyPart           nearestPart(const QVector3D& point) const;
 
     void               findArmSkin(int side, const QVector<QVector<int>>& neighbours);
     int                armAt(const QVector3D& point) const;
     qreal              armRadius(int side, qreal from, qreal to) const;
-    QVector<QVector3D> placeOnArm(const GarmentMesh& mesh, const PieceArrangement& arrangement) const;
+    QVector<QVector3D> placeOnArm(const QVector<QPointF>& flat, const PieceArrangement& arrangement, qreal out) const;
+
+    void               findPoints(const BodyModel& model, const QVector<QVector3D>& positions);
+    void               addUprightPoints(BodyPart part, const QString& level, qreal height,
+                                        const QVector<QPair<QString, qreal>>& sides);
+    void               addArmPoints(int side, const QString& level, qreal along, qreal outside);
+    qreal              armAngle(int side, qreal along, const QVector3D& towards) const;
+    qreal              armReach(int side, qreal along, qreal angle) const;
 
     static int         armSide(BodyPart part);
+    static QVector<QPointF> arranged(const GarmentMesh& mesh, const PieceArrangement& arrangement);
 };
 
 #endif // BODY_WRAP_H

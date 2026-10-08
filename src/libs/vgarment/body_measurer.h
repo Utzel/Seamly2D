@@ -69,6 +69,10 @@ public:
     qreal              waist(const QVector<QVector3D>& positions) const;
     qreal              hip(const QVector<QVector3D>& positions) const;
     qreal              neck(const QVector<QVector3D>& positions) const;
+    qreal              bustLevel(const QVector<QVector3D>& positions) const;
+    qreal              waistLevel(const QVector<QVector3D>& positions) const;
+    qreal              hipLevel(const QVector<QVector3D>& positions) const;
+    qreal              neckLevel(const QVector<QVector3D>& positions) const;
     qreal              upperArm(const QVector<QVector3D>& positions) const;
     qreal              lowerArm(const QVector<QVector3D>& positions) const;
     qreal              arm(const QVector<QVector3D>& positions) const;
@@ -84,8 +88,12 @@ public:
 private:
     const BodyModel&   m_model;
 
+    qreal              findBust(const QVector<QVector3D>& positions, qreal* level) const;
+    qreal              findWaist(const QVector<QVector3D>& positions, qreal* level) const;
+    qreal              findHip(const QVector<QVector3D>& positions, qreal* level) const;
+    qreal              findNeck(const QVector<QVector3D>& positions, qreal* level) const;
     qreal              extremeGirth(const QVector<QVector3D>& positions, float from, float to, bool largest,
-                                    float max_extent_x = 0) const;
+                                    float max_extent_x, qreal* level) const;
     float              shoulderDistance(const QVector<QVector3D>& positions) const;
     float              lowest(const QVector<QVector3D>& positions) const;
     qreal              legGirth(const QVector<QVector3D>& positions, float from, float to) const;

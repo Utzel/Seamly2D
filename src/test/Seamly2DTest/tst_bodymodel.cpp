@@ -25,6 +25,7 @@
 #include "tst_bodymodel.h"
 
 #include <QLineF>
+#include <QSet>
 #include <QtMath>
 #include <QtTest>
 
@@ -770,4 +771,233 @@ void TST_BodyModel::sleevesStartAroundTheArm() const
     {
         QVERIFY2((wrap.mirrored(placed.at(i)) - mirrored.at(i)).length() < 0.05f, qUtf8Printable(QString::number(i)));
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The arrangement points go around the body at the neck, bust, waist, hip and thighs, and around the legs and the
+// arms, each where a tape around the part would lie, facing out. A piece put at one goes where it is, whichever way
+// round the piece is.
+void TST_BodyModel::arrangementPointsSitOnTheBody() const
+{
+    const BodyModel model;
+    const QVector<QVector3D> positions = model.evaluate(female());
+    const BodyWrap wrap(model, positions);
+    const BodyCollider skin(positions.mid(0, model.skinVertexCount()), model.triangles());
+    const QVector<ArrangementPoint>& points = wrap.points();
+    QCOMPARE(points.size(), 5 * 8 + 2 * 3 * 4 + 2 * 3 * 4);
+
+    QSet<QString> names;
+    for (int i = 0; i < points.size(); ++i)
+    {
+        const ArrangementPoint& point = points.at(i);
+        names.insert(point.name);
+        QCOMPARE(wrap.pointNamed(point.name), i);
+        QCOMPARE(point.arrangement.point, point.name);
+        QCOMPARE(point.name, BodyWrap::partName(point.arrangement.part) + QLatin1Char('-') + point.level
+                                 + QLatin1Char('-') + point.side);
+        QVERIFY(qAbs(point.normal.length() - 1.0f) < 1e-4f);
+
+        // On the skin, or over a hollow the tape bridges, never inside the body.
+        BodyContact contact;
+        QVERIFY(skin.closest(point.position, skin.trianglesWithin(point.position, 30), &contact));
+        const float farthest = point.arrangement.part == BodyPart::Body ? 8.0f : 3.0f;
+        QVERIFY2(contact.distance > -0.3f && contact.distance < farthest,
+                 qUtf8Printable(QStringLiteral("%1 is %2 cm off the skin").arg(point.name).arg(contact.distance)));
+
+        PieceArrangement put;
+        put.point = point.name;
+        put.rotation = 90;
+        put.turned_over = true;
+        const PieceArrangement there = wrap.resolved(put);
+        QVERIFY(there.part == point.arrangement.part);
+        QCOMPARE(there.angle, point.arrangement.angle);
+        QCOMPARE(there.height, point.arrangement.height);
+        QCOMPARE(there.rotation, 90.0);
+        QVERIFY(there.turned_over);
+    }
+    QCOMPARE(names.size(), points.size());
+    QCOMPARE(wrap.pointNamed(QStringLiteral("body-knee-front")), -1);
+    QCOMPARE(wrap.pointNamed(QString()), -1);
+
+    auto named = [&wrap](const QString& name)
+    {
+        const int index = wrap.pointNamed(name);
+        return index >= 0 ? wrap.points().at(index) : ArrangementPoint();
+    };
+
+    // From the neck down, the waist where it is measured.
+    const QStringList body_levels = {QStringLiteral("neck"), QStringLiteral("bust"), QStringLiteral("waist"),
+                                     QStringLiteral("hip"), QStringLiteral("thigh")};
+    for (int i = 1; i < body_levels.size(); ++i)
+    {
+        QVERIFY2(named(QStringLiteral("body-%1-front").arg(body_levels.at(i - 1))).arrangement.height
+                     > named(QStringLiteral("body-%1-front").arg(body_levels.at(i))).arrangement.height,
+                 qUtf8Printable(body_levels.at(i)));
+    }
+    QCOMPARE(named(QStringLiteral("body-waist-back")).arrangement.height, BodyMeasurer(model).waistLevel(positions));
+    for (const QString& part : {QStringLiteral("leftLeg"), QStringLiteral("rightLeg")})
+    {
+        QVERIFY(named(part + QStringLiteral("-thigh-front")).arrangement.height
+                > named(part + QStringLiteral("-knee-front")).arrangement.height);
+        QVERIFY(named(part + QStringLiteral("-knee-front")).arrangement.height
+                > named(part + QStringLiteral("-calf-front")).arrangement.height);
+    }
+    for (const QString& part : {QStringLiteral("leftArm"), QStringLiteral("rightArm")})
+    {
+        QVERIFY(named(part + QStringLiteral("-upperArm-front")).arrangement.height
+                > named(part + QStringLiteral("-elbow-front")).arrangement.height);
+        QVERIFY(named(part + QStringLiteral("-elbow-front")).arrangement.height
+                > named(part + QStringLiteral("-wrist-front")).arrangement.height);
+    }
+
+    // Facing the way they are named: the front forwards, the avatar's left towards its left leg, the outside of a leg
+    // away from the other leg, the outside of an arm up, where a sleeve's cap goes.
+    const QVector3D pelvis = model.joint(positions, QStringLiteral("pelvis"));
+    const QVector3D left_hip = model.joint(positions, QStringLiteral("l-upper-leg"));
+    const float left = left_hip.x() > pelvis.x() ? 1.0f : -1.0f;
+    QVERIFY(named(QStringLiteral("body-bust-front")).normal.z() > 0.99f);
+    QVERIFY(named(QStringLiteral("body-hip-back")).normal.z() < -0.99f);
+    QVERIFY(named(QStringLiteral("body-waist-left")).normal.x() * left > 0.99f);
+    QVERIFY(named(QStringLiteral("body-waist-right")).position.x() * left < pelvis.x() * left - 10);
+    QVERIFY(named(QStringLiteral("leftLeg-knee-outside")).normal.x() * left > 0.99f);
+    QVERIFY(named(QStringLiteral("rightLeg-knee-outside")).normal.x() * left < -0.99f);
+    QVERIFY(named(QStringLiteral("leftLeg-knee-front")).position.x() * left > pelvis.x() * left);
+    QVERIFY(named(QStringLiteral("leftArm-upperArm-outside")).normal.y() > 0.5f);
+    QVERIFY(named(QStringLiteral("rightArm-elbow-outside")).normal.y() > 0.5f);
+    QVERIFY(named(QStringLiteral("leftArm-elbow-inside")).normal.y() < -0.5f);
+    QVERIFY2(qAbs(named(QStringLiteral("leftArm-upperArm-outside")).arrangement.angle - 90.0) < 15.0,
+             qUtf8Printable(QString::number(named(QStringLiteral("leftArm-upperArm-outside")).arrangement.angle)));
+    QVERIFY2(qAbs(named(QStringLiteral("rightArm-upperArm-outside")).arrangement.angle + 90.0) < 15.0,
+             qUtf8Printable(QString::number(named(QStringLiteral("rightArm-upperArm-outside")).arrangement.angle)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// On a taller avatar the waist is higher up: a piece put at the waist goes to its waist, a piece put anywhere else
+// stays as high as it was put.
+void TST_BodyModel::arrangementPointsFollowTheAvatar() const
+{
+    const BodyModel model;
+    BodyShape tall_shape = female();
+    tall_shape.scale = 1.1;
+    const BodyWrap wrap(model, model.evaluate(female()));
+    const BodyWrap tall(model, model.evaluate(tall_shape));
+
+    const ArrangementPoint waist = wrap.points().at(wrap.pointNamed(QStringLiteral("body-waist-front")));
+    const ArrangementPoint tall_waist = tall.points().at(tall.pointNamed(QStringLiteral("body-waist-front")));
+    QVERIFY2(tall_waist.arrangement.height > waist.arrangement.height + 5,
+             qUtf8Printable(QStringLiteral("%1 and %2").arg(waist.arrangement.height)
+                                .arg(tall_waist.arrangement.height)));
+
+    const PieceArrangement at_waist = waist.arrangement;
+    QCOMPARE(tall.resolved(at_waist).height, tall_waist.arrangement.height);
+
+    PieceArrangement anywhere = at_waist;
+    anywhere.point.clear();
+    QCOMPARE(tall.resolved(anywhere).height, waist.arrangement.height);
+
+    PieceArrangement unknown = at_waist;
+    unknown.point = QStringLiteral("body-shin-front");
+    QCOMPARE(tall.resolved(unknown).height, waist.arrangement.height);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A piece rotated goes on turned clockwise as seen from outside, a piece turned over as its mirror image; either way it
+// is bent around the body as it is, not stretched.
+void TST_BodyModel::piecesTurnAndTurnOver() const
+{
+    const BodyModel model;
+    const QVector<QVector3D> positions = model.evaluate(female());
+    const BodyWrap wrap(model, positions);
+    const QPointF top_left(0, 0);
+    const QPointF top_right(20, 0);
+    const QPointF bottom_left(0, 30);
+    const GarmentMesh mesh = PieceMesher().meshPolygon({top_left, top_right, QPointF(20, 30), bottom_left});
+    auto vertex = [&mesh](const QPointF& rest)
+    {
+        int found = -1;
+        for (int i = 0; i < mesh.vertexCount(); ++i)
+        {
+            found = QLineF(mesh.rest_positions.at(i), rest).length() < 1e-6 ? i : found;
+        }
+        return found;
+    };
+
+    // In front of the waist, where +x is on the right as seen from the front.
+    const PieceArrangement front = wrap.points().at(wrap.pointNamed(QStringLiteral("body-waist-front"))).arrangement;
+    auto placed = [&wrap, &mesh, &front](qreal rotation, bool turned_over)
+    {
+        PieceArrangement arrangement = front;
+        arrangement.rotation = rotation;
+        arrangement.turned_over = turned_over;
+        return wrap.place(mesh, arrangement);
+    };
+    auto tall = [](const QVector<QVector3D>& points)
+    {
+        float lowest = std::numeric_limits<float>::infinity();
+        float highest = -std::numeric_limits<float>::infinity();
+        for (const QVector3D& point : points)
+        {
+            lowest = qMin(lowest, point.y());
+            highest = qMax(highest, point.y());
+        }
+        return highest - lowest;
+    };
+
+    const QVector<QVector3D> as_drafted = placed(0, false);
+    QVERIFY(as_drafted.at(vertex(top_left)).x() < as_drafted.at(vertex(top_right)).x());
+    QVERIFY(as_drafted.at(vertex(top_left)).y() > as_drafted.at(vertex(bottom_left)).y() + 29);
+    QVERIFY(qAbs(tall(as_drafted) - 30.0f) < 0.01f);
+
+    // A quarter turn clockwise takes the top left corner to the top right, and the piece lies on its side.
+    const QVector<QVector3D> rotated = placed(90, false);
+    QVERIFY(rotated.at(vertex(top_left)).x() > rotated.at(vertex(bottom_left)).x());
+    QVERIFY(rotated.at(vertex(top_left)).y() > rotated.at(vertex(top_right)).y() + 19);
+    QVERIFY(qAbs(tall(rotated) - 20.0f) < 0.01f);
+
+    // Turned over, its left side is on the right.
+    const QVector<QVector3D> turned_over = placed(0, true);
+    QVERIFY(turned_over.at(vertex(top_left)).x() > turned_over.at(vertex(top_right)).x());
+    QVERIFY(turned_over.at(vertex(top_left)).y() > turned_over.at(vertex(bottom_left)).y() + 29);
+
+    // Turned over and half way round, it is upside down.
+    const QVector<QVector3D> upside_down = placed(180, true);
+    QVERIFY(upside_down.at(vertex(top_left)).x() < upside_down.at(vertex(top_right)).x());
+    QVERIFY(upside_down.at(vertex(top_left)).y() < upside_down.at(vertex(bottom_left)).y() - 29);
+
+    for (const QVector<QVector3D>& placement : {as_drafted, rotated, turned_over, upside_down})
+    {
+        qreal worst_strain = 0;
+        for (int t = 0; t + 2 < mesh.indices.size(); t += 3)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                const int a = static_cast<int>(mesh.indices.at(t + k));
+                const int b = static_cast<int>(mesh.indices.at(t + (k + 1) % 3));
+                const qreal rest = QLineF(mesh.rest_positions.at(a), mesh.rest_positions.at(b)).length();
+                worst_strain = qMax(worst_strain, qAbs((placement.at(a) - placement.at(b)).length() / rest - 1.0));
+            }
+        }
+        QVERIFY2(worst_strain < 0.01, qUtf8Printable(QStringLiteral("an edge is %1 % off").arg(worst_strain * 100)));
+    }
+
+    // Put further out, as a preview, it keeps its shape that much further off the body.
+    const QVector3D pelvis = model.joint(positions, QStringLiteral("pelvis"));
+    const QVector<QVector3D> further = wrap.place(mesh, front, 1.0);
+    for (int i = 0; i < further.size(); ++i)
+    {
+        const qreal reach = qSqrt(qPow(as_drafted.at(i).x() - pelvis.x(), 2)
+                                  + qPow(as_drafted.at(i).z() - pelvis.z(), 2));
+        const qreal further_reach = qSqrt(qPow(further.at(i).x() - pelvis.x(), 2)
+                                          + qPow(further.at(i).z() - pelvis.z(), 2));
+        QVERIFY2(qAbs(further_reach - reach - 1.0) < 1e-3, qUtf8Printable(QString::number(further_reach - reach)));
+        QVERIFY(qAbs(further.at(i).y() - as_drafted.at(i).y()) < 1e-4f);
+    }
+
+    // On an arm too: a piece rotated half way round has its top towards the hand.
+    PieceArrangement on_arm = wrap.points().at(wrap.pointNamed(QStringLiteral("leftArm-elbow-outside"))).arrangement;
+    const QVector<QVector3D> sleeve = wrap.place(mesh, on_arm);
+    on_arm.rotation = 180;
+    const QVector<QVector3D> sleeve_turned = wrap.place(mesh, on_arm);
+    QVERIFY(sleeve.at(vertex(top_left)).y() > sleeve.at(vertex(bottom_left)).y());
+    QVERIFY(sleeve_turned.at(vertex(top_left)).y() < sleeve_turned.at(vertex(bottom_left)).y());
 }

@@ -24,9 +24,12 @@
 
 #include "body_wrap.h"
 
+#include <QPolygonF>
 #include <QRectF>
 #include <QtMath>
 
+#include <algorithm>
+#include <cmath>
 #include <limits>
 #include <queue>
 
@@ -68,6 +71,18 @@ const qreal armpit_precision = 0.25;
 // Skin closer than this share of the shoulder joint's distance to the middle of the body is the torso's.
 const float torso_middle = 0.5f;
 
+// Arrangement points around the body or a leg sit where a tape around it at their height would: on the outline of
+// the skin up to this many cm above and below them, bridging its hollows.
+const qreal point_band = 2.0;
+
+// The calf's arrangement points are this share of the way down from the knee to the ankle.
+const qreal calf_share = 0.3;
+
+// An arm's arrangement points sit as far from its middle line as its skin reaches up to this many cm up and down the
+// arm from them, and up to this many degrees around it either way.
+const qreal arm_point_reach = 2.0;
+const qreal arm_point_spread = 20.0;
+
 //---------------------------------------------------------------------------------------------------------------------
 float distanceToSegment(const QVector3D& point, const QVector3D& a, const QVector3D& b)
 {
@@ -90,6 +105,71 @@ qreal widestWrapRadius(qreal width)
 {
     return width / (2.0 * M_PI * widest_wrap);
 }
+
+//---------------------------------------------------------------------------------------------------------------------
+qreal cross(const QPointF& origin, const QPointF& a, const QPointF& b)
+{
+    return (a.x() - origin.x()) * (b.y() - origin.y()) - (a.y() - origin.y()) * (b.x() - origin.x());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The convex hull of the points, anticlockwise (Andrew's monotone chain).
+QVector<QPointF> convexHull(QVector<QPointF> points)
+{
+    std::sort(points.begin(), points.end(), [](const QPointF& a, const QPointF& b)
+    {
+        return a.x() < b.x() || (!(b.x() < a.x()) && a.y() < b.y());
+    });
+    if (points.size() < 3)
+    {
+        return points;
+    }
+
+    QVector<QPointF> hull(2 * points.size());
+    int count = 0;
+    for (int i = 0; i < points.size(); ++i)
+    {
+        while (count >= 2 && cross(hull.at(count - 2), hull.at(count - 1), points.at(i)) <= 0)
+        {
+            --count;
+        }
+        hull[count++] = points.at(i);
+    }
+    const int lower = count + 1;
+    for (int i = points.size() - 2; i >= 0; --i)
+    {
+        while (count >= lower && cross(hull.at(count - 2), hull.at(count - 1), points.at(i)) <= 0)
+        {
+            --count;
+        }
+        hull[count++] = points.at(i);
+    }
+    hull.resize(count - 1);
+    return hull;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// How far a ray from a point inside a convex outline runs before it leaves it; 0 if it doesn't meet it.
+qreal exitDistance(const QVector<QPointF>& outline, const QPointF& from, const QPointF& direction)
+{
+    qreal farthest = 0;
+    for (int i = 0; i < outline.size(); ++i)
+    {
+        const QPointF to_edge = outline.at(i) - from;
+        const QPointF edge = outline.at((i + 1) % outline.size()) - outline.at(i);
+        const qreal across = direction.x() * edge.y() - direction.y() * edge.x();
+        if (qAbs(across) > 1e-12)
+        {
+            const qreal along_ray = (to_edge.x() * edge.y() - to_edge.y() * edge.x()) / across;
+            const qreal along_edge = (to_edge.x() * direction.y() - to_edge.y() * direction.x()) / across;
+            if (along_ray > 0 && along_edge >= 0 && along_edge <= 1)
+            {
+                farthest = qMax(farthest, along_ray);
+            }
+        }
+    }
+    return farthest;
+}
 } // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -101,6 +181,8 @@ BodyWrap::BodyWrap(const BodyModel& model, const QVector<QVector3D>& positions)
     , m_armpits{0, 0}
     , m_shoulder_tips{0, 0}
     , m_skin_arms(m_skin.size(), -1)
+    , m_skin_on_arm()
+    , m_points()
 {
     const QString sides[2] = {QStringLiteral("l-"), QStringLiteral("r-")};
     for (int side = 0; side < 2; ++side)
@@ -140,6 +222,13 @@ BodyWrap::BodyWrap(const BodyModel& model, const QVector<QVector3D>& positions)
     }
     findArmSkin(0, neighbours);
     findArmSkin(1, neighbours);
+
+    m_skin_on_arm.reserve(m_skin.size());
+    for (const QVector3D& point : m_skin)
+    {
+        m_skin_on_arm.append(onArm(point));
+    }
+    findPoints(model, positions);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -183,12 +272,32 @@ PieceArrangement BodyWrap::arrangementOn(BodyPart part, const QVector3D& point) 
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-/// @brief Where the mesh's vertices start out: the piece wrapped around the part at the arrangement's height, its
-/// middle at the arrangement's angle. Its horizontal lines run around the part, its vertical lines down it, and
-/// distances along it are kept.
-QVector<QVector3D> BodyWrap::place(const GarmentMesh& mesh, const PieceArrangement& arrangement) const
+/// @brief Where an arrangement puts a piece on this avatar: if it was put at an arrangement point, where that point
+/// is on this avatar, otherwise where it says.
+PieceArrangement BodyWrap::resolved(const PieceArrangement& arrangement) const
 {
-    return armSide(arrangement.part) >= 0 ? placeOnArm(mesh, arrangement) : placeUpright(mesh, arrangement);
+    PieceArrangement resolved = arrangement;
+    const int index = pointNamed(arrangement.point);
+    if (index >= 0)
+    {
+        const PieceArrangement& at = m_points.at(index).arrangement;
+        resolved.part = at.part;
+        resolved.angle = at.angle;
+        resolved.height = at.height;
+    }
+    return resolved;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Where the mesh's vertices start out: the piece, turned over and rotated as the arrangement says, wrapped
+/// around the part at the arrangement's height, its middle at the arrangement's angle. Its horizontal lines run around
+/// the part, its vertical lines down it, and distances along it are kept. Put further out by `out` cm, it shows in
+/// front of pieces already put there, as a preview does.
+QVector<QVector3D> BodyWrap::place(const GarmentMesh& mesh, const PieceArrangement& arrangement, qreal out) const
+{
+    const QVector<QPointF> flat = arranged(mesh, arrangement);
+    return armSide(arrangement.part) >= 0 ? placeOnArm(flat, arrangement, out)
+                                          : placeUpright(flat, arrangement, out);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -197,6 +306,26 @@ QVector<QVector3D> BodyWrap::place(const GarmentMesh& mesh, const PieceArrangeme
 QVector3D BodyWrap::mirrored(const QVector3D& point) const
 {
     return QVector3D(2.0f * m_pelvis.x() - point.x(), point.y(), point.z());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The arrangement points: around the body, then around the left and the right leg, then around the left and
+/// the right arm.
+const QVector<ArrangementPoint>& BodyWrap::points() const
+{
+    return m_points;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Which of the arrangement points has that name; -1 for none.
+int BodyWrap::pointNamed(const QString& name) const
+{
+    int found = -1;
+    for (int i = 0; i < m_points.size() && found < 0 && !name.isEmpty(); ++i)
+    {
+        found = m_points.at(i).name == name ? i : -1;
+    }
+    return found;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -239,22 +368,24 @@ BodyPart BodyWrap::partFromName(const QString& name)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Wraps the piece around an upright cylinder on the body's or the leg's axis, its vertical lines straight down. The
-// cylinder is wide enough to clear the part over the piece's height, even where a leg leans away from its axis.
-QVector<QVector3D> BodyWrap::placeUpright(const GarmentMesh& mesh, const PieceArrangement& arrangement) const
+// Wraps the piece's flat points around an upright cylinder on the body's or the leg's axis, its vertical lines straight
+// down. The cylinder is wide enough to clear the part over the piece's height, even where a leg leans away from its
+// axis.
+QVector<QVector3D> BodyWrap::placeUpright(const QVector<QPointF>& flat, const PieceArrangement& arrangement,
+                                          qreal out) const
 {
-    const QRectF bounds = mesh.bounds();
+    const QRectF bounds = QPolygonF(flat).boundingRect();
     const QPointF middle = bounds.center();
     const qreal half_height = bounds.height() / 2.0;
     const QVector3D axis = axisAt(arrangement.part, arrangement.height);
     const qreal radius = qMax(radiusAround(arrangement.part, axis, arrangement.height - half_height,
                                            arrangement.height + half_height) + clearance,
-                              widestWrapRadius(bounds.width()));
+                              widestWrapRadius(bounds.width())) + out;
     const qreal start = qDegreesToRadians(arrangement.angle);
 
     QVector<QVector3D> placed;
-    placed.reserve(mesh.vertexCount());
-    for (const QPointF& point : mesh.rest_positions)
+    placed.reserve(flat.size());
+    for (const QPointF& point : flat)
     {
         const qreal height = arrangement.height - (point.y() - middle.y());
         const qreal around = start + (point.x() - middle.x()) / radius;
@@ -292,21 +423,25 @@ QVector3D BodyWrap::axisAt(BodyPart part, qreal height) const
 // skin on its side of the body, so a piece reaching up to the hips or the crotch clears them as well.
 qreal BodyWrap::radiusAround(BodyPart part, const QVector3D& axis, qreal from, qreal to) const
 {
-    const float side = part == BodyPart::Body ? 0.0f
-                                              : m_legs[part == BodyPart::LeftLeg ? 0 : 1][0].x() - m_pelvis.x();
     qreal radius = 0;
-    for (const QVector3D& point : m_skin)
+    for (int i = 0; i < m_skin.size(); ++i)
     {
-        if (point.y() >= from && point.y() <= to && !onArm(point))
+        const QVector3D& point = m_skin.at(i);
+        if (point.y() >= from && point.y() <= to && !m_skin_on_arm.at(i) && onPartsSide(part, point))
         {
-            const bool belongs = part == BodyPart::Body || (point.x() - m_pelvis.x()) * side >= 0;
-            if (belongs)
-            {
-                radius = qMax(radius, horizontalDistance(point, axis));
-            }
+            radius = qMax(radius, horizontalDistance(point, axis));
         }
     }
     return radius > 0 ? radius : fallback_radius;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Whether skin is the part's to wrap around: all skin for the body, the skin on its side of the body for a leg.
+bool BodyWrap::onPartsSide(BodyPart part, const QVector3D& point) const
+{
+    const float side = part == BodyPart::Body ? 0.0f
+                                              : m_legs[part == BodyPart::LeftLeg ? 0 : 1][0].x() - m_pelvis.x();
+    return part == BodyPart::Body || (point.x() - m_pelvis.x()) * side >= 0;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -361,6 +496,7 @@ void BodyWrap::findArmSkin(int side, const QVector<QVector<int>>& neighbours)
     for (int i = 0; i < m_skin.size(); ++i)
     {
         qreal distance = 0;
+        skin[i].vertex = i;
         skin[i].along = static_cast<float>(line.alongNearest(m_skin.at(i), &distance));
         skin[i].distance = static_cast<float>(distance);
         const float to_elbow = (m_skin.at(i) - m_arms[side][1]).lengthSquared();
@@ -472,24 +608,25 @@ qreal BodyWrap::armRadius(int side, qreal from, qreal to) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Wraps the piece around a tube along the arm's middle line, its middle at the arrangement's place on the line and
-// angle around it, its top no further up the arm than the shoulder tip.
+// Wraps the piece's flat points around a tube along the arm's middle line, its middle at the arrangement's place on the
+// line and angle around it, its top no further up the arm than the shoulder tip.
 //
 // The tube narrows down the arm as the arm does, though slowly, staying clear of the arm near each place along it
 // and wide enough there for the piece to go around without its sides overlapping. So a sleeve narrowing to the wrist
 // wraps most of the way around the arm all the way down, and its underarm seam closes under the arm, not across it.
-QVector<QVector3D> BodyWrap::placeOnArm(const GarmentMesh& mesh, const PieceArrangement& arrangement) const
+QVector<QVector3D> BodyWrap::placeOnArm(const QVector<QPointF>& flat, const PieceArrangement& arrangement,
+                                        qreal out) const
 {
     const int side = armSide(arrangement.part);
     const LimbLine& line = m_arm_lines[side];
-    const QRectF bounds = mesh.bounds();
+    const QRectF bounds = QPolygonF(flat).boundingRect();
     const QPointF middle = bounds.center();
     const qreal top = qMax(line.alongAtHeight(arrangement.height) - bounds.height() / 2.0, m_shoulder_tips[side]);
 
     // The radius every cm down the piece.
     const int rows = qCeil(bounds.height()) + 2;
     QVector<qreal> widths(rows, 0);
-    for (const QPointF& point : mesh.rest_positions)
+    for (const QPointF& point : flat)
     {
         const int row = qBound(0, qRound(point.y() - bounds.top()), rows - 1);
         widths[row] = qMax(widths.at(row), 2.0 * qAbs(point.x() - middle.x()));
@@ -515,18 +652,174 @@ QVector<QVector3D> BodyWrap::placeOnArm(const GarmentMesh& mesh, const PieceArra
     }
 
     QVector<QVector3D> placed;
-    placed.reserve(mesh.vertexCount());
-    for (const QPointF& point : mesh.rest_positions)
+    placed.reserve(flat.size());
+    for (const QPointF& point : flat)
     {
         const qreal down = point.y() - bounds.top();
         const int row = qBound(0, qFloor(down), rows - 2);
         const qreal t = qBound(0.0, down - row, 1.0);
-        const qreal radius = radii.at(row) * (1.0 - t) + radii.at(row + 1) * t;
+        const qreal radius = radii.at(row) * (1.0 - t) + radii.at(row + 1) * t + out;
         const qreal along = top + down;
         const qreal angle = arrangement.angle + qRadiansToDegrees((point.x() - middle.x()) / radius);
         placed.append(line.pointAt(along) + line.aroundAt(along, angle) * static_cast<float>(radius));
     }
     return placed;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Finds the arrangement points: around the body at the neck, the bust, the waist and the hip, where they are measured,
+// and halfway down the thighs; around each leg halfway down the thigh, at the knee and on the calf; around each arm
+// halfway down the upper arm, at the elbow and at the wrist.
+void BodyWrap::findPoints(const BodyModel& model, const QVector<QVector3D>& positions)
+{
+    const BodyMeasurer measurer(model);
+
+    // The avatar's left, the way its left leg is.
+    const qreal left = m_legs[0][0].x() > m_pelvis.x() ? 90.0 : -90.0;
+    const QVector<QPair<QString, qreal>> around_body = {
+        {QStringLiteral("front"), 0.0},
+        {QStringLiteral("frontLeft"), left / 2.0},
+        {QStringLiteral("left"), left},
+        {QStringLiteral("backLeft"), std::remainder(180.0 - left / 2.0, 360.0)},
+        {QStringLiteral("back"), 180.0},
+        {QStringLiteral("backRight"), std::remainder(180.0 + left / 2.0, 360.0)},
+        {QStringLiteral("right"), -left},
+        {QStringLiteral("frontRight"), -left / 2.0}};
+    const qreal knees = (m_legs[0][1].y() + m_legs[1][1].y()) / 2.0;
+    addUprightPoints(BodyPart::Body, QStringLiteral("neck"), measurer.neckLevel(positions), around_body);
+    addUprightPoints(BodyPart::Body, QStringLiteral("bust"), measurer.bustLevel(positions), around_body);
+    addUprightPoints(BodyPart::Body, QStringLiteral("waist"), measurer.waistLevel(positions), around_body);
+    addUprightPoints(BodyPart::Body, QStringLiteral("hip"), measurer.hipLevel(positions), around_body);
+    addUprightPoints(BodyPart::Body, QStringLiteral("thigh"), (m_crotch + knees) / 2.0, around_body);
+
+    for (int side = 0; side < 2; ++side)
+    {
+        const BodyPart leg = side == 0 ? BodyPart::LeftLeg : BodyPart::RightLeg;
+        const qreal outside = side == 0 ? left : -left;
+        const QVector<QPair<QString, qreal>> around_leg = {
+            {QStringLiteral("front"), 0.0},
+            {QStringLiteral("outside"), outside},
+            {QStringLiteral("back"), 180.0},
+            {QStringLiteral("inside"), -outside}};
+        const qreal knee = m_legs[side][1].y();
+        addUprightPoints(leg, QStringLiteral("thigh"), (m_crotch + knee) / 2.0, around_leg);
+        addUprightPoints(leg, QStringLiteral("knee"), knee, around_leg);
+        addUprightPoints(leg, QStringLiteral("calf"), knee - calf_share * (knee - m_legs[side][2].y()), around_leg);
+    }
+
+    // An arm's outside faces up at the upper arm, and goes on down the arm at the same angle around it, as the middle
+    // of a sleeve does.
+    for (int side = 0; side < 2; ++side)
+    {
+        const qreal elbow = m_arm_lines[side].alongNearest(m_arms[side][1]);
+        const qreal upper_arm = (m_shoulder_tips[side] + elbow) / 2.0;
+        const qreal outside = armAngle(side, upper_arm, QVector3D(0, 1, 0));
+        addArmPoints(side, QStringLiteral("upperArm"), upper_arm, outside);
+        addArmPoints(side, QStringLiteral("elbow"), elbow, outside);
+        addArmPoints(side, QStringLiteral("wrist"), m_arm_lines[side].alongNearest(m_arms[side][2]), outside);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Adds arrangement points around the body or a leg at a height, at the angles of its sides, where a tape around the
+// part there would lie.
+void BodyWrap::addUprightPoints(BodyPart part, const QString& level, qreal height,
+                                const QVector<QPair<QString, qreal>>& sides)
+{
+    const QVector3D axis = axisAt(part, height);
+    QVector<QPointF> slice;
+    for (int i = 0; i < m_skin.size(); ++i)
+    {
+        const QVector3D& point = m_skin.at(i);
+        if (qAbs(point.y() - height) <= point_band && !m_skin_on_arm.at(i) && onPartsSide(part, point))
+        {
+            slice.append(QPointF(point.x() - axis.x(), point.z() - axis.z()));
+        }
+    }
+    const QVector<QPointF> outline = convexHull(slice);
+
+    for (const QPair<QString, qreal>& side : sides)
+    {
+        const qreal radians = qDegreesToRadians(side.second);
+        const QPointF direction(qSin(radians), qCos(radians));
+        const qreal reach = outline.size() >= 3 ? exitDistance(outline, QPointF(), direction) : 0;
+
+        ArrangementPoint point;
+        point.name = partName(part) + QLatin1Char('-') + level + QLatin1Char('-') + side.first;
+        point.level = level;
+        point.side = side.first;
+        point.arrangement.part = part;
+        point.arrangement.angle = side.second;
+        point.arrangement.height = height;
+        point.arrangement.point = point.name;
+        point.normal = QVector3D(static_cast<float>(direction.x()), 0.0f, static_cast<float>(direction.y()));
+        point.position = QVector3D(axis.x(), static_cast<float>(height), axis.z())
+                         + point.normal * static_cast<float>(reach > 0 ? reach : fallback_radius);
+        m_points.append(point);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Adds arrangement points around an arm at a place along it: in front, on its outside, behind and on its inside, each
+// as far from the arm's middle line as the arm reaches there.
+void BodyWrap::addArmPoints(int side, const QString& level, qreal along, qreal outside)
+{
+    const LimbLine& line = m_arm_lines[side];
+    const QVector<QPair<QString, qreal>> around_arm = {
+        {QStringLiteral("front"), 0.0},
+        {QStringLiteral("outside"), outside},
+        {QStringLiteral("back"), 180.0},
+        {QStringLiteral("inside"), std::remainder(outside + 180.0, 360.0)}};
+    const BodyPart part = side == 0 ? BodyPart::LeftArm : BodyPart::RightArm;
+
+    for (const QPair<QString, qreal>& around : around_arm)
+    {
+        const float reach = static_cast<float>(armReach(side, along, around.second));
+        ArrangementPoint point;
+        point.name = partName(part) + QLatin1Char('-') + level + QLatin1Char('-') + around.first;
+        point.level = level;
+        point.side = around.first;
+        point.arrangement.part = part;
+        point.arrangement.angle = around.second;
+        point.arrangement.height = line.pointAt(along).y();
+        point.arrangement.point = point.name;
+        point.normal = line.aroundAt(along, around.second);
+        point.position = line.pointAt(along) + point.normal * reach;
+        m_points.append(point);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The angle around an arm, at a place along it, that faces the most towards a direction.
+qreal BodyWrap::armAngle(int side, qreal along, const QVector3D& towards) const
+{
+    const LimbLine& line = m_arm_lines[side];
+    const QVector3D front = line.frontAt(along);
+    const QVector3D quarter = QVector3D::crossProduct(front, line.directionAt(along));
+    return qRadiansToDegrees(qAtan2(QVector3D::dotProduct(towards, quarter), QVector3D::dotProduct(towards, front)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// How far an arm's skin reaches out from its middle line around a place along it, towards an angle around it; the
+// hand is left out.
+qreal BodyWrap::armReach(int side, qreal along, qreal angle) const
+{
+    const qreal from = along - arm_point_reach;
+    const qreal to = qMin(along + arm_point_reach, m_arm_lines[side].length());
+    qreal reach = 0;
+    for (const ArmSkin& skin : m_arm_skin[side])
+    {
+        if (skin.along >= from && skin.along <= to && skin.distance > reach)
+        {
+            const qreal towards = armAngle(side, skin.along, m_skin.at(skin.vertex)
+                                                             - m_arm_lines[side].pointAt(skin.along));
+            if (qAbs(std::remainder(towards - angle, 360.0)) <= arm_point_spread)
+            {
+                reach = skin.distance;
+            }
+        }
+    }
+    return reach > 0 ? reach : armRadius(side, from, to);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -543,4 +836,27 @@ int BodyWrap::armSide(BodyPart part)
         side = 1;
     }
     return side;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The piece's flat points the way round it is put on the avatar: turned over and rotated about its middle, as seen
+// from outside.
+QVector<QPointF> BodyWrap::arranged(const GarmentMesh& mesh, const PieceArrangement& arrangement)
+{
+    const QPointF middle = mesh.bounds().center();
+    const qreal radians = qDegreesToRadians(arrangement.rotation);
+    const qreal cosine = qCos(radians);
+    const qreal sine = qSin(radians);
+
+    QVector<QPointF> flat;
+    flat.reserve(mesh.rest_positions.size());
+    for (const QPointF& rest : mesh.rest_positions)
+    {
+        const qreal x = arrangement.turned_over ? middle.x() - rest.x() : rest.x() - middle.x();
+        const qreal y = rest.y() - middle.y();
+
+        // The piece scene's y axis points down, so this turns the piece clockwise as it is seen.
+        flat.append(QPointF(middle.x() + x * cosine - y * sine, middle.y() + x * sine + y * cosine));
+    }
+    return flat;
 }
