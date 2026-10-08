@@ -47,6 +47,7 @@
 #include "../vgarment/topstitch.h"
 
 class DrapeRunner;
+class FoldEditor;
 class GarmentSceneModel;
 class QAction;
 class QActionGroup;
@@ -143,6 +144,10 @@ private slots:
     void               showFitMap(bool shown);
     void               chooseFitMap();
     void               setStitching(bool stitching);
+    void               setFolding(bool folding);
+    void               chooseFoldAngle(QAction* action);
+    void               updateFolds();
+    void               showFoldLines();
     void               stitchEveryEdge(bool every);
     void               chooseStitchStyle(QAction* action);
     void               chooseThread(QAction* action);
@@ -258,6 +263,7 @@ private:
     GarmentSceneModel*         m_scene_model;
     SeamEditor*                m_seam_editor;
     StitchEditor*              m_stitch_editor;
+    FoldEditor*                m_fold_editor;
     QAction*                   m_sew_action;
     QAction*                   m_flip_action;
     QAction*                   m_remove_action;
@@ -266,6 +272,9 @@ private:
     QActionGroup*              m_stitch_styles;
     QActionGroup*              m_threads;
     QAction*                   m_other_thread_action;
+    QAction*                   m_fold_action;
+    QActionGroup*              m_fold_angles;
+    QAction*                   m_other_angle_action;
     QAction*                   m_cancel_action;
     QAction*                   m_avatar_action;
     QAction*                   m_arrange_action;
@@ -334,6 +343,7 @@ private:
     void               saveSeams(const QString& text, const QVector<VSeam>& seams);
     void               saveArrangements(const QString& text, const QVector<VPieceArrangement>& arrangements);
     void               saveTopstitches(const VTopstitches& topstitches, const QString& text);
+    void               saveFolds(const QVector<VFold>& folds, const QString& text);
     VFabricTexture     ownFabricImage() const;
     void               saveFabricImage(const VFabricTexture& texture, const QString& text);
     QVector<QVector<QPointF>> stitchedPaths(const VPiece& piece) const;
@@ -362,6 +372,8 @@ private:
     QVector<QVector3D> piecePositions(quint32 id, const GarmentMesh& mesh) const;
     QVector<QVector3D> placedAt(quint32 id, const GarmentMesh& mesh, const PieceArrangement& arrangement,
                                 bool turned, qreal out = 0) const;
+    QVector<QVector3D> wrapped(const GarmentMesh& mesh, quint32 piece, const PieceArrangement& arrangement,
+                               qreal out) const;
     QSet<quint32>      turnedPairs(bool limbs) const;
     bool               isTurnedPair(quint32 piece, const PieceArrangement& arrangement, bool limbs = true) const;
     qreal              acrossBody(const GarmentMesh& mesh, const QVector<QVector3D>& positions,

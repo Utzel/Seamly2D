@@ -254,6 +254,9 @@ QVariant GarmentSceneModel::data(const QModelIndex& index, int role) const
             case PieceEdgesRole:
                 value = QVariant::fromValue(static_cast<QObject*>(row.edges));
                 break;
+            case PieceLinesRole:
+                value = QVariant::fromValue(static_cast<QObject*>(row.line_geometry));
+                break;
             case PieceShownRole:
                 value = !m_hidden_pieces.contains(patternPiece(row.id));
                 break;
@@ -295,6 +298,7 @@ QHash<int, QByteArray> GarmentSceneModel::roleNames() const
             {PieceTextureRole, QByteArrayLiteral("pieceTexture")},
             {PieceTextureSizeRole, QByteArrayLiteral("pieceTextureSize")},
             {PieceEdgesRole, QByteArrayLiteral("pieceEdges")},
+            {PieceLinesRole, QByteArrayLiteral("pieceLines")},
             {PieceShownRole, QByteArrayLiteral("pieceShown")},
             {SelectedRole, QByteArrayLiteral("selected")},
             {PlacedRole, QByteArrayLiteral("placed")}};
@@ -329,9 +333,11 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.placed = !row.positions.isEmpty();
             row.stitches = pieces.at(i).stitches;
             row.preview = pieces.at(i).preview;
+            row.lines = pieces.at(i).lines;
             showMesh(row);
             row.outline->setOutline(row.mesh, row.positions, row.thickness);
             showEdges(row);
+            showLines(row);
             showStitches(row);
         }
         updateImages();
@@ -350,6 +356,7 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.geometry->deleteLater();
             row.outline->deleteLater();
             row.edges->deleteLater();
+            row.line_geometry->deleteLater();
             row.stitch_geometry->deleteLater();
             row.preview_geometry->deleteLater();
         }
@@ -388,6 +395,10 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.edges = new PieceGeometry();
             row.edges->setParent(this);
             showEdges(row);
+            row.lines = piece.lines;
+            row.line_geometry = new PieceGeometry();
+            row.line_geometry->setParent(this);
+            showLines(row);
             row.stitches = piece.stitches;
             row.preview = piece.preview;
             row.stitch_geometry = new StitchGeometry();
@@ -434,6 +445,7 @@ void GarmentSceneModel::setPiecePositions(quint32 id, const QVector<QVector3D>& 
             showMesh(row);
             row.outline->setOutline(row.mesh, positions, row.thickness);
             showEdges(row);
+            showLines(row);
             showStitches(row);
         }
     }
@@ -450,6 +462,21 @@ void GarmentSceneModel::setStitches(const QHash<quint32, QVector<ThreadStitch>>&
         {
             row.stitches = wanted;
             row.stitch_geometry->setStitches(row.mesh, row.stitches, row.positions, 1.0, row.thickness);
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The lines drawn on the cloth of every piece shown, by its id; pieces left out have none.
+void GarmentSceneModel::setLines(const QHash<quint32, QVector<DrawnLine>>& lines)
+{
+    for (Row& row : m_rows)
+    {
+        const QVector<DrawnLine> wanted = lines.value(row.id);
+        if (!wanted.isEmpty() || !row.lines.isEmpty())
+        {
+            row.lines = wanted;
+            showLines(row);
         }
     }
 }
@@ -1410,6 +1437,13 @@ QVector<QColor> GarmentSceneModel::vertexColors(const Row& row) const
 void GarmentSceneModel::showEdges(const Row& row) const
 {
     row.edges->setEdges(m_mesh_shown ? row.mesh : GarmentMesh(), row.positions, row.thickness);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The lines drawn on the row's cloth, where it is.
+void GarmentSceneModel::showLines(const Row& row) const
+{
+    row.line_geometry->setLines(row.mesh, row.lines, row.positions, row.thickness);
 }
 
 //---------------------------------------------------------------------------------------------------------------------

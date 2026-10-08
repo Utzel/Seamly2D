@@ -35,6 +35,7 @@ Rectangle {
     required property var sceneModel
     required property var seamEditor
     required property var stitchEditor
+    required property var foldEditor
     required property string emptyText
     required property string hintText
     required property color backgroundColor
@@ -450,13 +451,13 @@ Rectangle {
 
         // The avatar, fitted to the pattern's measurements, in a plain grey like a dress form. While sewing it fades,
         // so the board behind it can be seen; while arranging it can be clicked to put pieces on, and while
-        // topstitching it keeps clicks off the board behind it.
+        // topstitching or folding it keeps clicks off the board behind it.
         Model {
             readonly property bool isAvatar: true
 
             visible: root.sceneModel.hasAvatar && (root.sceneModel.avatarShown || root.sceneModel.arranging)
             opacity: root.seamEditor.sewing ? 0.25 : 1.0
-            pickable: root.sceneModel.arranging || root.stitchEditor.stitching
+            pickable: root.sceneModel.arranging || root.stitchEditor.stitching || root.foldEditor.folding
             geometry: root.sceneModel.avatarGeometry
 
             materials: PrincipledMaterial {
@@ -581,6 +582,7 @@ Rectangle {
                     required property TextureData pieceTexture
                     required property size pieceTextureSize
                     required property Geometry pieceEdges
+                    required property Geometry pieceLines
                     required property bool pieceShown
                     required property bool selected
                     required property bool placed
@@ -670,6 +672,21 @@ Rectangle {
                         materials: PrincipledMaterial {
                             lighting: PrincipledMaterial.NoLighting
                             baseColor: piece_node.pieceColor.hslLightness > 0.5 ? "#99303030" : "#99f0f0f0"
+                        }
+                    }
+
+                    // The piece's internal paths while folding, the folds and the path under the mouse each in a
+                    // color of their own.
+                    Model {
+                        visible: root.foldEditor.folding
+                        geometry: piece_node.pieceLines
+                        castsShadows: false
+                        pickable: false
+
+                        materials: PrincipledMaterial {
+                            lighting: PrincipledMaterial.NoLighting
+                            vertexColorsEnabled: true
+                            cullMode: Material.NoCulling
                         }
                     }
 
@@ -941,13 +958,14 @@ Rectangle {
         }
 
         // While arranging, a click on the avatar places the selected piece there; while topstitching, a click near an
-        // edge stitches it. Otherwise seams get the click first, and what they leave selects a piece.
+        // edge stitches it, and while folding a click near an internal path folds the piece along it. Otherwise seams
+        // get the click first, and what they leave selects a piece.
         // While draping, cloth on the avatar pressed on is held by the mouse and pulled where it goes, at the distance
         // it was taken hold of; a pin pressed on moves with the mouse, the cloth with it.
         PointHandler {
             id: pull_handler
             enabled: root.sceneModel.simulating && !root.sceneModel.arranging && !root.seamEditor.sewing
-                     && !root.stitchEditor.stitching
+                     && !root.stitchEditor.stitching && !root.foldEditor.folding
             acceptedButtons: Qt.LeftButton
             acceptedModifiers: Qt.NoModifier
 
@@ -986,6 +1004,7 @@ Rectangle {
         TapHandler {
             acceptedModifiers: Qt.ShiftModifier
             enabled: !root.sceneModel.arranging && !root.seamEditor.sewing && !root.stitchEditor.stitching
+                     && !root.foldEditor.folding
 
             onTapped: (event_point) => {
                 const pin = root.pinNear(event_point.position.x, event_point.position.y)
@@ -1010,6 +1029,13 @@ Rectangle {
                     const spot = root.pieceSpot(x, y)
                     if (spot !== undefined) {
                         root.stitchEditor.click(spot.piece, spot.x, spot.y, spot.tolerance)
+                    }
+                    return
+                }
+                if (root.foldEditor.folding) {
+                    const spot = root.pieceSpot(x, y)
+                    if (spot !== undefined) {
+                        root.foldEditor.click(spot.piece, spot.x, spot.y, spot.tolerance)
                     }
                     return
                 }
@@ -1052,7 +1078,7 @@ Rectangle {
         // it off.
         TapHandler {
             acceptedButtons: Qt.RightButton
-            enabled: !root.seamEditor.sewing && !root.stitchEditor.stitching
+            enabled: !root.seamEditor.sewing && !root.stitchEditor.stitching && !root.foldEditor.folding
 
             onTapped: (event_point) => {
                 const target = view.pick(event_point.position.x, event_point.position.y).objectHit
@@ -1064,7 +1090,8 @@ Rectangle {
 
         HoverHandler {
             id: hover_handler
-            cursorShape: root.seamEditor.sewing || root.stitchEditor.stitching ? Qt.CrossCursor
+            cursorShape: root.seamEditor.sewing || root.stitchEditor.stitching || root.foldEditor.folding
+                         ? Qt.CrossCursor
                          : root.pointUnderMouse >= 0 || root.gizmoUnderMouse >= 0 ? Qt.PointingHandCursor
                                                                                   : Qt.ArrowCursor
 
@@ -1095,6 +1122,15 @@ Rectangle {
                     }
                     return
                 }
+                if (root.foldEditor.folding) {
+                    const spot = root.pieceSpot(x, y)
+                    if (spot === undefined) {
+                        root.foldEditor.leave()
+                    } else {
+                        root.foldEditor.hover(spot.piece, spot.x, spot.y, spot.tolerance)
+                    }
+                    return
+                }
                 if (!root.seamEditor.sewing) {
                     return
                 }
@@ -1112,6 +1148,7 @@ Rectangle {
                 if (!hover_handler.hovered) {
                     root.seamEditor.leave()
                     root.stitchEditor.leave()
+                    root.foldEditor.leave()
                     if (root.sceneModel.arranging) {
                         root.pointUnderMouse = -1
                         root.sceneModel.leaveAvatar()
@@ -1139,7 +1176,8 @@ Rectangle {
         visible: (root.sceneModel.pieceCount > 0 || root.sceneModel.hasAvatar) && !root.capturing
         readonly property string task: root.sceneModel.hint !== "" ? root.sceneModel.hint
                                        : root.stitchEditor.hint !== "" ? root.stitchEditor.hint
-                                                                       : root.seamEditor.hint
+                                       : root.foldEditor.hint !== "" ? root.foldEditor.hint
+                                                                     : root.seamEditor.hint
 
         text: task !== "" ? task : root.hintText
         color: root.textColor

@@ -94,11 +94,13 @@
 #include "../vtools/undocommands/save_arrangements.h"
 #include "../vtools/undocommands/save_avatar.h"
 #include "../vtools/undocommands/save_fabrics.h"
+#include "../vtools/undocommands/save_folds.h"
 #include "../vtools/undocommands/save_seams.h"
 #include "../vtools/undocommands/save_topstitches.h"
 #include "avatar_dialog.h"
 #include "drape_runner.h"
 #include "flow_layout.h"
+#include "fold_editor.h"
 #include "garment_scene_model.h"
 #include "piece_geometry.h"
 #include "seam_editor.h"
@@ -195,6 +197,31 @@ const int kept_image_limit = 2048;
 // Edge length of the triangles in cm for a final drape; CLO recommends 20 mm while editing and 5 to 10 mm for the
 // final drape.
 const qreal fine_edge_length = 1.0;
+
+// Folds hold their angle this many times as stiffly as their fabric bends, as a pressed fold does.
+const qreal fold_strength = 10.0;
+
+// The angles the Fold menu offers to fold at, in degrees on the cloth's right side: wrong sides together, as hems,
+// facings and collars fold, at right angles either way, and right sides together.
+const qreal fold_angles[] = {360.0, 270.0, 90.0, 0.0};
+
+// Folds within this many degrees of the cloth onto itself start out folded; the part folded over lies this many cm off
+// the rest, on the side it folds to.
+const qreal folded_over = 45.0;
+const qreal fold_gap = 0.5;
+
+// Vertices closer to a fold's line than this, in cm, lie on it.
+const qreal on_fold_line = 1e-6;
+
+//---------------------------------------------------------------------------------------------------------------------
+// The point mirrored across the line through a and b.
+QPointF reflected(const QPointF& point, const QPointF& a, const QPointF& b)
+{
+    const QPointF along = b - a;
+    const QPointF offset = point - a;
+    const QPointF onto = along * (QPointF::dotProduct(offset, along) / QPointF::dotProduct(along, along));
+    return a + onto * 2.0 - offset;
+}
 
 // An avatar's fingerprint is this many hex digits of a SHA-1 of what it is fitted to.
 const int fingerprint_length = 16;
@@ -322,6 +349,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_scene_model(new GarmentSceneModel(this))
     , m_seam_editor(new SeamEditor(this))
     , m_stitch_editor(new StitchEditor(this))
+    , m_fold_editor(new FoldEditor(this))
     , m_sew_action(nullptr)
     , m_flip_action(nullptr)
     , m_remove_action(nullptr)
@@ -330,6 +358,9 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_stitch_styles(nullptr)
     , m_threads(nullptr)
     , m_other_thread_action(nullptr)
+    , m_fold_action(nullptr)
+    , m_fold_angles(nullptr)
+    , m_other_angle_action(nullptr)
     , m_cancel_action(nullptr)
     , m_avatar_action(nullptr)
     , m_arrange_action(nullptr)
@@ -418,6 +449,10 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     connect(m_stitch_editor, &StitchEditor::stitchingChanged, this, &GarmentViewWidget::updateActions);
     connect(m_stitch_editor, &StitchEditor::stitchesChanged, this, &GarmentViewWidget::showStitches);
     connect(m_stitch_editor, &StitchEditor::previewChanged, this, &GarmentViewWidget::showStitchPreview);
+    connect(m_fold_editor, &FoldEditor::foldsEdited, this, &GarmentViewWidget::saveFolds);
+    connect(m_fold_editor, &FoldEditor::foldingChanged, this, &GarmentViewWidget::updateActions);
+    connect(m_fold_editor, &FoldEditor::linesChanged, this, &GarmentViewWidget::showFoldLines);
+    connect(m_doc, &VAbstractPattern::foldsChanged, this, &GarmentViewWidget::updateFolds);
     connect(m_scene_model, &GarmentSceneModel::placeRequested, this, &GarmentViewWidget::placePiece);
     connect(m_scene_model, &GarmentSceneModel::placePointRequested, this, &GarmentViewWidget::placePieceAtPoint);
     connect(m_scene_model, &GarmentSceneModel::previewRequested, this, &GarmentViewWidget::previewArrangement);
@@ -507,6 +542,8 @@ void GarmentViewWidget::clear()
     m_seam_editor->setPieces(QVector<ShownPiece>());
     m_stitch_editor->setStitching(false);
     m_stitch_editor->setPieces(QVector<ShownPiece>(), VTopstitches());
+    m_fold_editor->setFolding(false);
+    m_fold_editor->setPieces(QVector<ShownPiece>(), QVector<VFold>());
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -714,10 +751,13 @@ void GarmentViewWidget::rebuildScene()
     m_scene_model->setThreadColor(QColor(topstitches.color));
     const QHash<quint32, QVector<ThreadStitch>> stitches = m_stitch_editor->stitches();
     const QHash<quint32, QVector<ThreadStitch>> preview = m_stitch_editor->preview();
+    m_fold_editor->setPieces(shown_pieces, m_doc->getFolds());
+    const QHash<quint32, QVector<DrawnLine>> fold_lines = m_fold_editor->lines();
     for (GarmentSceneModel::Piece& scene_piece : scene_pieces)
     {
         scene_piece.stitches = stitches.value(scene_piece.id);
         scene_piece.preview = preview.value(scene_piece.id);
+        scene_piece.lines = fold_lines.value(scene_piece.id);
     }
 
     m_scene_model->setPieces(scene_pieces);
@@ -1205,7 +1245,7 @@ QVector<QVector3D> GarmentViewWidget::placedAt(quint32 id, const GarmentMesh& me
     {
         const CachedMesh& cached = m_mesh_cache.value(patternPiece(id));
         const GarmentMesh& other = PieceOutline::isMirrorId(id) ? cached.garment_mesh : cached.mirror_mesh;
-        positions = m_wrap->place(other, arrangement, out);
+        positions = wrapped(other, patternPiece(id), arrangement, out);
         for (QVector3D& position : positions)
         {
             position = m_wrap->mirrored(position);
@@ -1213,7 +1253,79 @@ QVector<QVector3D> GarmentViewWidget::placedAt(quint32 id, const GarmentMesh& me
     }
     else
     {
-        positions = m_wrap->place(mesh, arrangement, out);
+        positions = wrapped(mesh, patternPiece(id), arrangement, out);
+    }
+    return positions;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A mesh of a piece wrapped around the avatar as arranged, with the part beyond each fold onto itself already folded
+// over, as CLO's fold arrangement does: a hem turned up, a facing turned in. Draping couldn't fold it there, as the
+// hem of a leg would have to stand out from it on the way. The smaller side of a fold's line, which runs from edge to
+// edge, is mirrored across it in the flat and lies where the cloth it folds onto is, a gap off it on the side it folds
+// to: the right side, or the wrong side, which faces in unless the piece is turned over.
+QVector<QVector3D> GarmentViewWidget::wrapped(const GarmentMesh& mesh, quint32 piece,
+                                              const PieceArrangement& arrangement, qreal out) const
+{
+    QVector<QVector3D> positions = m_wrap->place(mesh, arrangement, out);
+
+    GarmentMesh folded = mesh;
+    QVector<int> layer(mesh.vertexCount(), 0);  // 1 folded over to the right side, -1 to the wrong side
+    bool any = false;
+    for (const ClothFold& fold : m_fold_editor->clothFolds(piece, mesh, fold_strength))
+    {
+        const bool onto_itself = fold.angle <= folded_over || fold.angle >= 360.0 - folded_over;
+        if (!onto_itself || fold.vertices.size() < 2 || !mesh.boundary.contains(fold.vertices.first())
+            || !mesh.boundary.contains(fold.vertices.last()))
+        {
+            continue;
+        }
+        const QPointF a = mesh.rest_positions.at(static_cast<int>(fold.vertices.first()));
+        const QPointF b = mesh.rest_positions.at(static_cast<int>(fold.vertices.last()));
+        const qreal length = QLineF(a, b).length();
+        if (length <= on_fold_line)
+        {
+            continue;
+        }
+
+        QVector<int> side(mesh.vertexCount(), 0);
+        int left = 0;
+        int right = 0;
+        for (int i = 0; i < mesh.vertexCount(); ++i)
+        {
+            const QPointF p = mesh.rest_positions.at(i) - a;
+            const qreal across = ((b.x() - a.x()) * p.y() - (b.y() - a.y()) * p.x()) / length;
+            side[i] = across > on_fold_line ? 1 : across < -on_fold_line ? -1 : 0;
+            left += side.at(i) > 0 ? 1 : 0;
+            right += side.at(i) < 0 ? 1 : 0;
+        }
+        const int over = left <= right ? 1 : -1;
+        for (int i = 0; i < mesh.vertexCount(); ++i)
+        {
+            if (side.at(i) == over)
+            {
+                folded.rest_positions[i] = reflected(mesh.rest_positions.at(i), a, b);
+                layer[i] = fold.angle < 180.0 ? 1 : -1;
+                any = true;
+            }
+        }
+    }
+
+    if (any)
+    {
+        const qreal right_side_out = arrangement.turned_over ? -1.0 : 1.0;
+        for (const int side : {1, -1})
+        {
+            const QVector<QVector3D> laid = mesh.carry(m_wrap->place(mesh, arrangement,
+                                                                     out + side * right_side_out * fold_gap), folded);
+            for (int i = 0; i < positions.size() && i < laid.size(); ++i)
+            {
+                if (layer.at(i) == side)
+                {
+                    positions[i] = laid.at(i);
+                }
+            }
+        }
     }
     return positions;
 }
@@ -1405,6 +1517,10 @@ void GarmentViewWidget::cancel()
     {
         m_stitch_editor->cancel();
     }
+    else if (m_fold_editor->isFolding())
+    {
+        m_fold_editor->cancel();
+    }
     else
     {
         m_seam_editor->cancel();
@@ -1412,14 +1528,15 @@ void GarmentViewWidget::cancel()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// While arranging, a click on a piece picks it and a click on the avatar puts it there. Sewing, topstitching and
-// arranging take turns.
+// While arranging, a click on a piece picks it and a click on the avatar puts it there. Sewing, topstitching, folding
+// and arranging take turns.
 void GarmentViewWidget::setArranging(bool arranging)
 {
     if (arranging)
     {
         m_sew_action->setChecked(false);
         m_topstitch_action->setChecked(false);
+        m_fold_action->setChecked(false);
     }
     m_scene_model->setArranging(arranging);
     if (!arranging)
@@ -2065,10 +2182,12 @@ void GarmentViewWidget::startSimulation()
         {
             DrapePiece drape_piece;
             drape_piece.id = garment_piece.id;
+            const quint32 piece = patternPiece(garment_piece.id);
             drape_piece.offset = static_cast<int>(solver->addMesh(garment_piece.mesh, positions,
-                                                                  Fabric::preset(fabrics.of(patternPiece(
-                                                                      garment_piece.id))),
-                                                                  garment_piece.grain_angle));
+                                                                  Fabric::preset(fabrics.of(piece)),
+                                                                  garment_piece.grain_angle,
+                                                                  m_fold_editor->clothFolds(piece, garment_piece.mesh,
+                                                                                            fold_strength)));
             drape_piece.count = garment_piece.mesh.vertexCount();
             m_drape_pieces.append(drape_piece);
             offsets.insert(garment_piece.id, static_cast<quint32>(drape_piece.offset));
@@ -2197,8 +2316,23 @@ void GarmentViewWidget::updateActions()
     {
         m_stitch_editor->setStitching(false);
     }
+    if (m_seam_editor->isSewing() && m_fold_editor->isFolding())
+    {
+        m_fold_editor->setFolding(false);
+    }
     const QSignalBlocker stitch_blocker(m_topstitch_action);
     m_topstitch_action->setChecked(m_stitch_editor->isStitching());
+    const QSignalBlocker fold_blocker(m_fold_action);
+    m_fold_action->setChecked(m_fold_editor->isFolding());
+    bool known_angle = false;
+    for (QAction* angle : m_fold_angles->actions())
+    {
+        const bool chosen = angle != m_other_angle_action
+                            && qFuzzyCompare(1.0 + angle->data().toDouble(), 1.0 + m_fold_editor->angle());
+        angle->setChecked(chosen);
+        known_angle = known_angle || chosen;
+    }
+    m_other_angle_action->setChecked(!known_angle);
     const VTopstitches topstitches = m_doc->getTopstitches();
     m_every_edge_action->setChecked(topstitches.all);
     const QString chosen_style = TopstitchStyle::preset(topstitches.style).name;
@@ -2244,7 +2378,7 @@ void GarmentViewWidget::updateActions()
     m_show_pieces_action->setEnabled(!m_scene_model->hiddenPieces().isEmpty());
 
     // With nothing to step back from, Esc is left to the main window.
-    const bool stitching = m_stitch_editor->isStitching();
+    const bool stitching = m_stitch_editor->isStitching() || m_fold_editor->isFolding();
     m_cancel_action->setEnabled(m_seam_editor->isSewing() || seam_selected || m_scene_model->isArranging()
                                 || stitching);
 
@@ -2541,8 +2675,98 @@ void GarmentViewWidget::setStitching(bool stitching)
     {
         m_sew_action->setChecked(false);
         m_arrange_action->setChecked(false);
+        m_fold_action->setChecked(false);
     }
     m_stitch_editor->setStitching(stitching);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// While folding, the pieces' internal paths show, and a click near one folds the piece along it or unfolds it. Folding,
+// sewing, topstitching and arranging take turns.
+void GarmentViewWidget::setFolding(bool folding)
+{
+    if (folding)
+    {
+        m_sew_action->setChecked(false);
+        m_arrange_action->setChecked(false);
+        m_topstitch_action->setChecked(false);
+    }
+    m_fold_editor->setFolding(folding);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// An angle was chosen in the Fold menu, the one paths clicked are folded at: one of those offered, or any other.
+void GarmentViewWidget::chooseFoldAngle(QAction* action)
+{
+    if (action == m_other_angle_action)
+    {
+        bool chosen = false;
+        const qreal angle = QInputDialog::getDouble(this, tr("Fold Angle"),
+                                                    tr("Angle the cloth makes across a fold on its right side, in "
+                                                       "degrees: 180 lies flat, less folds the right side in and more "
+                                                       "the wrong side; 0 and 360 fold it onto itself."),
+                                                    m_fold_editor->angle(), 0.0, 360.0, 1, &chosen);
+        if (chosen)
+        {
+            m_fold_editor->setAngle(angle);
+        }
+    }
+    else
+    {
+        m_fold_editor->setAngle(action->data().toDouble());
+    }
+    m_fold_action->setChecked(true);
+    updateActions();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The pattern's folds changed, by folding here or by undo and redo. Pieces on the avatar fold, or unfold, right away:
+// the drape goes on, or starts if it was off.
+void GarmentViewWidget::updateFolds()
+{
+    const QVector<VFold> before = m_fold_editor->folds();
+    const QVector<VFold> after = m_doc->getFolds();
+    m_fold_editor->setFolds(after);
+
+    QSet<quint32> changed;
+    for (const QVector<VFold>* folds : {&before, &after})
+    {
+        const QVector<VFold>& others = folds == &before ? after : before;
+        for (const VFold& fold : *folds)
+        {
+            if (!others.contains(fold))
+            {
+                changed.insert(fold.piece_id);
+            }
+        }
+    }
+    // A piece folded differently starts out from where it is arranged, folded over as it is folded now.
+    bool placed = false;
+    for (const quint32 piece : changed)
+    {
+        if (!m_wrap.isNull() && m_arrangements.contains(piece))
+        {
+            placed = true;
+            m_draped.remove(piece);
+            m_draped.remove(PieceOutline::mirrorId(piece));
+            showPlaced(piece);
+        }
+    }
+    if (placed && m_runner->isRunning())
+    {
+        startSimulation();
+        updateActions();
+    }
+    else if (placed && m_simulate_action->isEnabled())
+    {
+        m_simulate_action->setChecked(true);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::showFoldLines()
+{
+    m_scene_model->setLines(m_fold_editor->lines());
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -3068,6 +3292,8 @@ void GarmentViewWidget::createScene()
     properties.insert(QStringLiteral("sceneModel"), QVariant::fromValue(m_scene_model));
     properties.insert(QStringLiteral("seamEditor"), QVariant::fromValue(m_seam_editor));
     properties.insert(QStringLiteral("stitchEditor"), QVariant::fromValue(m_stitch_editor));
+    properties.insert(QStringLiteral("foldEditor"), QVariant::fromValue(m_fold_editor));
+    m_fold_editor->setHighlightColor(colors.color(QPalette::Highlight));
     properties.insert(QStringLiteral("emptyText"), tr("Pieces included in the layout show up here."));
     properties.insert(QStringLiteral("hintText"),
                       tr("Drag to turn, Ctrl+drag to move, scroll to zoom, double-click to fit"));
@@ -3200,6 +3426,47 @@ void GarmentViewWidget::createToolBar()
 
     m_topstitch_action->setMenu(stitch_menu);
     if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_topstitch_action)))
+    {
+        button->setPopupMode(QToolButton::MenuButtonPopup);
+    }
+
+    m_fold_action = tool_bar->addAction(tr("Fold"));
+    m_fold_action->setCheckable(true);
+    m_fold_action->setToolTip(tr("Fold pieces along their internal paths, as hems, facings, collars and pleats fold: "
+                                 "click near a path, on the board or on the avatar, to fold the piece along it at the "
+                                 "angle chosen in the menu, or to unfold it"));
+    connect(m_fold_action, &QAction::toggled, this, &GarmentViewWidget::setFolding);
+
+    // The angles, on the cloth's right side, as CLO's fold angle: the one chosen is the one paths clicked get.
+    QMenu* fold_menu = new QMenu(this);
+    fold_menu->setToolTipsVisible(true);
+    fold_menu->addSection(tr("Angle"));
+    m_fold_angles = new QActionGroup(this);
+    const QStringList angle_titles = {tr("Wrong Sides Together"), tr("Right Angle, Wrong Side In"),
+                                      tr("Right Angle, Right Side In"), tr("Right Sides Together")};
+    const QStringList angle_tips = {tr("Fold the cloth flat onto itself, wrong side in, as a hem or a facing turns in: "
+                                       "360 degrees"),
+                                    tr("Fold the cloth to a right angle, its wrong side inside: 270 degrees"),
+                                    tr("Fold the cloth to a right angle, its right side inside: 90 degrees"),
+                                    tr("Fold the cloth flat onto itself, right side in: 0 degrees")};
+    for (int i = 0; i < angle_titles.size(); ++i)
+    {
+        QAction* action = fold_menu->addAction(angle_titles.at(i));
+        action->setData(fold_angles[i]);
+        action->setToolTip(angle_tips.at(i));
+        m_fold_angles->addAction(action);
+    }
+    m_other_angle_action = fold_menu->addAction(tr("Other Angle..."));
+    m_other_angle_action->setToolTip(tr("Fold at any angle the cloth makes across the fold on its right side, from 0 "
+                                        "to 360 degrees; 180 lies flat"));
+    m_fold_angles->addAction(m_other_angle_action);
+    for (QAction* action : m_fold_angles->actions())
+    {
+        action->setCheckable(true);
+    }
+    connect(m_fold_angles, &QActionGroup::triggered, this, &GarmentViewWidget::chooseFoldAngle);
+    m_fold_action->setMenu(fold_menu);
+    if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_fold_action)))
     {
         button->setPopupMode(QToolButton::MenuButtonPopup);
     }
@@ -3486,6 +3753,7 @@ void GarmentViewWidget::updateIcons()
         m_flip_action->setIcon(toolIcon(QStringLiteral("flip")));
         m_remove_action->setIcon(toolIcon(QStringLiteral("remove")));
         m_topstitch_action->setIcon(toolIcon(QStringLiteral("topstitch")));
+        m_fold_action->setIcon(toolIcon(QStringLiteral("fold")));
         m_avatar_action->setIcon(toolIcon(QStringLiteral("avatar")));
         m_arrange_action->setIcon(toolIcon(QStringLiteral("arrange")));
         m_simulate_action->setIcon(toolIcon(QStringLiteral("simulate")));
@@ -3551,6 +3819,12 @@ void GarmentViewWidget::saveArrangements(const QString& text, const QVector<VPie
 void GarmentViewWidget::saveTopstitches(const VTopstitches& topstitches, const QString& text)
 {
     qApp->getUndoStack()->push(new SaveTopstitches(text, m_doc->getTopstitches(), topstitches, m_doc));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::saveFolds(const QVector<VFold>& folds, const QString& text)
+{
+    qApp->getUndoStack()->push(new SaveFolds(text, m_doc->getFolds(), folds, m_doc));
 }
 
 //---------------------------------------------------------------------------------------------------------------------

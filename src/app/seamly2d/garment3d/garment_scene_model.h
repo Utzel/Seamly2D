@@ -43,9 +43,9 @@
 #include "../vgarment/body_wrap.h"
 #include "../vgarment/garment_mesh.h"
 #include "../vgarment/topstitch.h"
+#include "piece_geometry.h"
 
 class AvatarGeometry;
-class PieceGeometry;
 class QQuick3DTextureData;
 class StitchGeometry;
 
@@ -119,6 +119,7 @@ public:
         PieceTextureRole,
         PieceTextureSizeRole,
         PieceEdgesRole,
+        PieceLinesRole,
         PieceShownRole,
         SelectedRole,
         PlacedRole
@@ -137,6 +138,7 @@ public:
         qreal              texture_width = 0.0; ///< how wide the cloth the image shows is, in cm
         QVector<ThreadStitch> stitches;       ///< its topstitching, on its mesh
         QVector<ThreadStitch> preview;        ///< the topstitching an edge under the mouse would get
+        QVector<DrawnLine> lines;             ///< lines drawn on its cloth, such as its internal paths
     };
 
     explicit               GarmentSceneModel(QObject* parent = nullptr);
@@ -149,6 +151,7 @@ public:
     void                   setPiecePositions(quint32 id, const QVector<QVector3D>& positions);
     void                   setStitches(const QHash<quint32, QVector<ThreadStitch>>& stitches);
     void                   setStitchPreview(const QHash<quint32, QVector<ThreadStitch>>& preview);
+    void                   setLines(const QHash<quint32, QVector<DrawnLine>>& lines);
     void                   setThreadColor(const QColor& color);
     QColor                 threadColor(const QColor& cloth) const;
     QColor                 clothColor(quint32 id) const;
@@ -296,9 +299,11 @@ private:
         bool           placed = false;
         QVector<ThreadStitch> stitches;
         QVector<ThreadStitch> preview;
+        QVector<DrawnLine> lines;
         PieceGeometry* geometry = nullptr;
         PieceGeometry* outline = nullptr;
         PieceGeometry* edges = nullptr;
+        PieceGeometry* line_geometry = nullptr;
         StitchGeometry* stitch_geometry = nullptr;
         StitchGeometry* preview_geometry = nullptr;
     };
@@ -337,6 +342,7 @@ private:
     void                   showStitches(const Row& row) const;
     void                   showMesh(const Row& row) const;
     void                   showEdges(const Row& row) const;
+    void                   showLines(const Row& row) const;
     QVector<QColor>        vertexColors(const Row& row) const;
 };
 

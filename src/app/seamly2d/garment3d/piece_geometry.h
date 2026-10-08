@@ -33,6 +33,13 @@
 
 struct GarmentMesh;
 
+/// @brief A line drawn on a piece's cloth along vertices of its mesh, in a color.
+struct DrawnLine
+{
+    QVector<quint32> vertices;
+    QColor           color;
+};
+
 /// @brief Hands one piece's mesh, or its seam line, to Qt Quick 3D.
 ///
 /// Without positions the piece lies flat in the z = 0 plane, facing the camera; with them it is where they put it,
@@ -58,6 +65,8 @@ public:
                                 qreal thickness = 0.0);
     void               setOutline(const GarmentMesh& mesh,
                                   const QVector<QVector3D>& positions = QVector<QVector3D>(), qreal thickness = 0.0);
+    void               setLines(const GarmentMesh& mesh, const QVector<DrawnLine>& lines,
+                                const QVector<QVector3D>& positions = QVector<QVector3D>(), qreal thickness = 0.0);
 
     static QVector<QVector3D> placedPositions(const GarmentMesh& mesh, const QVector<QVector3D>& positions);
     static QVector<QVector3D> vertexNormals(const GarmentMesh& mesh, const QVector<QVector3D>& placed);

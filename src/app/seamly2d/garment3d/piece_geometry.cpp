@@ -42,8 +42,10 @@ namespace
 const int floats_per_vertex = 3 + 3 + 2 + 2;
 const int floats_per_color = 4;
 
-// The triangles' edges are drawn this far off the cloth's faces, in cm, so the faces don't hide them.
+// The triangles' edges are drawn this far off the cloth's faces, in cm, so the faces don't hide them; lines drawn on
+// the cloth a little further, over the edges.
 const float edge_lift = 0.02f;
+const float line_lift = 0.04f;
 
 //---------------------------------------------------------------------------------------------------------------------
 // The color in linear RGB, as vertex colors are.
@@ -332,6 +334,66 @@ void PieceGeometry::setEdges(const GarmentMesh& mesh, const QVector<QVector3D>& 
     addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
     setVertexData(vertex_data);
     setIndexData(index_data);
+    setBounds(minimum, maximum);
+    update();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Lines along vertices of the mesh, each in its color, just off both faces of the cloth, so they follow it as
+/// it drapes.
+void PieceGeometry::setLines(const GarmentMesh& mesh, const QVector<DrawnLine>& lines,
+                             const QVector<QVector3D>& positions, qreal thickness)
+{
+    clear();
+    const int count = mesh.vertexCount();
+    if (count == 0 || lines.isEmpty())
+    {
+        update();
+        return;
+    }
+
+    const QVector<QVector3D> placed = placedPositions(mesh, positions);
+    const QVector<QVector3D> normals = vertexNormals(mesh, placed);
+    const float off = static_cast<float>(qMax(thickness, 0.0) / 2.0) + line_lift;
+
+    // Each segment's ends on the front face, then on the back face, with their line's color.
+    QVector<float> vertices;
+    QVector<QVector3D> drawn;
+    for (const DrawnLine& line : lines)
+    {
+        const QVector3D color = linear(line.color);
+        for (int i = 0; i + 1 < line.vertices.size(); ++i)
+        {
+            const int a = static_cast<int>(line.vertices.at(i));
+            const int b = static_cast<int>(line.vertices.at(i + 1));
+            if (a >= count || b >= count)
+            {
+                continue;
+            }
+            for (const float side : {off, -off})
+            {
+                for (const int end : {a, b})
+                {
+                    const QVector3D position = placed.at(end) + normals.at(end) * side;
+                    drawn.append(position);
+                    vertices << position.x() << position.y() << position.z() << color.x() << color.y() << color.z()
+                             << static_cast<float>(line.color.alphaF());
+                }
+            }
+        }
+    }
+
+    QVector3D minimum;
+    QVector3D maximum;
+    bounds(drawn, &minimum, &maximum);
+
+    const int stride = (3 + floats_per_color) * static_cast<int>(sizeof(float));
+    setStride(stride);
+    setPrimitiveType(PrimitiveType::Lines);
+    addAttribute(Attribute::PositionSemantic, 0, Attribute::F32Type);
+    addAttribute(Attribute::ColorSemantic, 3 * static_cast<int>(sizeof(float)), Attribute::F32Type);
+    setVertexData(QByteArray(reinterpret_cast<const char*>(vertices.constData()),
+                             static_cast<int>(vertices.size() * static_cast<int>(sizeof(float)))));
     setBounds(minimum, maximum);
     update();
 }
