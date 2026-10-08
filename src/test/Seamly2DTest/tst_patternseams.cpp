@@ -279,14 +279,34 @@ void TST_PatternSeams::olderPatternsAreConverted() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// Pieces put anywhere or at an arrangement point, as drafted, rotated or turned over. Only what differs from a piece
+// put as drafted is written.
 void TST_PatternSeams::arrangementsAreReadBack() const
 {
     SeamsPattern pattern;
+    VPieceArrangement turned = arrangement(30, QStringLiteral("body"), 0, 102.5);
+    turned.rotation = 90;
+    turned.turned_over = true;
+    turned.point = QStringLiteral("body-waist-front");
     const QVector<VPieceArrangement> arrangements = {arrangement(10, QStringLiteral("body"), 0, 120.5),
-                                                     arrangement(20, QStringLiteral("leftLeg"), 180, 60)};
+                                                     arrangement(20, QStringLiteral("leftLeg"), 180, 60), turned};
     pattern.setArrangements(arrangements);
 
     QCOMPARE(pattern.getArrangements(), arrangements);
+    const QDomElement plain = pattern.documentElement().firstChildElement(QStringLiteral("arrangements"))
+                                  .firstChildElement(QStringLiteral("arrangement"));
+    QVERIFY(!plain.hasAttribute(QStringLiteral("rotation")) && !plain.hasAttribute(QStringLiteral("turnedOver"))
+            && !plain.hasAttribute(QStringLiteral("point")));
+
+    VPieceArrangement moved = turned;
+    moved.point.clear();
+    QVERIFY(!(moved == turned));
+    moved = turned;
+    moved.rotation = 180;
+    QVERIFY(!(moved == turned));
+    moved = turned;
+    moved.turned_over = false;
+    QVERIFY(!(moved == turned));
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -313,6 +333,11 @@ void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
                              arrangement(30, QStringLiteral("rightLeg"), 0, 60),
                              arrangement(40, QStringLiteral("leftArm"), 90, 115),
                              arrangement(50, QStringLiteral("rightArm"), -90, 115)});
+    QVector<VPieceArrangement> arrangements = pattern.getArrangements();
+    arrangements[0].rotation = 270;
+    arrangements[0].turned_over = true;
+    arrangements[0].point = QStringLiteral("body-bust-front");
+    pattern.setArrangements(arrangements);
     pattern.setSeams({seam(10, 20, false)});
 
     QCOMPARE(childTags(pattern.documentElement()),

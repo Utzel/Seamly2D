@@ -209,6 +209,8 @@ const QString VAbstractPattern::AttrSize                = QStringLiteral("size")
 const QString VAbstractPattern::AttrBust                = QStringLiteral("bust");
 const QString VAbstractPattern::AttrWaist               = QStringLiteral("waist");
 const QString VAbstractPattern::AttrHip                 = QStringLiteral("hip");
+const QString VAbstractPattern::AttrTurnedOver          = QStringLiteral("turnedOver");
+const QString VAbstractPattern::AttrArrangementPoint    = QStringLiteral("point");
 
 const QString VAbstractPattern::AttrAll                 = QStringLiteral("all");
 
@@ -2222,7 +2224,8 @@ bool VSeam::operator==(const VSeam& other) const
 bool VPieceArrangement::operator==(const VPieceArrangement& other) const
 {
     return piece_id == other.piece_id && part == other.part && qFuzzyCompare(1.0 + angle, 1.0 + other.angle)
-           && qFuzzyCompare(1.0 + height, 1.0 + other.height);
+           && qFuzzyCompare(1.0 + height, 1.0 + other.height) && qFuzzyCompare(1.0 + rotation, 1.0 + other.rotation)
+           && turned_over == other.turned_over && point == other.point;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2427,6 +2430,9 @@ QVector<VPieceArrangement> VAbstractPattern::getArrangements() const
         arrangement.part = GetParametrString(element, AttrPart);
         arrangement.angle = GetParametrDouble(element, AttrAngle, QStringLiteral("0"));
         arrangement.height = GetParametrDouble(element, AttrHeight, QStringLiteral("0"));
+        arrangement.rotation = GetParametrDouble(element, AttrRotation, QStringLiteral("0"));
+        arrangement.turned_over = getParameterBool(element, AttrTurnedOver, falseStr);
+        arrangement.point = GetParametrEmptyString(element, AttrArrangementPoint);
         arrangements.append(arrangement);
 
         element = element.nextSiblingElement(TagArrangement);
@@ -2466,6 +2472,18 @@ void VAbstractPattern::setArrangements(const QVector<VPieceArrangement>& arrange
             SetAttribute(tag, AttrPart, arrangement.part);
             SetAttribute(tag, AttrAngle, arrangement.angle);
             SetAttribute(tag, AttrHeight, arrangement.height);
+            if (!qFuzzyIsNull(arrangement.rotation))
+            {
+                SetAttribute(tag, AttrRotation, arrangement.rotation);
+            }
+            if (arrangement.turned_over)
+            {
+                SetAttribute(tag, AttrTurnedOver, arrangement.turned_over);
+            }
+            if (!arrangement.point.isEmpty())
+            {
+                SetAttribute(tag, AttrArrangementPoint, arrangement.point);
+            }
             element.appendChild(tag);
         }
     }

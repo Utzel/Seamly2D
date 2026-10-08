@@ -170,6 +170,9 @@
                   <xs:attribute name="part" type="bodyPart" use="required"/>
                   <xs:attribute name="angle" type="xs:double" use="required"/>
                   <xs:attribute name="height" type="xs:double" use="required"/>
+                  <xs:attribute name="rotation" type="xs:double"/>
+                  <xs:attribute name="turnedOver" type="xs:boolean"/>
+                  <xs:attribute name="point" type="xs:string"/>
                 </xs:complexType>
               </xs:element>
             </xs:sequence>
