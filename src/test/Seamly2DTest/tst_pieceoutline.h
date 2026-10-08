@@ -35,6 +35,7 @@ public:
 
 private slots:
     void pathPointsAreOnTheOutline() const;
+    void internalPathsAreLines() const;
     void stretchFollowsThePath() const;
     void stretchGoesAroundOnce() const;
     void reversedStretchKeepsItsNotches() const;

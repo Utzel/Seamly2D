@@ -26,10 +26,12 @@
 
 #include <QLineF>
 #include <QPolygonF>
+#include <QSet>
 #include <QtMath>
 #include <QtTest>
 
 #include <algorithm>
+#include <limits>
 
 #include "../vgarment/piece_mesher.h"
 #include "../vgarment/piece_outline.h"
@@ -353,6 +355,83 @@ void TST_PieceMesher::pathPointsBecomeVertices() const
                  qUtf8Printable(QStringLiteral("path point %1 has no vertex").arg(node.id)));
         QVERIFY(k == 0 || node.index > mesh.nodes.at(k - 1).index);
     }
+
+    const QString problem = triangleProblem(mesh, PieceMesher::defaultEdgeLength());
+    QVERIFY2(problem.isEmpty(), qUtf8Printable(problem));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Lines inside the piece run along edges of the mesh: one across it, which ends on the seam line where no point of it
+// was, and a bent one inside, which keeps its corner. Neither adds a path point, and the piece's area stays as it was.
+void TST_PieceMesher::linesBecomeEdges() const
+{
+    PieceOutline outline = notchedRectangle();
+    OutlineLine across;
+    across.id = 7;
+    across.points = {QPointF(20.3, 0), QPointF(20.3, 20)};
+    OutlineLine bent;
+    bent.id = 8;
+    bent.points = {QPointF(4, 8), QPointF(9, 14), QPointF(14, 8)};
+    outline.setLines({across, bent});
+    const GarmentMesh mesh = PieceMesher().meshOutline(outline);
+
+    QCOMPARE(mesh.nodes.size(), outline.nodes().size());
+    QVERIFY(qAbs(mesh.area() - 600.0) < 1e-9);
+    QCOMPARE(mesh.lines.size(), 2);
+
+    QSet<quint64> edges;
+    for (int i = 0; i + 2 < mesh.indices.size(); i += 3)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            const quint64 a = mesh.indices.at(i + k);
+            const quint64 b = mesh.indices.at(i + (k + 1) % 3);
+            edges.insert(qMin(a, b) << 32 | qMax(a, b));
+        }
+    }
+    for (int l = 0; l < mesh.lines.size(); ++l)
+    {
+        const MeshLine& line = mesh.lines.at(l);
+        const QVector<QPointF>& drawn = outline.lines().at(l).points;
+        QCOMPARE(line.id, outline.lines().at(l).id);
+        for (int i = 0; i < line.vertices.size(); ++i)
+        {
+            const QPointF& point = mesh.rest_positions.at(static_cast<int>(line.vertices.at(i)));
+            qreal off = std::numeric_limits<qreal>::infinity();
+            for (int k = 0; k + 1 < drawn.size(); ++k)
+            {
+                const QLineF segment(drawn.at(k), drawn.at(k + 1));
+                const QPointF along = segment.p2() - segment.p1();
+                const qreal t = qBound(0.0, QPointF::dotProduct(point - segment.p1(), along)
+                                                / QPointF::dotProduct(along, along), 1.0);
+                off = qMin(off, QLineF(point, segment.p1() + along * t).length());
+            }
+            QVERIFY2(off < 1e-9, qUtf8Printable(QStringLiteral("line %1 has a vertex %2 cm off it").arg(line.id).arg(off)));
+            if (i + 1 < line.vertices.size())
+            {
+                const quint64 a = line.vertices.at(i);
+                const quint64 b = line.vertices.at(i + 1);
+                QVERIFY2(edges.contains(qMin(a, b) << 32 | qMax(a, b)),
+                         qUtf8Printable(QStringLiteral("line %1 crosses a triangle").arg(line.id)));
+            }
+        }
+    }
+
+    // The line across ends on the seam line, as boundary vertices; the bent one keeps its ends and corner.
+    const MeshLine& across_line = mesh.lines.at(0);
+    QVERIFY(mesh.boundary.contains(across_line.vertices.first()));
+    QVERIFY(mesh.boundary.contains(across_line.vertices.last()));
+    QCOMPARE(mesh.rest_positions.at(static_cast<int>(across_line.vertices.first())), QPointF(20.3, 0));
+    QCOMPARE(mesh.rest_positions.at(static_cast<int>(across_line.vertices.last())), QPointF(20.3, 20));
+    const MeshLine& bent_line = mesh.lines.at(1);
+    QCOMPARE(mesh.rest_positions.at(static_cast<int>(bent_line.vertices.first())), QPointF(4, 8));
+    QCOMPARE(mesh.rest_positions.at(static_cast<int>(bent_line.vertices.last())), QPointF(14, 8));
+    bool corner = false;
+    for (const quint32 vertex : bent_line.vertices)
+    {
+        corner = corner || QLineF(mesh.rest_positions.at(static_cast<int>(vertex)), QPointF(9, 14)).length() < 1e-9;
+    }
+    QVERIFY(corner);
 
     const QString problem = triangleProblem(mesh, PieceMesher::defaultEdgeLength());
     QVERIFY2(problem.isEmpty(), qUtf8Printable(problem));

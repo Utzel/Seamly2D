@@ -44,6 +44,16 @@ struct OutlineNode
     bool    operator==(const OutlineNode& other) const;
 };
 
+/// @brief A line inside a piece, one of its internal paths, in cm: its points in order, and the id it is known by, the
+/// internal path's.
+struct OutlineLine
+{
+    quint32          id = 0;
+    QVector<QPointF> points;
+
+    bool             operator==(const OutlineLine& other) const;
+};
+
 /// @brief Where a point is closest to an outline: on which segment and how far along it.
 struct OutlineHit
 {
@@ -53,7 +63,7 @@ struct OutlineHit
 };
 
 /// @brief A piece's seam line in cm, at the piece's position in the piece scene, with the points of the piece's path
-/// that it runs through.
+/// that it runs through, and the lines inside it, which the piece's mesh follows so the cloth can fold along them.
 ///
 /// Between two path points that follow each other lies a segment, the stretch of seam line that is sewn to another
 /// piece's segment. A seam can also run over several segments.
@@ -67,6 +77,8 @@ public:
 
     const QVector<QPointF>&     points() const;
     const QVector<OutlineNode>& nodes() const;
+    const QVector<OutlineLine>& lines() const;
+    void                        setLines(const QVector<OutlineLine>& lines);
     bool                        isEmpty() const;
     bool                        hasNode(quint32 id) const;
 
@@ -89,6 +101,7 @@ public:
 private:
     QVector<QPointF>            m_points;
     QVector<OutlineNode>        m_nodes;
+    QVector<OutlineLine>        m_lines;
 
     int                         nodePosition(quint32 id) const;
 };

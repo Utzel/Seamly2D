@@ -38,6 +38,7 @@ private slots:
     void noFoldLineOnACurvedPiece() const;
     void unfoldingMirrorsTheHalf() const;
     void unfoldedSeamsRunOnBothHalves() const;
+    void unfoldingMirrorsTheLines() const;
     void mirroredMeshFacesTheSameWay() const;
     void seamsBetweenPairsGetTwins() const;
     void seamsOnFoldsGetTurnedTwins() const;

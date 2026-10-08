@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <limits>
 
+#include "../ifc/exception/vexception.h"
 #include "../vgeometry/vpointf.h"
 #include "../vmisc/def.h"
 #include "../vpatterndb/vcontainer.h"
@@ -126,6 +127,12 @@ bool OutlineNode::operator==(const OutlineNode& other) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+bool OutlineLine::operator==(const OutlineLine& other) const
+{
+    return id == other.id && points == other.points;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief The nodes have to come in the order of the points they lie on.
 PieceOutline::PieceOutline(const QVector<QPointF>& points, const QVector<OutlineNode>& nodes)
     : m_points(points)
@@ -133,13 +140,16 @@ PieceOutline::PieceOutline(const QVector<QPointF>& points, const QVector<Outline
 {}
 
 //---------------------------------------------------------------------------------------------------------------------
-/// @brief The piece's seam line in cm, at the piece's position in the piece scene, with its path points on it.
+/// @brief The piece's seam line in cm, at the piece's position in the piece scene, with its path points on it and its
+/// internal paths inside it, but for those cut out of it.
 ///
 /// Path points the seam line doesn't run through exactly, because it was tidied up, are put where it passes
-/// closest. Throws VException if a point of the piece can't be found.
+/// closest. Throws VException if a point of the piece's seam line can't be found; an internal path whose points can't
+/// be is left out.
 PieceOutline PieceOutline::fromPiece(const VPiece& piece, const VContainer* data)
 {
-    QVector<QPointF> points = piece.mainPathPoints(data);
+    const QVector<QPointF> seam_line = piece.mainPathPoints(data);
+    QVector<QPointF> points = seam_line;
     QVector<OutlineNode> nodes;
 
     if (points.size() >= 2)
@@ -190,11 +200,44 @@ PieceOutline PieceOutline::fromPiece(const VPiece& piece, const VContainer* data
         });
     }
 
+    auto in_cm = [&piece](const QPointF& point)
+    {
+        return QPointF(FromPixel(point.x() + piece.GetMx(), Unit::Cm), FromPixel(point.y() + piece.GetMy(), Unit::Cm));
+    };
     for (QPointF& point : points)
     {
-        point = QPointF(FromPixel(point.x() + piece.GetMx(), Unit::Cm), FromPixel(point.y() + piece.GetMy(), Unit::Cm));
+        point = in_cm(point);
     }
-    return PieceOutline(points, nodes);
+
+    QVector<OutlineLine> lines;
+    for (const quint32 path_id : piece.getInternalPaths())
+    {
+        try
+        {
+            const VPiecePath path = data->getPiecePath(path_id);
+            if (path.getType() == PiecePathType::InternalPath && !path.isCutPath())
+            {
+                OutlineLine line;
+                line.id = path_id;
+                for (const QPointF& point : path.PathPoints(data, seam_line))
+                {
+                    line.points.append(in_cm(point));
+                }
+                if (line.points.size() > 1)
+                {
+                    lines.append(line);
+                }
+            }
+        }
+        catch (const VException&)
+        {
+            // The piece scene already shows what is wrong with a path whose points can't be found.
+        }
+    }
+
+    PieceOutline outline(points, nodes);
+    outline.setLines(lines);
+    return outline;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -209,6 +252,19 @@ const QVector<QPointF>& PieceOutline::points() const
 const QVector<OutlineNode>& PieceOutline::nodes() const
 {
     return m_nodes;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The lines inside the piece, such as its internal paths.
+const QVector<OutlineLine>& PieceOutline::lines() const
+{
+    return m_lines;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PieceOutline::setLines(const QVector<OutlineLine>& lines)
+{
+    m_lines = lines;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -473,7 +529,29 @@ PieceOutline PieceOutline::unfolded(quint32 start_node, quint32 end_node) const
             nodes.append(mirrored);
         }
     }
-    return PieceOutline(points, nodes);
+
+    // Each line and its mirror image, unless it lies on the fold and is its own.
+    QVector<OutlineLine> lines;
+    for (const OutlineLine& line : m_lines)
+    {
+        lines.append(line);
+        OutlineLine mirrored;
+        mirrored.id = mirrorId(line.id);
+        bool on_fold = true;
+        for (const QPointF& point : line.points)
+        {
+            mirrored.points.append(reflect(point, fold_start, fold_end));
+            on_fold = on_fold && QLineF(point, mirrored.points.last()).length() <= fold_tolerance;
+        }
+        if (!on_fold)
+        {
+            lines.append(mirrored);
+        }
+    }
+
+    PieceOutline unfolded_outline(points, nodes);
+    unfolded_outline.setLines(lines);
+    return unfolded_outline;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -493,7 +571,7 @@ bool PieceOutline::isMirrorId(quint32 id)
 //---------------------------------------------------------------------------------------------------------------------
 bool PieceOutline::operator==(const PieceOutline& other) const
 {
-    return m_points == other.m_points && m_nodes == other.m_nodes;
+    return m_points == other.m_points && m_nodes == other.m_nodes && m_lines == other.m_lines;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

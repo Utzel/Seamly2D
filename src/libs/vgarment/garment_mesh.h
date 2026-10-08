@@ -33,6 +33,14 @@
 
 #include "piece_outline.h"
 
+/// @brief A line of a piece's mesh along one of the lines inside the piece, which the cloth can fold along: the
+/// vertices it runs through, in order, each an edge away from the next, and the id of the line it follows.
+struct MeshLine
+{
+    quint32          id = 0;
+    QVector<quint32> vertices;
+};
+
 /// @brief Flat triangle mesh of one pattern piece.
 ///
 /// The positions are the piece as drafted: flat, unsewn and unstretched, in centimetres and in the
@@ -45,6 +53,7 @@ struct GarmentMesh
     QVector<quint32>     indices;        ///< triangles, three vertex indices each, all with positive signed area
     QVector<quint32>     boundary;       ///< seam line vertices, in the order the piece's path runs
     QVector<OutlineNode> nodes;          ///< the path points, each a vertex; index is its position in boundary
+    QVector<MeshLine>    lines;          ///< the lines inside the piece, along edges of the mesh
 
     bool                 isEmpty() const;
     int                  vertexCount() const;

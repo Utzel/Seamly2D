@@ -177,6 +177,36 @@ void TST_GarmentSymmetry::unfoldedSeamsRunOnBothHalves() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// A line inside the half comes twice on the whole, the second mirrored and known by the mirrored id; a line on the
+// fold only once.
+void TST_GarmentSymmetry::unfoldingMirrorsTheLines() const
+{
+    PieceOutline half = frontHalf();
+    OutlineLine dart;
+    dart.id = 30;
+    dart.points = {QPointF(10, 10), QPointF(20, 12)};
+    OutlineLine centre;
+    centre.id = 31;
+    centre.points = {QPointF(20, 5), QPointF(20, 30)};
+    half.setLines({dart, centre});
+
+    const PieceOutline whole = half.unfolded(2, 3);
+    QCOMPARE(whole.lines().size(), 3);
+    QCOMPARE(whole.lines().at(0), dart);
+    const OutlineLine& mirrored = whole.lines().at(1);
+    QCOMPARE(mirrored.id, PieceOutline::mirrorId(30));
+    QVERIFY(QLineF(mirrored.points.first(), QPointF(30, 10)).length() < 1e-9);
+    QVERIFY(QLineF(mirrored.points.last(), QPointF(20, 12)).length() < 1e-9);
+    QCOMPARE(whole.lines().at(2), centre);
+
+    // Meshed, the lines meet where they end on the fold, and the line along the fold passes through there.
+    const GarmentMesh mesh = PieceMesher().meshOutline(whole);
+    QCOMPARE(mesh.lines.size(), 3);
+    QCOMPARE(mesh.lines.at(0).vertices.last(), mesh.lines.at(1).vertices.last());
+    QVERIFY(mesh.lines.at(2).vertices.contains(mesh.lines.at(0).vertices.last()));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void TST_GarmentSymmetry::mirroredMeshFacesTheSameWay() const
 {
     const GarmentMesh mesh = PieceMesher().meshOutline(frontHalf());

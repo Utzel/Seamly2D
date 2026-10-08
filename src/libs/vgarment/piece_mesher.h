@@ -37,9 +37,11 @@ class VPiece;
 
 /// @brief Turns pattern pieces into triangle meshes with evenly sized triangles.
 ///
-/// The seam line is resampled at the edge length, keeping its corners and the piece's path points, and the inside
-/// is filled with a triangular lattice of the same spacing. Everything is Delaunay triangulated; seam line segments
-/// the triangulation leaves out are split until it keeps them all, so no triangle crosses the seam line.
+/// The seam line is resampled at the edge length, keeping its corners and the piece's path points, and so are the
+/// lines inside the piece, ending on the seam line where they come close to it. The rest of the inside is filled with
+/// a triangular lattice of the same spacing. Everything is Delaunay triangulated; seam line and line segments the
+/// triangulation leaves out are split until it keeps them all, so no triangle crosses the seam line or a line, and the
+/// cloth can fold along the lines.
 ///
 /// The edge length plays the role of CLO's particle distance: coarse while editing, fine for the final drape.
 class PieceMesher

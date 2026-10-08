@@ -45,6 +45,7 @@ private slots:
     void pieceIsMeshedInCentimetres() const;
     void pathPointsBecomeVertices() const;
     void meshStretchNamesVertices() const;
+    void linesBecomeEdges() const;
 
 private:
     Q_DISABLE_COPY(TST_PieceMesher)

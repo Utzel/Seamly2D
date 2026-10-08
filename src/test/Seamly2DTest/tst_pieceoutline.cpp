@@ -51,8 +51,9 @@ const quint32 bottom_left = 5;
 
 //---------------------------------------------------------------------------------------------------------------------
 // A 10 x 10 cm square placed at (5, 3) cm, with a notch 3 cm down its right side. The notch lies on a straight line,
-// which the piece's seam line tidies away, so the outline has to put it back.
-PieceOutline squareOutline()
+// which the piece's seam line tidies away, so the outline has to put it back. With paths, it has an internal path
+// 2 cm in from its left side, from top to bottom, and a slit cut into it.
+PieceOutline squareOutline(bool with_paths = false)
 {
     const Unit unit = Unit::Cm;
     QScopedPointer<VContainer> data(new VContainer(nullptr, &unit));
@@ -80,6 +81,24 @@ PieceOutline squareOutline()
     piece.SetMx(ToPixel(5, Unit::Cm));
     piece.SetMy(ToPixel(3, Unit::Cm));
 
+    if (with_paths)
+    {
+        add_point(6, 2, 0);
+        add_point(7, 2, 10);
+        add_point(8, 5, 4);
+        add_point(9, 7, 6);
+        VPiecePath line(PiecePathType::InternalPath);
+        line.Append(VPieceNode(6, Tool::NodePoint));
+        line.Append(VPieceNode(7, Tool::NodePoint));
+        data->UpdatePiecePath(20, line);
+        VPiecePath slit(PiecePathType::InternalPath);
+        slit.setCutPath(true);
+        slit.Append(VPieceNode(8, Tool::NodePoint));
+        slit.Append(VPieceNode(9, Tool::NodePoint));
+        data->UpdatePiecePath(21, slit);
+        piece.SetInternalPaths({20, 21});
+    }
+
     return PieceOutline::fromPiece(piece, data.data());
 }
 
@@ -94,6 +113,22 @@ bool samePoint(const QPointF& a, const QPointF& b)
 TST_PieceOutline::TST_PieceOutline(QObject* parent)
     : QObject(parent)
 {}
+
+//---------------------------------------------------------------------------------------------------------------------
+// An internal path is a line inside the piece, where the piece is, in cm; a slit cut into the piece isn't.
+void TST_PieceOutline::internalPathsAreLines() const
+{
+    QVERIFY(squareOutline().lines().isEmpty());
+
+    const PieceOutline outline = squareOutline(true);
+    QCOMPARE(outline.lines().size(), 1);
+    const OutlineLine& line = outline.lines().first();
+    QCOMPARE(line.id, 20u);
+    QCOMPARE(line.points.size(), 2);
+    QVERIFY(samePoint(line.points.first(), QPointF(7, 3)));
+    QVERIFY(samePoint(line.points.last(), QPointF(7, 13)));
+    QVERIFY(squareOutline(true) != squareOutline());
+}
 
 //---------------------------------------------------------------------------------------------------------------------
 void TST_PieceOutline::pathPointsAreOnTheOutline() const
