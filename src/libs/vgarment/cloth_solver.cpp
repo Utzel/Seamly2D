@@ -102,6 +102,10 @@ const double clear_angle = 0.2;
 // each other can't pass through each other; parts already touching count as a thickness apart.
 const double self_bound_share = 0.45;
 
+// A fold onto itself, right side in or wrong side in, is held this many radians short of flat: right onto itself, the
+// two ways it can fold there come to the same angle, and the cloth wouldn't know which way to go.
+const double fold_short_of_flat = 5.0 * M_PI / 180.0;
+
 //---------------------------------------------------------------------------------------------------------------------
 struct Vec3
 {
@@ -792,7 +796,8 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
             const double edge_squared = QPointF::dotProduct(at_b - at_a, at_b - at_a);
             hinge.stiffness = folds.at(fold).strength * 6.0 * rigidity * edge_squared / areas;
             hinge.fold = true;
-            hinge.rest_angle = M_PI - qDegreesToRadians(folds.at(fold).angle);
+            const double fullest = M_PI - fold_short_of_flat;
+            hinge.rest_angle = qBound(-fullest, M_PI - qDegreesToRadians(folds.at(fold).angle), fullest);
             m_hinges.append(hinge);
         }
         else if (areas > tiny)

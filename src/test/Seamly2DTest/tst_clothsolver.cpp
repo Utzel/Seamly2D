@@ -730,11 +730,14 @@ void TST_ClothSolver::foldsHoldTheirAngle_data() const
     QTest::newRow("wrong side in at a right angle") << 270.0;
     QTest::newRow("right side almost onto itself") << 20.0;
     QTest::newRow("wrong side almost onto itself") << 340.0;
+    QTest::newRow("right side onto itself") << 0.0;
+    QTest::newRow("wrong side onto itself") << 360.0;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 // A strip lying flat, folded across its middle, comes to the fold's angle on the side it says: the halves meet at the
-// angle on the right side, the side the piece is drafted from, or at its rest to 360 on the wrong side.
+// angle on the right side, the side the piece is drafted from, or at its rest to 360 on the wrong side. Folded onto
+// itself, it folds the way it is told, a little short of flat.
 void TST_ClothSolver::foldsHoldTheirAngle() const
 {
     QFETCH(qreal, angle);
@@ -788,7 +791,7 @@ void TST_ClothSolver::foldsHoldTheirAngle() const
     const QVector3D right_side = QVector3D::crossProduct(at(QPointF(0, 5)) - at(QPointF(0, 0)),
                                                          at(QPointF(5, 0)) - at(QPointF(0, 0))).normalized();
     const qreal between = qRadiansToDegrees(qAcos(qBound(-1.0f, QVector3D::dotProduct(left, right), 1.0f)));
-    const qreal wanted = angle <= 180.0 ? angle : 360.0 - angle;
+    const qreal wanted = qMax(5.0, angle <= 180.0 ? angle : 360.0 - angle);
     const float towards = QVector3D::dotProduct(right, right_side);
     QVERIFY2(qAbs(between - wanted) < 10.0 && (angle < 180.0 ? towards > 0 : towards < 0),
              qUtf8Printable(QStringLiteral("the halves meet at %1 degrees, the right half %2 the right side")
