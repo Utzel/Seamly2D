@@ -1389,18 +1389,25 @@ bool GarmentViewWidget::isTurnedPair(quint32 piece, const PieceArrangement& arra
         {
             for (const VSeam& seam : m_doc->getSeams())
             {
-                for (const auto& sides : {std::make_pair(seam.first, seam.second),
-                                          std::make_pair(seam.second, seam.first)})
+                for (const auto& sides : {std::make_pair(seam.firstSide(), seam.secondSide()),
+                                          std::make_pair(seam.secondSide(), seam.firstSide())})
                 {
-                    const quint32 partner = sides.second.piece_id;
-                    if (sides.first.piece_id == piece && onPart(partner, body) && (body || (limbs && votes == 0)))
+                    for (const VSeamSide& own_side : sides.first)
                     {
-                        const CachedMesh& other = m_mesh_cache.value(partner);
-                        const qreal own_across = acrossBody(own.garment_mesh, placed, sides.first);
-                        const qreal other_across = acrossBody(other.garment_mesh,
-                                                              piecePositions(partner, other.garment_mesh),
-                                                              sides.second);
-                        votes += own_across * other_across < 0 ? 1 : -1;
+                        for (const VSeamSide& other_side : sides.second)
+                        {
+                            const quint32 partner = other_side.piece_id;
+                            if (own_side.piece_id == piece && onPart(partner, body)
+                                && (body || (limbs && votes == 0)))
+                            {
+                                const CachedMesh& other = m_mesh_cache.value(partner);
+                                const qreal own_across = acrossBody(own.garment_mesh, placed, own_side);
+                                const qreal other_across = acrossBody(other.garment_mesh,
+                                                                      piecePositions(partner, other.garment_mesh),
+                                                                      other_side);
+                                votes += own_across * other_across < 0 ? 1 : -1;
+                            }
+                        }
                     }
                 }
             }
@@ -1737,11 +1744,16 @@ void GarmentViewWidget::superimposePiece(Superimpose how)
 
 //---------------------------------------------------------------------------------------------------------------------
 // The piece on the avatar a piece is sewn to the most, by the length of their seams, and the sides of those seams,
-// each in the order in which they meet; 0 if it is sewn to none on the avatar.
+// each in the order in which they meet; 0 if it is sewn to none on the avatar. Seams going on over several stretches
+// don't count, as the piece meets only part of the other side.
 quint32 GarmentViewWidget::superimposePartner(quint32 piece, QVector<SewnSides>* seams) const
 {
     QMap<quint32, qreal> sewn;
-    const QVector<VSeam> all_seams = m_doc->getSeams();
+    QVector<VSeam> all_seams = m_doc->getSeams();
+    all_seams.erase(std::remove_if(all_seams.begin(), all_seams.end(), [](const VSeam& seam)
+    {
+        return !seam.first_more.isEmpty() || !seam.second_more.isEmpty();
+    }), all_seams.end());
     for (const VSeam& seam : all_seams)
     {
         for (const auto& sides : {std::make_pair(seam.first, seam.second), std::make_pair(seam.second, seam.first)})
@@ -2323,26 +2335,34 @@ void GarmentViewWidget::startSimulation()
         return;
     }
 
-    // The pattern's seams, and their twins on the other side of the garment.
+    // The pattern's seams, and their twins on the other side of the garment. A side going on over several stretches
+    // is sewn as one, each stretch after the one before.
     QVector<GarmentSeam> seams;
     for (const VSeam& stored : m_doc->getSeams())
     {
-        GarmentSeam seam;
-        seam.first = {stored.first.piece_id, stored.first.start_node, stored.first.end_node};
-        seam.second = {stored.second.piece_id, stored.second.start_node, stored.second.end_node};
-        seam.reverse = stored.reverse;
-        seam.angle = stored.angle;
-        seams.append(seam);
+        seams.append(toGarmentSeam(stored));
     }
+    auto draped_side = [&meshes, &offsets](const QVector<GarmentSeamSide>& side)
+    {
+        QVector<SeamStretch> stretches;
+        for (const GarmentSeamSide& stretch : side)
+        {
+            if (!offsets.contains(stretch.piece))
+            {
+                return SeamStretch();
+            }
+            const SeamStretch along = meshes.value(stretch.piece).stretch(stretch.start_node, stretch.end_node,
+                                                                          offsets.value(stretch.piece));
+            stretches.append(stretch.backward ? along.reversed() : along);
+        }
+        return SeamStretch::joined(stretches);
+    };
     for (const GarmentSeam& seam : symmetry.madeUp(seams))
     {
-        if (offsets.contains(seam.first.piece) && offsets.contains(seam.second.piece))
+        const SeamStretch first = draped_side(seam.firstSide());
+        SeamStretch second = draped_side(seam.secondSide());
+        if (!first.isEmpty() && !second.isEmpty())
         {
-            const SeamStretch first = meshes.value(seam.first.piece).stretch(seam.first.start_node,
-                                                                             seam.first.end_node,
-                                                                             offsets.value(seam.first.piece));
-            SeamStretch second = meshes.value(seam.second.piece).stretch(seam.second.start_node, seam.second.end_node,
-                                                                         offsets.value(seam.second.piece));
             if (seam.reverse)
             {
                 second = second.reversed();

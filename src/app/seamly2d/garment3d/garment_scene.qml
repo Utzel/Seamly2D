@@ -1019,6 +1019,25 @@ Rectangle {
             }
         }
 
+        // While sewing, Shift+click picks an edge for the side of the seam being sewn and goes on to its next edge, so
+        // a side can go on over several, as CLO's M:N sewing.
+        TapHandler {
+            acceptedModifiers: Qt.ShiftModifier
+            enabled: root.seamEditor.sewing
+
+            onTapped: (event_point) => {
+                const x = event_point.position.x
+                const y = event_point.position.y
+                const spot = root.pieceSpot(x, y)
+                const point = root.boardPoint(x, y)
+                if (spot !== undefined && root.sceneModel.isPlaced(spot.piece)) {
+                    root.seamEditor.clickPiece(spot.piece, spot.x, spot.y, spot.tolerance, true)
+                } else if (point !== undefined) {
+                    root.seamEditor.click(point.x, point.y, root.boardTolerance(x, y, point), true)
+                }
+            }
+        }
+
         TapHandler {
             acceptedModifiers: Qt.NoModifier
 

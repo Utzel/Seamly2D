@@ -105,7 +105,43 @@ QVector<QPointF> startMark(const SeamStretch& stretch)
     }
     return points;
 }
+
+//---------------------------------------------------------------------------------------------------------------------
+// The pattern piece a piece of the garment is, or is the mirror image of.
+quint32 patternPiece(quint32 id)
+{
+    return PieceOutline::isMirrorId(id) ? PieceOutline::mirrorId(id) : id;
+}
 } // anonymous namespace
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The pattern's seam as the garment has it, before the symmetry makes up its twin.
+GarmentSeam toGarmentSeam(const VSeam& seam)
+{
+    auto stretch_of = [](const VSeamSide& side)
+    {
+        GarmentSeamSide stretch;
+        stretch.piece = side.piece_id;
+        stretch.start_node = side.start_node;
+        stretch.end_node = side.end_node;
+        stretch.backward = side.backward;
+        return stretch;
+    };
+    GarmentSeam made;
+    made.first = stretch_of(seam.first);
+    made.second = stretch_of(seam.second);
+    for (const VSeamSide& side : seam.first_more)
+    {
+        made.first_more.append(stretch_of(side));
+    }
+    for (const VSeamSide& side : seam.second_more)
+    {
+        made.second_more.append(stretch_of(side));
+    }
+    made.reverse = seam.reverse;
+    made.angle = seam.angle;
+    return made;
+}
 
 //---------------------------------------------------------------------------------------------------------------------
 bool SeamEditor::Edge::isValid() const
@@ -117,6 +153,45 @@ bool SeamEditor::Edge::isValid() const
 bool SeamEditor::Edge::sameSegment(const Edge& other) const
 {
     return piece_id == other.piece_id && segment == other.segment;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Whether the edges are the same segment of the same piece, or of the same mirror image.
+bool SeamEditor::Edge::sameStretch(const Edge& other) const
+{
+    return shown_id == other.shown_id && segment == other.segment;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The point this far along the side, in cm, on the stretch it falls on, and the piece that is on.
+QPointF SeamEditor::DraftedSide::pointAt(qreal distance, quint32* piece) const
+{
+    qreal before = 0;
+    for (int i = 0; i < stretches.size(); ++i)
+    {
+        const qreal length = stretches.at(i).length();
+        if (distance <= before + length || i + 1 == stretches.size())
+        {
+            *piece = pieces.at(i);
+            return stretches.at(i).pointAt(distance - before);
+        }
+        before += length;
+    }
+    *piece = 0;
+    return QPointF();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The side sewn the other way round.
+void SeamEditor::DraftedSide::reverse()
+{
+    std::reverse(pieces.begin(), pieces.end());
+    std::reverse(stretches.begin(), stretches.end());
+    for (SeamStretch& stretch : stretches)
+    {
+        stretch = stretch.reversed();
+    }
+    joined = joined.reversed();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -173,7 +248,9 @@ SeamEditor::SeamEditor(QObject* parent)
     , m_sewing(false)
     , m_selected_seam(-1)
     , m_garment_shown(true)
-    , m_started()
+    , m_first_edges()
+    , m_second_edges()
+    , m_first_done(false)
     , m_hovered()
     , m_seam_bands(new SeamGeometry())
     , m_seam_lines(new SeamGeometry())
@@ -213,9 +290,10 @@ void SeamEditor::setPieces(const QVector<ShownPiece>& pieces)
     {
         m_hovered = Edge();
     }
-    if (m_started.isValid() && !still_there(m_started))
+    const QVector<Edge> picked = m_first_edges + m_second_edges;
+    if (!std::all_of(picked.cbegin(), picked.cend(), still_there))
     {
-        setStarted(Edge());
+        startOver();
     }
 
     updateShownSeams();
@@ -259,7 +337,9 @@ void SeamEditor::setSewing(bool sewing)
     if (sewing != m_sewing)
     {
         m_sewing = sewing;
-        m_started = Edge();
+        m_first_edges.clear();
+        m_second_edges.clear();
+        m_first_done = false;
         m_hovered = Edge();
         updatePreview();
         emit sewingChanged();
@@ -301,12 +381,30 @@ QString SeamEditor::hint() const
     QString text;
     if (m_sewing)
     {
-        text = m_started.isValid()
-               ? tr("Now click the edge to sew it to, near the end that meets the start. Esc starts over.")
-               : tr("Click the edge to sew, near the end where the seam starts. Esc stops sewing.");
-        if (m_started.isValid() && m_hovered.isValid() && !m_hovered.sameSegment(m_started))
+        if (m_first_edges.isEmpty())
         {
-            text = lengthsHint(edgeStretch(m_started), edgeStretch(m_hovered)) + QLatin1Char(' ') + text;
+            text = tr("Click the edge to sew, near the end where the seam starts; to go on over several edges, "
+                      "Shift+click each but the last. Esc stops sewing.");
+        }
+        else if (!m_first_done)
+        {
+            text = tr("Shift+click the next edge of this side, near the end it comes in at, or click the last one. "
+                      "Esc starts over.");
+        }
+        else if (m_second_edges.isEmpty())
+        {
+            text = tr("Now click the edge to sew it to, near the end that meets the start; to go on over several, "
+                      "Shift+click each but the last. Esc starts over.");
+        }
+        else
+        {
+            text = tr("Shift+click the next edge of this side, near the end it comes in at, or click the last one to "
+                      "sew. Esc starts over.");
+        }
+        const QVector<Edge> second = secondEdgesShown();
+        if (m_first_done && !second.isEmpty())
+        {
+            text = lengthsHint(edgesStretch(m_first_edges), edgesStretch(second)) + QLatin1Char(' ') + text;
         }
     }
     else if (m_selected_seam >= 0)
@@ -316,7 +414,7 @@ QString SeamEditor::hint() const
         {
             if (seam.index == m_selected_seam)
             {
-                text = lengthsHint(seam.first, seam.second) + QLatin1Char(' ') + text;
+                text = lengthsHint(seam.first.joined, seam.second.joined) + QLatin1Char(' ') + text;
             }
         }
     }
@@ -367,9 +465,9 @@ QVariantList SeamEditor::lengthLabels() const
 bool SeamEditor::cancel()
 {
     bool cancelled = true;
-    if (m_started.isValid())
+    if (!m_first_edges.isEmpty())
     {
-        setStarted(Edge());
+        startOver();
     }
     else if (m_sewing)
     {
@@ -483,14 +581,15 @@ void SeamEditor::leave()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-/// @brief A click on the board. While sewing it starts or finishes a seam; otherwise it selects the seam under it.
-/// Returns false if the click is left for the pieces.
-bool SeamEditor::click(qreal x, qreal y, qreal tolerance)
+/// @brief A click on the board. While sewing it picks the edge under it for the seam, ending its side unless there is
+/// more to it, as a Shift+click says; otherwise it selects the seam under it. Returns false if the click is left for
+/// the pieces.
+bool SeamEditor::click(qreal x, qreal y, qreal tolerance, bool more)
 {
     bool handled = true;
     if (m_sewing)
     {
-        sewEdge(edgeAt(QPointF(x, y), tolerance));
+        sewEdge(edgeAt(QPointF(x, y), tolerance), more);
     }
     else
     {
@@ -503,9 +602,9 @@ bool SeamEditor::click(qreal x, qreal y, qreal tolerance)
 
 //---------------------------------------------------------------------------------------------------------------------
 /// @brief A click on a piece on the avatar, shown by this id, at a point of its mesh's flat shape in cm. While sewing
-/// it starts or finishes a seam; otherwise it selects the seam of that piece under it. Returns false if the click is
-/// left for the pieces, as it is on a piece not on the avatar.
-bool SeamEditor::clickPiece(int id, qreal x, qreal y, qreal tolerance)
+/// it picks the edge under it for the seam, as click() does; otherwise it selects the seam of that piece under it.
+/// Returns false if the click is left for the pieces, as it is on a piece not on the avatar.
+bool SeamEditor::clickPiece(int id, qreal x, qreal y, qreal tolerance, bool more)
 {
     const ShownMesh* shown = nullptr;
     const ShownPiece* clicked = pieceShowing(static_cast<quint32>(id), &shown);
@@ -517,7 +616,7 @@ bool SeamEditor::clickPiece(int id, qreal x, qreal y, qreal tolerance)
     bool handled = true;
     if (m_sewing)
     {
-        sewEdge(edgeOn(static_cast<quint32>(id), QPointF(x, y), tolerance));
+        sewEdge(edgeOn(static_cast<quint32>(id), QPointF(x, y), tolerance), more);
     }
     else
     {
@@ -585,6 +684,7 @@ SeamEditor::Edge SeamEditor::edgeAt(const QPointF& point, qreal tolerance) const
         if (hit.segment >= 0 && hit.distance <= nearest_distance)
         {
             nearest.piece_id = candidate.id;
+            nearest.shown_id = candidate.id;
             nearest.segment = hit.segment;
             nearest.from_start = hit.along < 0.5;
             nearest_distance = hit.distance;
@@ -607,6 +707,7 @@ SeamEditor::Edge SeamEditor::edgeOn(quint32 id, const QPointF& point, qreal tole
         if (hit.segment >= 0 && hit.distance <= tolerance && !hovered->foldSegments().value(hit.segment))
         {
             edge.piece_id = hovered->id;
+            edge.shown_id = id;
             edge.segment = hit.segment;
             edge.from_start = hit.along < 0.5;
         }
@@ -633,6 +734,18 @@ SeamStretch SeamEditor::edgeStretch(const Edge& edge) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// Edges sewn one after the other, as drafted, each running from the end the side comes in at.
+SeamStretch SeamEditor::edgesStretch(const QVector<Edge>& edges) const
+{
+    QVector<SeamStretch> stretches;
+    for (const Edge& edge : edges)
+    {
+        stretches.append(edgeStretch(edge));
+    }
+    return SeamStretch::joined(stretches);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // The seam sewing two segments together, the ends picked on each meeting. Sewn to its mirror image, a segment meets it
 // end to end.
 VSeam SeamEditor::seamBetween(const Edge& first, const Edge& second) const
@@ -652,22 +765,78 @@ VSeam SeamEditor::seamBetween(const Edge& first, const Edge& second) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// The seam sewing the edges picked for each side, each side's one after the other from the ends picked. A seam of one
+// edge a side is as seamBetween() makes it; one going on over several takes each edge on the piece or mirror image it
+// was picked on.
+VSeam SeamEditor::seamOver(const QVector<Edge>& first, const QVector<Edge>& second) const
+{
+    if (first.size() == 1 && second.size() == 1)
+    {
+        return seamBetween(first.first(), second.first());
+    }
+
+    auto side_of = [this](const QVector<Edge>& edges)
+    {
+        QVector<VSeamSide> side;
+        for (const Edge& edge : edges)
+        {
+            const PieceOutline& outline = piece(edge.piece_id)->outline;
+            VSeamSide stretch;
+            stretch.piece_id = edge.shown_id;
+            stretch.start_node = outline.segmentStart(edge.segment);
+            stretch.end_node = outline.segmentEnd(edge.segment);
+            stretch.backward = !edge.from_start;
+            side.append(stretch);
+        }
+        return side;
+    };
+    const QVector<VSeamSide> first_side = side_of(first);
+    const QVector<VSeamSide> second_side = side_of(second);
+    VSeam seam;
+    seam.first = first_side.first();
+    seam.first_more = first_side.mid(1);
+    seam.second = second_side.first();
+    seam.second_more = second_side.mid(1);
+    return seam;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A side of a seam as drafted, each stretch on its piece, one on a mirror image on the piece. False if a piece or
+// point of it isn't shown.
+bool SeamEditor::draftedSide(const QVector<VSeamSide>& side, DraftedSide* drafted) const
+{
+    *drafted = DraftedSide();
+    for (const VSeamSide& stretch : side)
+    {
+        const quint32 piece_id = patternPiece(stretch.piece_id);
+        const ShownPiece* stretch_piece = piece(piece_id);
+        if (stretch_piece == nullptr)
+        {
+            return false;
+        }
+        const SeamStretch along = stretch_piece->outline.stretch(stretch.start_node, stretch.end_node);
+        if (along.isEmpty())
+        {
+            return false;
+        }
+        drafted->pieces.append(piece_id);
+        drafted->stretches.append(stretch.backward ? along.reversed() : along);
+    }
+    drafted->joined = SeamStretch::joined(drafted->stretches);
+    return !drafted->joined.isEmpty();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Both sides of a seam as drafted, the second running like the first. False if a piece or point of the seam isn't
 // shown.
-bool SeamEditor::seamStretches(const VSeam& seam, SeamStretch* first, SeamStretch* second) const
+bool SeamEditor::seamStretches(const VSeam& seam, DraftedSide* first, DraftedSide* second) const
 {
-    const ShownPiece* first_piece = piece(seam.first.piece_id);
-    const ShownPiece* second_piece = piece(seam.second.piece_id);
-    if (first_piece != nullptr && second_piece != nullptr)
+    const bool shown = draftedSide(seam.firstSide(), first) && draftedSide(seam.secondSide(), second);
+    if (shown && seam.reverse)
     {
-        *first = first_piece->outline.stretch(seam.first.start_node, seam.first.end_node);
-        *second = second_piece->outline.stretch(seam.second.start_node, seam.second.end_node);
-        if (seam.reverse)
-        {
-            *second = second->reversed();
-        }
+        second->reverse();
     }
-    return first_piece != nullptr && second_piece != nullptr && !first->isEmpty() && !second->isEmpty();
+    return shown;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -689,18 +858,19 @@ int SeamEditor::seamNear(const QPointF& point, qreal tolerance, quint32 piece_id
     qreal nearest_distance = tolerance;
     for (const ShownSeam& seam : m_shown_seams)
     {
-        const VSeam& stored = m_seams.at(seam.index);
-        const std::pair<quint32, const SeamStretch*> sides[] = {{stored.first.piece_id, &seam.first},
-                                                                {stored.second.piece_id, &seam.second}};
-        for (const auto& side : sides)
+        for (const DraftedSide* side : {&seam.first, &seam.second})
         {
-            const bool wanted = piece_id == 0 ? isOnBoard(side.first) : side.first == piece_id;
-            const qreal distance = wanted ? distanceToPolyline(point, side.second->points())
-                                          : std::numeric_limits<qreal>::infinity();
-            if (distance <= nearest_distance)
+            for (int i = 0; i < side->stretches.size(); ++i)
             {
-                nearest = seam.index;
-                nearest_distance = distance;
+                const quint32 on = side->pieces.at(i);
+                const bool wanted = piece_id == 0 ? isOnBoard(on) : on == piece_id;
+                const qreal distance = wanted ? distanceToPolyline(point, side->stretches.at(i).points())
+                                              : std::numeric_limits<qreal>::infinity();
+                if (distance <= nearest_distance)
+                {
+                    nearest = seam.index;
+                    nearest_distance = distance;
+                }
             }
         }
     }
@@ -712,11 +882,7 @@ int SeamEditor::seamNear(const QPointF& point, qreal tolerance, quint32 piece_id
 // mirror image.
 QVector<GarmentSeam> SeamEditor::garmentSeams(const VSeam& seam) const
 {
-    GarmentSeam garment_seam;
-    garment_seam.first = {seam.first.piece_id, seam.first.start_node, seam.first.end_node};
-    garment_seam.second = {seam.second.piece_id, seam.second.start_node, seam.second.end_node};
-    garment_seam.reverse = seam.reverse;
-    return m_symmetry.madeUp({garment_seam});
+    return m_symmetry.madeUp({toGarmentSeam(seam)});
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -740,26 +906,102 @@ SeamEditor::PlacedStretch SeamEditor::placedStretch(const GarmentSeamSide& side)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// While sewing, a click on an edge starts a seam there, or with one started finishes it; a click off the edges drops
-// the seam started.
-void SeamEditor::sewEdge(const Edge& edge)
+// Where a side of a garment seam runs now, on the meshes of the pieces on the avatar: those of its stretches that are
+// there, each running as the side does, and, if all of them are, the whole side joined into one.
+bool SeamEditor::placedSide(const QVector<GarmentSeamSide>& side, QVector<PlacedStretch>* stretches,
+                            PlacedStretch* joined) const
+{
+    stretches->clear();
+    *joined = PlacedStretch();
+    QVector<SeamStretch> along;
+    bool whole = !side.isEmpty();
+    for (const GarmentSeamSide& stretch : side)
+    {
+        PlacedStretch placed = placedStretch(stretch);
+        if (placed.isEmpty())
+        {
+            whole = false;
+            continue;
+        }
+        if (stretch.backward)
+        {
+            placed.reverse();
+        }
+        along.append(placed.stretch);
+        joined->points += placed.points;
+        stretches->append(placed);
+    }
+    if (whole)
+    {
+        joined->stretch = SeamStretch::joined(along);
+    }
+    else
+    {
+        *joined = PlacedStretch();
+    }
+    return whole;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The second side of the seam being sewn, once the first is picked, with the edge under the mouse as it would be added
+// to it. An edge on its own isn't shown sewn to itself.
+QVector<SeamEditor::Edge> SeamEditor::secondEdgesShown() const
+{
+    QVector<Edge> edges = m_second_edges;
+    const bool picked = std::any_of(edges.cbegin(), edges.cend(), [this](const Edge& edge)
+    {
+        return edge.sameStretch(m_hovered);
+    });
+    const bool to_itself = edges.isEmpty() && m_first_edges.size() == 1 && m_hovered.sameStretch(m_first_edges.first());
+    if (m_first_done && m_hovered.isValid() && !picked && !to_itself)
+    {
+        edges.append(m_hovered);
+    }
+    return edges;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// While sewing, a click on an edge adds it to the side of the seam being picked, the first, then the second: a click
+// ends the side there, a Shift+click goes on to its next edge. Ending the second side sews the seam. A click off the
+// edges drops what was picked. Sewn to itself on its own, an edge has to be of a piece cut twice, and is sewn to its
+// mirror image.
+void SeamEditor::sewEdge(const Edge& edge, bool more)
 {
     if (!edge.isValid())
     {
-        setStarted(Edge());
+        startOver();
+        return;
     }
-    else if (!m_started.isValid())
+
+    QVector<Edge>& side = m_first_done ? m_second_edges : m_first_edges;
+    const bool to_itself = m_first_done && side.isEmpty() && m_first_edges.size() == 1
+                           && edge.sameSegment(m_first_edges.first());
+    if (to_itself && (more || !isMirrored(edge.piece_id)))
     {
-        setStarted(edge);
+        return;
     }
-    else if (!edge.sameSegment(m_started) || isMirrored(edge.piece_id))
+    const bool picked = std::any_of(side.cbegin(), side.cend(), [&edge](const Edge& other)
     {
-        const VSeam seam = seamBetween(m_started, edge);
-        setStarted(Edge());
-        if (!knowsSeam(seam))
-        {
-            emit seamSewn(seam);
-        }
+        return other.sameStretch(edge);
+    });
+    if (!picked)
+    {
+        side.append(edge);
+    }
+
+    if (more || !m_first_done)
+    {
+        m_first_done = m_first_done || !more;
+        updatePreview();
+        emit hintChanged();
+        return;
+    }
+
+    const VSeam seam = seamOver(m_first_edges, m_second_edges);
+    startOver();
+    if (!knowsSeam(seam))
+    {
+        emit seamSewn(seam);
     }
 }
 
@@ -770,7 +1012,7 @@ void SeamEditor::hoverEdge(const Edge& edge)
     {
         m_hovered = edge;
         updatePreview();
-        if (m_started.isValid())
+        if (m_first_done)
         {
             emit hintChanged();
         }
@@ -822,40 +1064,45 @@ void SeamEditor::updateSeamGeometry()
     {
         const QColor color = seamColor(seam.index);
         const qreal width = seam.index == m_selected_seam ? selected_seam_width : seam_width;
-        const bool first_on_board = isOnBoard(m_seams.at(seam.index).first.piece_id);
-        const bool second_on_board = isOnBoard(m_seams.at(seam.index).second.piece_id);
-        if (first_on_board)
+        for (const DraftedSide* side : {&seam.first, &seam.second})
         {
-            bands.append({flip(seam.first.points()), color, width});
-        }
-        if (second_on_board)
-        {
-            bands.append({flip(seam.second.points()), color, width});
-        }
-        if (first_on_board && second_on_board)
-        {
-            for (const SeamMatch& match : SeamStretch::matches(seam.first, seam.second))
+            for (int i = 0; i < side->stretches.size(); ++i)
             {
-                lines.append({flip(seam.first.pointAt(match.first)), flip(seam.second.pointAt(match.second)), color});
+                if (isOnBoard(side->pieces.at(i)))
+                {
+                    bands.append({flip(side->stretches.at(i).points()), color, width});
+                }
+            }
+        }
+        for (const SeamMatch& match : SeamStretch::matches(seam.first.joined, seam.second.joined))
+        {
+            quint32 first_piece = 0;
+            quint32 second_piece = 0;
+            const QPointF first_point = seam.first.pointAt(match.first, &first_piece);
+            const QPointF second_point = seam.second.pointAt(match.second, &second_piece);
+            if (isOnBoard(first_piece) && isOnBoard(second_piece))
+            {
+                lines.append({flip(first_point), flip(second_point), color});
             }
         }
     }
     m_seam_bands->setBands(bands);
     m_seam_lines->setLines(lines);
 
-    // Labelled on the first side on the board, else on the second.
+    // Labelled at the middle of the first side if that is on the board, else of the second.
     m_board_labels.clear();
     for (const ShownSeam& seam : m_shown_seams)
     {
-        const VSeam& stored = m_seams.at(seam.index);
-        const SeamStretch* side = isOnBoard(stored.first.piece_id)    ? &seam.first
-                                  : isOnBoard(stored.second.piece_id) ? &seam.second
-                                                                      : nullptr;
-        if (side != nullptr)
+        for (const DraftedSide* side : {&seam.first, &seam.second})
         {
-            const QPointF middle = flip(side->pointAt(side->length() / 2.0));
-            m_board_labels.append(lengthLabel(seam, QVector3D(static_cast<float>(middle.x()),
-                                                              static_cast<float>(middle.y()), 0.0f), true));
+            quint32 on = 0;
+            const QPointF middle = flip(side->pointAt(side->joined.length() / 2.0, &on));
+            if (isOnBoard(on))
+            {
+                m_board_labels.append(lengthLabel(seam, QVector3D(static_cast<float>(middle.x()),
+                                                                  static_cast<float>(middle.y()), 0.0f), true));
+                break;
+            }
         }
     }
     emit lengthLabelsChanged();
@@ -875,19 +1122,19 @@ void SeamEditor::updateGarmentGeometry()
         const qreal radius = (seam.index == m_selected_seam ? selected_seam_width : seam_width) / 2.0;
         for (const GarmentSeam& garment_seam : garmentSeams(m_seams.at(seam.index)))
         {
-            const PlacedStretch first = placedStretch(garment_seam.first);
-            PlacedStretch second = placedStretch(garment_seam.second);
+            QVector<PlacedStretch> first_stretches;
+            QVector<PlacedStretch> second_stretches;
+            PlacedStretch first;
+            PlacedStretch second;
+            placedSide(garment_seam.firstSide(), &first_stretches, &first);
+            placedSide(garment_seam.secondSide(), &second_stretches, &second);
             if (!second.isEmpty() && garment_seam.reverse)
             {
                 second.reverse();
             }
-            if (!first.isEmpty())
+            for (const PlacedStretch& placed : first_stretches + second_stretches)
             {
-                tubes.append({first.points, color, radius});
-            }
-            if (!second.isEmpty())
-            {
-                tubes.append({second.points, color, radius});
+                tubes.append({placed.points, color, radius});
             }
             if (!first.isEmpty() && !second.isEmpty())
             {
@@ -920,12 +1167,12 @@ void SeamEditor::updatePreview()
     QVector<SeamGeometry::Segment> segments;
     if (m_sewing)
     {
-        QVector<Edge> edges;
-        if (m_started.isValid())
+        QVector<Edge> edges = m_first_edges + m_second_edges;
+        const bool hovered_picked = std::any_of(edges.cbegin(), edges.cend(), [this](const Edge& edge)
         {
-            edges.append(m_started);
-        }
-        if (m_hovered.isValid() && !m_hovered.sameSegment(m_started))
+            return edge.sameStretch(m_hovered);
+        });
+        if (m_hovered.isValid() && !hovered_picked)
         {
             edges.append(m_hovered);
         }
@@ -943,8 +1190,8 @@ void SeamEditor::updatePreview()
             // On the avatar, the segment and its mirror image, which on an unfolded piece's mirrored half runs the
             // other way.
             const PieceOutline& outline = piece(edge.piece_id)->outline;
-            const GarmentSeamSide side = {edge.piece_id, outline.segmentStart(edge.segment),
-                                          outline.segmentEnd(edge.segment)};
+            const GarmentSeamSide side = {edge.shown_id, outline.segmentStart(edge.segment),
+                                          outline.segmentEnd(edge.segment), false};
             QVector<std::pair<GarmentSeamSide, bool>> sides = {{side, false}};
             GarmentSeamSide mirror;
             bool turned = false;
@@ -967,23 +1214,34 @@ void SeamEditor::updatePreview()
             }
         }
 
-        if (edges.size() == 2)
+        // The lines the seam would get, once the first side is picked.
+        const QVector<Edge> second_edges = secondEdgesShown();
+        if (m_first_done && !second_edges.isEmpty())
         {
-            if (isOnBoard(m_started.piece_id) && isOnBoard(m_hovered.piece_id))
+            const VSeam seam = seamOver(m_first_edges, second_edges);
+            DraftedSide first_drafted;
+            DraftedSide second_drafted;
+            if (seamStretches(seam, &first_drafted, &second_drafted))
             {
-                const SeamStretch first = edgeStretch(m_started);
-                const SeamStretch second = edgeStretch(m_hovered);
-                for (const SeamMatch& match : SeamStretch::matches(first, second))
+                for (const SeamMatch& match : SeamStretch::matches(first_drafted.joined, second_drafted.joined))
                 {
-                    lines.append({flip(first.pointAt(match.first)), flip(second.pointAt(match.second)),
-                                  m_highlight_color});
+                    quint32 first_piece = 0;
+                    quint32 second_piece = 0;
+                    const QPointF first_point = first_drafted.pointAt(match.first, &first_piece);
+                    const QPointF second_point = second_drafted.pointAt(match.second, &second_piece);
+                    if (isOnBoard(first_piece) && isOnBoard(second_piece))
+                    {
+                        lines.append({flip(first_point), flip(second_point), m_highlight_color});
+                    }
                 }
             }
-            for (const GarmentSeam& garment_seam : garmentSeams(seamBetween(m_started, m_hovered)))
+            for (const GarmentSeam& garment_seam : garmentSeams(seam))
             {
-                const PlacedStretch first = placedStretch(garment_seam.first);
-                PlacedStretch second = placedStretch(garment_seam.second);
-                if (first.isEmpty() || second.isEmpty())
+                QVector<PlacedStretch> stretches;
+                PlacedStretch first;
+                PlacedStretch second;
+                if (!placedSide(garment_seam.firstSide(), &stretches, &first)
+                    || !placedSide(garment_seam.secondSide(), &stretches, &second))
                 {
                     continue;
                 }
@@ -1005,12 +1263,15 @@ void SeamEditor::updatePreview()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-void SeamEditor::setStarted(const Edge& edge)
+// Drops the edges picked, to start the seam over.
+void SeamEditor::startOver()
 {
-    const bool was_started = m_started.isValid();
-    m_started = edge;
+    const bool was_started = !m_first_edges.isEmpty();
+    m_first_edges.clear();
+    m_second_edges.clear();
+    m_first_done = false;
     updatePreview();
-    if (was_started != m_started.isValid())
+    if (was_started)
     {
         emit hintChanged();
     }
@@ -1038,7 +1299,7 @@ QString SeamEditor::lengthsHint(const SeamStretch& first, const SeamStretch& sec
 // The label of a seam at a place, for the scene's QML.
 QVariantMap SeamEditor::lengthLabel(const ShownSeam& seam, const QVector3D& position, bool on_board) const
 {
-    const qreal difference = qAbs(seam.second.length() - seam.first.length());
+    const qreal difference = qAbs(seam.second.joined.length() - seam.first.joined.length());
     QVariantMap label;
     label.insert(QStringLiteral("position"), position);
     label.insert(QStringLiteral("onBoard"), on_board);
