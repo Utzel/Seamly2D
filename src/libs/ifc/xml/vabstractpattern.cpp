@@ -105,6 +105,8 @@ const QString VAbstractPattern::TagFolds                = QStringLiteral("folds"
 const QString VAbstractPattern::TagFold                 = QStringLiteral("fold");
 const QString VAbstractPattern::TagArrangements         = QStringLiteral("arrangements");
 const QString VAbstractPattern::TagArrangement          = QStringLiteral("arrangement");
+const QString VAbstractPattern::TagLayers               = QStringLiteral("layers");
+const QString VAbstractPattern::TagLayer                = QStringLiteral("layer");
 const QString VAbstractPattern::TagFabrics              = QStringLiteral("fabrics");
 const QString VAbstractPattern::TagFabric               = QStringLiteral("fabric");
 const QString VAbstractPattern::TagTexture              = QStringLiteral("texture");
@@ -220,6 +222,7 @@ const QString VAbstractPattern::AttrArrangementPoint    = QStringLiteral("point"
 const QString VAbstractPattern::AttrDistance            = QStringLiteral("distance");
 const QString VAbstractPattern::AttrLean                = QStringLiteral("lean");
 const QString VAbstractPattern::AttrSwing               = QStringLiteral("swing");
+const QString VAbstractPattern::AttrNumber              = QStringLiteral("number");
 const QString VAbstractPattern::AttrAvatar              = QStringLiteral("avatar");
 const QString VAbstractPattern::AttrEdgeLength          = QStringLiteral("edgeLength");
 const QString VAbstractPattern::AttrCopy                = QStringLiteral("copy");
@@ -2294,6 +2297,12 @@ bool VPieceArrangement::operator==(const VPieceArrangement& other) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+bool VPieceLayer::operator==(const VPieceLayer& other) const
+{
+    return piece_id == other.piece_id && layer == other.layer;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 bool VFabricTexture::isNull() const
 {
     return image.isEmpty();
@@ -2662,6 +2671,72 @@ void VAbstractPattern::setArrangements(const QVector<VPieceArrangement>& arrange
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief The layers the pieces are worn in, but for those in layer 0. A layer can name a piece that is gone; it is
+/// kept, so undoing the deletion brings it back, and whoever uses it has to skip it.
+QVector<VPieceLayer> VAbstractPattern::getLayers() const
+{
+    QVector<VPieceLayer> layers;
+    QDomElement element = documentElement().firstChildElement(TagLayers).firstChildElement(TagLayer);
+    while (!element.isNull())
+    {
+        VPieceLayer layer;
+        layer.piece_id = GetParametrUInt(element, AttrPiece, NULL_ID_STR);
+        layer.layer = static_cast<int>(GetParametrUInt(element, AttrNumber, QStringLiteral("0")));
+        layers.append(layer);
+
+        element = element.nextSiblingElement(TagLayer);
+    }
+    return layers;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Replaces the layers the pieces are worn in, one per piece at most; pieces in layer 0 are left out. Meant to
+/// be called by the SaveLayers undo command.
+void VAbstractPattern::setLayers(const QVector<VPieceLayer>& layers)
+{
+    QDomElement pattern = documentElement();
+    QDomElement element = pattern.firstChildElement(TagLayers);
+
+    QVector<VPieceLayer> worn;
+    for (const VPieceLayer& layer : layers)
+    {
+        if (layer.layer > 0)
+        {
+            worn.append(layer);
+        }
+    }
+
+    if (worn.isEmpty())
+    {
+        if (!element.isNull())
+        {
+            pattern.removeChild(element);
+        }
+    }
+    else
+    {
+        if (element.isNull())
+        {
+            element = createGarmentElement(TagLayers);
+        }
+        else
+        {
+            RemoveAllChildren(element);
+        }
+
+        for (const VPieceLayer& layer : worn)
+        {
+            QDomElement tag = createElement(TagLayer);
+            SetAttribute(tag, AttrPiece, layer.piece_id);
+            SetAttribute(tag, AttrNumber, layer.layer);
+            element.appendChild(tag);
+        }
+    }
+
+    emit layersChanged();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief The fabrics the garment is cut from.
 VGarmentFabrics VAbstractPattern::getFabrics() const
 {
@@ -2985,11 +3060,12 @@ void VAbstractPattern::setDrape(const VGarmentDrape& drape)
 
 //---------------------------------------------------------------------------------------------------------------------
 // Adds an empty element for the 3D garment's data where the schema wants it: the seams, the folds, the arrangements,
-// the fabrics, the topstitching, the avatar, then the drape, all before the draft blocks, which are added at the end.
+// the layers, the fabrics, the topstitching, the avatar, then the drape, all before the draft blocks, which are added
+// at the end.
 QDomElement VAbstractPattern::createGarmentElement(const QString& tag)
 {
-    const QStringList order = {TagSeams, TagFolds, TagArrangements, TagFabrics, TagTopstitches, TagAvatar, TagDrape,
-                               TagDraftBlock};
+    const QStringList order = {TagSeams, TagFolds, TagArrangements, TagLayers, TagFabrics, TagTopstitches, TagAvatar,
+                               TagDrape, TagDraftBlock};
     QDomElement pattern = documentElement();
 
     QDomElement before;

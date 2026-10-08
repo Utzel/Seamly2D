@@ -218,6 +218,22 @@
             <xs:field xpath="@piece"/>
           </xs:unique>
         </xs:element>
+        <xs:element name="layers" minOccurs="0" maxOccurs="1">
+          <xs:complexType>
+            <xs:sequence minOccurs="0" maxOccurs="unbounded">
+              <xs:element name="layer" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="piece" type="xs:unsignedInt" use="required"/>
+                  <xs:attribute name="number" type="xs:unsignedInt" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+          <xs:unique name="layerPiece">
+            <xs:selector xpath="layer"/>
+            <xs:field xpath="@piece"/>
+          </xs:unique>
+        </xs:element>
         <xs:element name="fabrics" minOccurs="0" maxOccurs="1">
           <xs:complexType>
             <xs:sequence>

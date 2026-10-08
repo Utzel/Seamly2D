@@ -164,6 +164,17 @@ struct VPieceArrangement
     bool    operator==(const VPieceArrangement& other) const;
 };
 
+/// The layer a piece is worn in, for the 3D View's drape, as CLO's layers: where pieces lie on each other facing the
+/// same way, one of a higher layer stays outside one of a lower layer, as a pocket on a front or a shell over its
+/// lining. Pieces without one are worn in layer 0, next to the body.
+struct VPieceLayer
+{
+    quint32 piece_id {NULL_ID};
+    int     layer {0};
+
+    bool    operator==(const VPieceLayer& other) const;
+};
+
 /// An image of a fabric, for the 3D View to draw it with: the image file's bytes, its extension, "PNG", "JPG" or
 /// "BMP", and how wide the cloth it shows is in cm, the image repeating along the grain and across it.
 struct VFabricTexture
@@ -318,6 +329,9 @@ public:
 
     QVector<VPieceArrangement>     getArrangements() const;
     void                           setArrangements(const QVector<VPieceArrangement>& arrangements);
+
+    QVector<VPieceLayer>           getLayers() const;
+    void                           setLayers(const QVector<VPieceLayer>& layers);
 
     VGarmentFabrics                getFabrics() const;
     void                           setFabrics(const VGarmentFabrics& fabrics);
@@ -515,6 +529,8 @@ public:
     static const QString TagFold;
     static const QString TagArrangements;
     static const QString TagArrangement;
+    static const QString TagLayers;
+    static const QString TagLayer;
     static const QString TagFabrics;
     static const QString TagFabric;
     static const QString TagTexture;
@@ -630,6 +646,7 @@ public:
     static const QString AttrDistance;
     static const QString AttrLean;
     static const QString AttrSwing;
+    static const QString AttrNumber;
     static const QString AttrAvatar;
     static const QString AttrEdgeLength;
     static const QString AttrCopy;
@@ -752,6 +769,7 @@ signals:
     void           seamsChanged();
     void           foldsChanged();
     void           arrangementsChanged();
+    void           layersChanged();
     void           fabricsChanged();
     void           topstitchesChanged();
     void           avatarChanged();

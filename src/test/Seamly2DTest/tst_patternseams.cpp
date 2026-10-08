@@ -40,6 +40,7 @@
 #include "../vtools/undocommands/save_avatar.h"
 #include "../vtools/undocommands/save_fabrics.h"
 #include "../vtools/undocommands/save_folds.h"
+#include "../vtools/undocommands/save_layers.h"
 #include "../vtools/undocommands/save_seams.h"
 #include "../vtools/undocommands/save_topstitches.h"
 
@@ -390,13 +391,14 @@ void TST_PatternSeams::arrangementsAreReadBack() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Whichever is made first, the seams come before the folds, those before the arrangements, those before the fabrics,
-// those before the topstitching, that before the avatar, that before the drape, and all before the draft blocks.
-// Pieces can be arranged on every part of the body.
+// Whichever is made first, the seams come before the folds, those before the arrangements, those before the layers,
+// those before the fabrics, those before the topstitching, that before the avatar, that before the drape, and all
+// before the draft blocks. Pieces can be arranged on every part of the body.
 void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
 {
     SeamsPattern pattern;
     pattern.setDrape(drape());
+    pattern.setLayers({{10, 2}, {30, 1}});
     pattern.setFolds({{10, 31, 0}, {20, 32, 270.5}});
     pattern.setAvatar(avatar(true, 52, 180.5, 104, 92, 108));
     VTopstitches topstitches;
@@ -428,7 +430,7 @@ void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
     QCOMPARE(childTags(pattern.documentElement()),
              QStringList({QStringLiteral("version"), QStringLiteral("unit"), QStringLiteral("measurements"),
                           QStringLiteral("finalMeasurements"), QStringLiteral("seams"), QStringLiteral("folds"),
-                          QStringLiteral("arrangements"),
+                          QStringLiteral("arrangements"), QStringLiteral("layers"),
                           QStringLiteral("fabrics"), QStringLiteral("topstitches"), QStringLiteral("avatar"),
                           QStringLiteral("drape"), QStringLiteral("draftBlock"), QStringLiteral("draftBlock")}));
 
@@ -444,6 +446,42 @@ void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
     {
         QFAIL(qUtf8Printable(error.ErrorMessage()));
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Layers keep the piece and the number; pieces in layer 0, next to the body, aren't written, and none leave no
+// element.
+void TST_PatternSeams::layersAreReadBack() const
+{
+    SeamsPattern pattern;
+    QVERIFY(pattern.getLayers().isEmpty());
+
+    pattern.setLayers({{10, 1}, {20, 0}, {30, 3}});
+    QCOMPARE(pattern.getLayers(), QVector<VPieceLayer>({{10, 1}, {30, 3}}));
+    QCOMPARE(pattern.documentElement().elementsByTagName(QStringLiteral("layer")).size(), 2);
+    QVERIFY(!(VPieceLayer{10, 1} == VPieceLayer{10, 2}));
+
+    pattern.setLayers({{20, 0}});
+    QVERIFY(pattern.documentElement().firstChildElement(QStringLiteral("layers")).isNull());
+    QVERIFY(pattern.getLayers().isEmpty());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_PatternSeams::undoRestoresLayers() const
+{
+    SeamsPattern pattern;
+    const QVector<VPieceLayer> before = {{10, 1}};
+    const QVector<VPieceLayer> after = {{10, 2}, {20, 1}};
+    pattern.setLayers(before);
+
+    QSignalSpy changes(&pattern, &VAbstractPattern::layersChanged);
+    QUndoStack stack;
+    stack.push(new SaveLayers(QStringLiteral("layer"), before, after, &pattern));
+    QCOMPARE(pattern.getLayers(), after);
+
+    stack.undo();
+    QCOMPARE(pattern.getLayers(), before);
+    QCOMPARE(changes.count(), 2);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
