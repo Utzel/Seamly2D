@@ -723,12 +723,85 @@ void TST_ClothSolver::shearFollowsFromBias() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+void TST_ClothSolver::foldsHoldTheirAngle_data() const
+{
+    QTest::addColumn<qreal>("angle");
+    QTest::newRow("right side in at a right angle") << 90.0;
+    QTest::newRow("wrong side in at a right angle") << 270.0;
+    QTest::newRow("right side almost onto itself") << 20.0;
+    QTest::newRow("wrong side almost onto itself") << 340.0;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A strip lying flat, folded across its middle, comes to the fold's angle on the side it says: the halves meet at the
+// angle on the right side, the side the piece is drafted from, or at its rest to 360 on the wrong side.
+void TST_ClothSolver::foldsHoldTheirAngle() const
+{
+    QFETCH(qreal, angle);
+
+    PieceOutline outline = rectangle(0, 0, 20, 10, 1);
+    OutlineLine line;
+    line.id = 9;
+    line.points = {QPointF(10, 0), QPointF(10, 10)};
+    outline.setLines({line});
+    const GarmentMesh strip = PieceMesher().meshOutline(outline);
+    QCOMPARE(strip.lines.size(), 1);
+
+    ClothSettings settings;
+    settings.floor = false;
+    settings.self_contact = false;
+    settings.gravity = QVector3D();
+    ClothSolver solver(settings);
+    ClothFold fold;
+    fold.vertices = strip.lines.first().vertices;
+    fold.angle = angle;
+    solver.addMesh(strip, standing(strip), Fabric(), 90.0, {fold});
+    for (int i = 0; i < 300; ++i)
+    {
+        solver.step(frame);
+    }
+
+    const QVector<QVector3D> positions = solver.positions();
+    auto at = [&strip, &positions](const QPointF& rest)
+    {
+        int nearest = 0;
+        for (int i = 0; i < strip.vertexCount(); ++i)
+        {
+            nearest = QLineF(strip.rest_positions.at(i), rest).length()
+                              < QLineF(strip.rest_positions.at(nearest), rest).length() ? i : nearest;
+        }
+        return positions.at(nearest);
+    };
+
+    // The halves' far ends seen from the fold, across it; the right side of the left half, which faces the viewer
+    // as the strip starts out.
+    const QVector3D top = at(QPointF(10, 0));
+    const QVector3D along = (at(QPointF(10, 10)) - top).normalized();
+    const QVector3D middle = (top + at(QPointF(10, 10))) / 2.0f;
+    auto across = [&along, &middle](const QVector3D& point)
+    {
+        const QVector3D offset = point - middle;
+        return (offset - along * QVector3D::dotProduct(offset, along)).normalized();
+    };
+    const QVector3D left = across(at(QPointF(0, 5)));
+    const QVector3D right = across(at(QPointF(20, 5)));
+    const QVector3D right_side = QVector3D::crossProduct(at(QPointF(0, 5)) - at(QPointF(0, 0)),
+                                                         at(QPointF(5, 0)) - at(QPointF(0, 0))).normalized();
+    const qreal between = qRadiansToDegrees(qAcos(qBound(-1.0f, QVector3D::dotProduct(left, right), 1.0f)));
+    const qreal wanted = angle <= 180.0 ? angle : 360.0 - angle;
+    const float towards = QVector3D::dotProduct(right, right_side);
+    QVERIFY2(qAbs(between - wanted) < 10.0 && (angle < 180.0 ? towards > 0 : towards < 0),
+             qUtf8Printable(QStringLiteral("the halves meet at %1 degrees, the right half %2 the right side")
+                                .arg(between).arg(towards > 0 ? QStringLiteral("towards") : QStringLiteral("away from"))));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // The sweeps on the graphics card move the cloth as those on the processor do, through every force there is: a strip
-// folded onto itself lies on the floor, two sheets sewn together lie on a ball, one corner pinned. Without the floor
-// and self contact, they agree within what single precision tells apart. Where cloth rests on cloth or the floor, a
-// thickness away, the sweeps stop short of where the forces exactly balance, and whether a contact counts right at
-// that distance tips the other way now and then; over a few steps, before the cloth crumples and which way it folds
-// hangs on the slightest difference, it stays close.
+// folded onto itself along a fold lies on the floor, two sheets sewn together lie on a ball, one corner pinned.
+// Without the floor and self contact, they agree within what single precision tells apart. Where cloth rests on cloth
+// or the floor, a thickness away, the sweeps stop short of where the forces exactly balance, and whether a contact
+// counts right at that distance tips the other way now and then; over a few steps, before the cloth crumples and which
+// way it folds hangs on the slightest difference, it stays close.
 void TST_ClothSolver::deviceSweepsAsProcessor() const
 {
     ComputeDevice device;
@@ -738,7 +811,16 @@ void TST_ClothSolver::deviceSweepsAsProcessor() const
     }
 
     const PieceMesher mesher;
-    const GarmentMesh strip = mesher.meshOutline(rectangle(-30, 15, 40, 10, 1));
+    PieceOutline strip_outline = rectangle(-30, 15, 40, 10, 1);
+    OutlineLine fold_line;
+    fold_line.id = 5;
+    fold_line.points = {QPointF(-10, 15), QPointF(-10, 25)};
+    strip_outline.setLines({fold_line});
+    const GarmentMesh strip = mesher.meshOutline(strip_outline);
+    ClothFold fold;
+    fold.vertices = strip.lines.value(0).vertices;
+    fold.angle = 0;
+    fold.strength = 10;
     const GarmentMesh left = mesher.meshOutline(rectangle(-10, -10, 10, 20, 11));
     const GarmentMesh right = mesher.meshOutline(rectangle(0, -10, 10, 20, 21));
     auto sweep = [&](ClothSettings settings, bool on_device, int steps, QVector<QVector3D>* positions)
@@ -747,7 +829,7 @@ void TST_ClothSolver::deviceSweepsAsProcessor() const
         ClothSolver solver(settings);
         solver.setCollider(sphere(10));
 
-        // The strip folded in half, the folded over half a thickness above the other.
+        // The strip folded in half, right side in, the folded over half a thickness above the other.
         const float thickness = static_cast<float>(settings.thickness);
         const float lowest = static_cast<float>(settings.floor_height) + thickness;
         QVector<QVector3D> folded;
@@ -757,7 +839,7 @@ void TST_ClothSolver::deviceSweepsAsProcessor() const
             folded.append(QVector3D(static_cast<float>(over ? -20 - point.x() : point.x()),
                                     over ? lowest + thickness : lowest, static_cast<float>(point.y())));
         }
-        solver.addMesh(strip, folded);
+        solver.addMesh(strip, folded, Fabric(), 90.0, {fold});
         const quint32 left_offset = solver.addMesh(left, lyingFlat(left, 10.0 + settings.thickness));
         const quint32 right_offset = solver.addMesh(right, lyingFlat(right, 10.0 + settings.thickness));
         solver.addStitches(SeamStretch::stitches(left.stretch(12, 13, left_offset),

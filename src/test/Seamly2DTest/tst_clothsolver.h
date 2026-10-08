@@ -51,6 +51,8 @@ private slots:
     void biasGivesMoreThanGrain() const;
     void stifferFabricBendsLess() const;
     void shearFollowsFromBias() const;
+    void foldsHoldTheirAngle_data() const;
+    void foldsHoldTheirAngle() const;
     void deviceSweepsAsProcessor() const;
 
 private:

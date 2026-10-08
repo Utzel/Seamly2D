@@ -70,7 +70,8 @@ layout(std430, binding = 5) buffer Stopped { int stopped[]; };
 layout(std430, binding = 6) readonly buffer Topology { int topology[]; };
 
 // The membranes (shape of corners 0 and 1; shape of corner 2 and the area; weft, warp and shear stiffness), the
-// hinges (weights; stiffness), the stitches (how far along the edge) and the body's triangles (corners; normal).
+// hinges (weights; stiffness, the angle a fold holds, whether it is a fold), the stitches (how far along the edge) and
+// the body's triangles (corners; normal).
 layout(std430, binding = 7) readonly buffer Terms { vec4 terms[]; };
 
 // The body triangle each vertex may touch, or -1, then the self contacts: where each vertex's start, the roles
@@ -269,6 +270,52 @@ void addMembrane(int role, vec3 position, vec3 moved, inout vec3 force, inout Ma
     addIdentity(hessian, area * max(0.0, geometric));
 }
 
+// Folds: the hinge holds the fold's angle, rest, instead of lying flat; bendAcross() in the solver says how.
+void addFold(int hinge, int corner, float stiffness, float rest, vec3 position, vec3 moved, inout vec3 force,
+             inout Mat3 hessian)
+{
+    vec3 x[4];
+    vec3 change[4];
+    for (int k = 0; k < 4; ++k)
+    {
+        const int other = topology[this_step.hinge_corners + 4 * hinge + k];
+        x[k] = k == corner ? position : positions[other].xyz;
+        change[k] = k == corner ? moved : x[k] - motion[2 * other].xyz;
+    }
+
+    const vec3 edge = x[1] - x[0];
+    const float edge_length = length(edge);
+    const vec3 first = cross(edge, x[2] - x[0]);
+    const vec3 second = cross(x[0] - x[1], x[3] - x[1]);
+    const float first_squared = dot(first, first);
+    const float second_squared = dot(second, second);
+    if (edge_length > tiny && first_squared > tiny && second_squared > tiny)
+    {
+        const float angle = atan(dot(cross(first, second), edge) / edge_length, dot(first, second));
+        const vec3 first_part = first / first_squared;
+        const vec3 second_part = second / second_squared;
+        vec3 gradient[4];
+        gradient[0] = -(dot(x[2] - x[1], edge) / edge_length * first_part
+                        + dot(x[3] - x[1], edge) / edge_length * second_part);
+        gradient[1] = dot(x[2] - x[0], edge) / edge_length * first_part
+                      + dot(x[3] - x[0], edge) / edge_length * second_part;
+        gradient[2] = -edge_length * first_part;
+        gradient[3] = -edge_length * second_part;
+
+        float rate = 0.0;
+        for (int k = 0; k < 4; ++k)
+        {
+            rate += dot(gradient[k], change[k]);
+        }
+        const float full_turn = 6.2831853;
+        float off = angle - rest;
+        off -= full_turn * round(off / full_turn);
+        const vec3 slope = gradient[corner];
+        force -= stiffness * (off + rate * this_step.damping) * slope;
+        addOuter(hessian, slope, stiffness * (1.0 + this_step.damping));
+    }
+}
+
 // Hinges: the cloth resists bending across its inner edges.
 void addHinge(int role, vec3 position, vec3 moved, inout vec3 force, inout Mat3 hessian)
 {
@@ -276,7 +323,13 @@ void addHinge(int role, vec3 position, vec3 moved, inout vec3 force, inout Mat3 
     const int hinge = role >> 2;
     const int corner = role & 3;
     const vec4 weights = terms[this_step.hinges + 2 * hinge];
-    const float stiffness = terms[this_step.hinges + 2 * hinge + 1].x;
+    const vec4 hold = terms[this_step.hinges + 2 * hinge + 1];
+    const float stiffness = hold.x;
+    if (hold.z > 0.5)
+    {
+        addFold(hinge, corner, stiffness, hold.y, position, moved, force, hessian);
+        return;
+    }
     vec3 bend = vec3(0.0);
     vec3 bend_rate = vec3(0.0);
     for (int k = 0; k < 4; ++k)

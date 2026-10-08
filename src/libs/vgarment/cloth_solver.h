@@ -60,6 +60,18 @@ struct ClothSettings
                                                ///< 0 for none
 };
 
+/// @brief A line a piece of cloth is folded along: the vertices of its mesh along it, in order, the angle the cloth
+/// makes across it on its right side, in degrees, and how stiffly it holds that angle, as a share of how stiffly the
+/// fabric bends. 180 lies flat, less folds the right side in and more the wrong side; 0 and 360 fold it onto itself.
+/// The right side is the one a piece is drafted from, which its mesh's triangles turn clockwise on as the piece scene
+/// shows it.
+struct ClothFold
+{
+    QVector<quint32> vertices;
+    qreal            angle = 180.0;
+    qreal            strength = 1.0;
+};
+
 /// @brief Simulates sewn pieces of cloth draping over a body.
 ///
 /// Each step is an implicit Euler step solved with Vertex Block Descent (Chen et al., SIGGRAPH 2024): the vertices
@@ -70,7 +82,8 @@ struct ClothSettings
 /// Each piece is of a fabric, laid with its grain one way. Each triangle of it resists being stretched along the
 /// grain, across it and sheared on the bias as its fabric does: an orthotropic Saint Venant-Kirchhoff membrane in the
 /// fabric's warp and weft directions, as Chen et al. use for cloth, isotropic. Across each inner edge the cloth
-/// resists bending with Bergou et al.'s quadratic bending (SCA 2006). Both are given in what fabric testing measures,
+/// resists bending with Bergou et al.'s quadratic bending (SCA 2006); along a fold, it holds the fold's angle instead,
+/// with the discrete shells' hinge (Grinspun et al., SCA 2003). Both are given in what fabric testing measures,
 /// so the cloth behaves the same however finely it is meshed; only stretching stiffer than the sweeps of a step can
 /// follow is taken to be as stiff as they can. Stitches pull the sides of seams together, the body pushes the cloth
 /// out and holds it by friction. As in the paper, each vertex picks the body
@@ -102,7 +115,8 @@ public:
     void               setSelfContact(bool self_contact);
 
     quint32            addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions,
-                               const Fabric& fabric = Fabric(), qreal grain_angle = 90.0);
+                               const Fabric& fabric = Fabric(), qreal grain_angle = 90.0,
+                               const QVector<ClothFold>& folds = QVector<ClothFold>());
     void               addStitches(const QVector<Stitch>& stitches);
     void               setCollider(const BodyCollider& collider);
     void               setPinned(quint32 vertex, bool pinned);
@@ -133,12 +147,15 @@ private:
     };
 
     // Two triangles of cloth sharing an edge, which resist bending across it: the edge's ends, then the corners
-    // opposite, how much each counts, and how stiffly, in g/s².
+    // opposite, how much each counts, and how stiffly, in g/s². Along a fold, they hold an angle instead, in radians
+    // as bendAcross() measures it; the triangles are those wound as the mesh winds them, abc and bad.
     struct Hinge
     {
         int    vertices[4] = {0, 0, 0, 0};
         double weights[4] = {0, 0, 0, 0};
         double stiffness = 0;
+        bool   fold = false;
+        double rest_angle = 0;
     };
 
     // A membrane or hinge a vertex takes part in, and as which of its corners.

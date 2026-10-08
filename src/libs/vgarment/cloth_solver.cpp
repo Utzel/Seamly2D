@@ -30,6 +30,7 @@
 #include <QtMath>
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <numeric>
 
@@ -354,6 +355,37 @@ Vec3 cross(const Vec3& a, const Vec3& b)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// How far the cloth bends across the edge from a to b, between the triangles abc and bad wound as the mesh winds
+// them, in radians: 0 flat, positive with c and d bent towards the side the windings face away from, up to pi; and
+// how that changes as each corner moves (Bridson et al., SCA 2003). False where a triangle has no area left.
+bool bendAcross(const Vec3 corners[4], double* angle, Vec3 gradient[4])
+{
+    const Vec3& a = corners[0];
+    const Vec3& b = corners[1];
+    const Vec3& c = corners[2];
+    const Vec3& d = corners[3];
+    const Vec3 edge = b - a;
+    const double length = edge.length();
+    const Vec3 first = cross(edge, c - a);
+    const Vec3 second = cross(a - b, d - b);
+    const double first_squared = first.dot(first);
+    const double second_squared = second.dot(second);
+    if (length < tiny || first_squared < tiny || second_squared < tiny)
+    {
+        return false;
+    }
+
+    *angle = qAtan2(cross(first, second).dot(edge) / length, first.dot(second));
+    const Vec3 first_part = first * (1.0 / first_squared);
+    const Vec3 second_part = second * (1.0 / second_squared);
+    gradient[0] = (first_part * ((c - b).dot(edge) / length) + second_part * ((d - b).dot(edge) / length)) * -1.0;
+    gradient[1] = first_part * ((c - a).dot(edge) / length) + second_part * ((d - a).dot(edge) / length);
+    gradient[2] = first_part * -length;
+    gradient[3] = second_part * -length;
+    return true;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // The gap between the closest points of two parts of cloth, from the second to the first: a vertex and a triangle,
 // corners 0 and 1 to 3, or two edges, corners 0 to 1 and 2 to 3. It is the sum of the corners, each weighted as given
 // back in weights.
@@ -609,10 +641,10 @@ void ClothSolver::setSelfContact(bool self_contact)
 //---------------------------------------------------------------------------------------------------------------------
 /// @brief Adds a piece of cloth: its flat mesh, which gives its rest shape, where its vertices start out in cm, its
 /// fabric and the direction of its grain in the flat piece, in degrees anticlockwise from the piece's x axis, as
-/// the piece scene shows it. Returns the number of its first vertex; stitches and pins count vertices over all
-/// pieces.
+/// the piece scene shows it, and the lines it is folded along. Returns the number of its first vertex; stitches and
+/// pins count vertices over all pieces.
 quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions, const Fabric& fabric,
-                             qreal grain_angle)
+                             qreal grain_angle, const QVector<ClothFold>& folds)
 {
     const int offset = vertexCount();
     const int count = mesh.vertexCount();
@@ -713,6 +745,20 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
     };
     const double rigidity = fabric.bending * micro_newton_metre;
 
+    // The edges along folds, and which fold each is of.
+    QHash<quint64, int> fold_of_edge;
+    for (int f = 0; f < folds.size(); ++f)
+    {
+        const QVector<quint32>& line = folds.at(f).vertices;
+        for (int i = 0; i + 1 < line.size(); ++i)
+        {
+            if (line.at(i) != line.at(i + 1))
+            {
+                fold_of_edge.insert(edgeKey(line.at(i), line.at(i + 1)), f);
+            }
+        }
+    }
+
     // In the order of the edges, not of the hash, so the same cloth always drapes the same way.
     QList<quint64> edges = edge_opposites.keys();
     std::sort(edges.begin(), edges.end());
@@ -725,7 +771,31 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
         const QVector<int> opposite = edge_opposites.value(edge);
         const double areas = opposite.size() == 2 ? triangle_area(a, b, opposite.at(0))
                                                     + triangle_area(a, b, opposite.at(1)) : 0.0;
-        if (areas > tiny)
+        const int fold = fold_of_edge.value(edge, -1);
+        if (areas > tiny && fold >= 0)
+        {
+            // Along a fold, the hinge holds the fold's angle, with discrete shells' stiffness for the fabric's
+            // rigidity. It goes from a to b where abc is wound as the mesh is, so it knows the right side.
+            const int c = opposite.at(0);
+            const int d = opposite.at(1);
+            const QPointF& at_a = mesh.rest_positions.at(a);
+            const QPointF& at_b = mesh.rest_positions.at(b);
+            const QPointF& at_c = mesh.rest_positions.at(c);
+            const bool wound = (at_b.x() - at_a.x()) * (at_c.y() - at_a.y())
+                               - (at_c.x() - at_a.x()) * (at_b.y() - at_a.y()) > 0;
+            const int corners[4] = {wound ? a : b, wound ? b : a, c, d};
+            Hinge hinge;
+            for (int k = 0; k < 4; ++k)
+            {
+                hinge.vertices[k] = offset + corners[k];
+            }
+            const double edge_squared = QPointF::dotProduct(at_b - at_a, at_b - at_a);
+            hinge.stiffness = folds.at(fold).strength * 6.0 * rigidity * edge_squared / areas;
+            hinge.fold = true;
+            hinge.rest_angle = M_PI - qDegreesToRadians(folds.at(fold).angle);
+            m_hinges.append(hinge);
+        }
+        else if (areas > tiny)
         {
             const int c = opposite.at(0);
             const int d = opposite.at(1);
@@ -1203,7 +1273,8 @@ ClothCompute::Cloth ClothSolver::packedCloth()
         topology << hinge.vertices[0] << hinge.vertices[1] << hinge.vertices[2] << hinge.vertices[3];
         terms << static_cast<float>(hinge.weights[0]) << static_cast<float>(hinge.weights[1])
               << static_cast<float>(hinge.weights[2]) << static_cast<float>(hinge.weights[3])
-              << static_cast<float>(hinge.stiffness) << 0.0f << 0.0f << 0.0f;
+              << static_cast<float>(hinge.stiffness) << static_cast<float>(hinge.rest_angle)
+              << (hinge.fold ? 1.0f : 0.0f) << 0.0f;
     }
 
     step.stitch_corners = static_cast<qint32>(topology.size());
@@ -1570,10 +1641,36 @@ void ClothSolver::solveVertex(int vertex, double time_step)
         hessian.addIdentity(area * qMax(0.0, geometric));
     }
 
-    // Bending: Bergou et al.'s quadratic energy, which only the cloth leaving its flat shape gives rise to.
+    // Bending: Bergou et al.'s quadratic energy, which only the cloth leaving its flat shape gives rise to; along a
+    // fold, the hinge's angle away from the fold's, with the Gauss-Newton part of its Hessian.
     for (const Role& role : m_vertex_hinges.at(vertex))
     {
         const Hinge& hinge = m_hinges.at(role.term);
+        if (hinge.fold)
+        {
+            Vec3 corners[4];
+            Vec3 gradient[4];
+            double angle = 0;
+            for (int k = 0; k < 4; ++k)
+            {
+                corners[k] = k == role.corner ? position : load(m_position, hinge.vertices[k]);
+            }
+            if (bendAcross(corners, &angle, gradient))
+            {
+                double rate = 0;
+                for (int k = 0; k < 4; ++k)
+                {
+                    rate += gradient[k].dot(k == role.corner ? moved
+                                                             : corners[k] - load(m_previous, hinge.vertices[k]));
+                }
+                const double off = std::remainder(angle - hinge.rest_angle, 2.0 * M_PI);
+                const Vec3& slope = gradient[role.corner];
+                force -= slope * (hinge.stiffness * (off + rate * damping));
+                hessian.addOuter(slope, hinge.stiffness * (1.0 + damping));
+            }
+            continue;
+        }
+
         Vec3 bend;
         Vec3 bend_rate;
         for (int k = 0; k < 4; ++k)
