@@ -52,6 +52,8 @@ struct ClothSettings
     qreal     friction = 0.4;                  ///< against the body
     qreal     thickness = 0.3;                 ///< how far the cloth keeps from the body and from itself, in cm
     bool      self_contact = true;             ///< whether the cloth keeps from passing through itself
+    bool      pieces_pass_through = false;     ///< whether pieces pass through each other, as they may while they
+                                               ///< are sewn together; each piece still keeps from passing through itself
     bool      floor = true;                    ///< whether the cloth lands on a floor
     qreal     floor_height = 0.0;              ///< in cm
     QVector3D gravity = QVector3D(0.0f, -981.0f, 0.0f);
@@ -113,6 +115,7 @@ public:
     void               setFriction(qreal friction);
     void               setAirDamping(qreal air_damping);
     void               setSelfContact(bool self_contact);
+    void               setPiecesPassThrough(bool pass_through);
 
     quint32            addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions,
                                const Fabric& fabric = Fabric(), qreal grain_angle = 90.0,

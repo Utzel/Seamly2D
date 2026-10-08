@@ -201,7 +201,6 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation, Comput
     const QVector3D gravity = solver->settings().gravity;
     const qreal friction = solver->settings().friction;
     const qreal air_damping = solver->settings().air_damping;
-    const bool self_contact = solver->settings().self_contact;
     bool sewing = solver->widestStitch() > sewn_gap;
 
     // The vertices held are pinned and taken to where they are held, as far as a step goes.
@@ -248,7 +247,7 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation, Comput
         solver->setGravity(QVector3D());
         solver->setFriction(0);
         solver->setAirDamping(1.0 / time_step);
-        solver->setSelfContact(false);
+        solver->setPiecesPassThrough(true);
     }
 
     while (!m_stopping)
@@ -287,7 +286,7 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation, Comput
             solver->setGravity(gravity);
             solver->setFriction(friction);
             solver->setAirDamping(air_damping);
-            solver->setSelfContact(self_contact);
+            solver->setPiecesPassThrough(false);
         }
 
         if (moving_steps % resting_window == 0)

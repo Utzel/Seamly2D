@@ -643,6 +643,18 @@ void ClothSolver::setSelfContact(bool self_contact)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief Lets pieces pass through each other from the next step on, or not; each still keeps from passing through
+/// itself, so a hem turned up stays inside while the pieces are sewn together through each other.
+void ClothSolver::setPiecesPassThrough(bool pass_through)
+{
+    if (pass_through != m_settings.pieces_pass_through)
+    {
+        m_settings.pieces_pass_through = pass_through;
+        m_self_found_at.clear();  // the parts that may touch are other ones now
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief Adds a piece of cloth: its flat mesh, which gives its rest shape, where its vertices start out in cm, its
 /// fabric and the direction of its grain in the flat piece, in degrees anticlockwise from the piece's x axis, as
 /// the piece scene shows it, and the lines it is folded along. Returns the number of its first vertex; stitches and
@@ -1931,6 +1943,10 @@ void ClothSolver::findSelfContactsAround(const QVector<double>& heading)
             for (const int face : near_face)
             {
                 const int* corners = m_faces.constData() + 3 * face;
+                if (m_settings.pieces_pass_through && m_pieces.at(vertex) != m_pieces.at(corners[0]))
+                {
+                    continue;
+                }
                 bool related = false;
                 for (int k = 0; k < 3; ++k)
                 {
@@ -1989,6 +2005,10 @@ void ClothSolver::findSelfContactsAround(const QVector<double>& heading)
             for (const int other : near_edge)
             {
                 const int* second = m_edges.constData() + 2 * other;
+                if (m_settings.pieces_pass_through && m_pieces.at(first[0]) != m_pieces.at(second[0]))
+                {
+                    continue;
+                }
                 bool related = false;
                 for (int j = 0; j < 2 && !related; ++j)
                 {

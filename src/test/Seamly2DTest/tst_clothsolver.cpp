@@ -565,6 +565,63 @@ void TST_ClothSolver::foldedClothKeepsItsLayers() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// While pieces pass through each other, as while they are sewn together, a strip folded over onto itself still keeps
+// its layers apart, and a sheet between them sinks through the lower one to the floor.
+void TST_ClothSolver::piecesPassThroughEachOtherButNotThemselves() const
+{
+    ClothSettings settings;
+    settings.pieces_pass_through = true;
+    ClothSolver solver(settings);
+
+    const GarmentMesh strip = PieceMesher().meshOutline(rectangle(0, 0, 40, 10, 1));
+    QVector<QVector3D> folded;
+    for (const QPointF& point : strip.rest_positions)
+    {
+        const bool over = point.x() > 20;
+        folded.append(QVector3D(static_cast<float>(over ? 40 - point.x() : point.x()),
+                                static_cast<float>(over ? 3.0 : settings.thickness), static_cast<float>(point.y())));
+    }
+    solver.addMesh(strip, folded);
+    const GarmentMesh sheet = PieceMesher().meshOutline(rectangle(4, 2, 10, 6, 11));
+    const quint32 sheet_offset = solver.addMesh(sheet, lyingFlat(sheet, 1.5));
+    for (int i = 0; i < 120; ++i)
+    {
+        solver.step(frame);
+    }
+
+    const QVector<QVector3D> positions = solver.positions();
+    float upper = 0;
+    float lower = 0;
+    int upper_count = 0;
+    int lower_count = 0;
+    for (int i = 0; i < strip.vertexCount(); ++i)
+    {
+        const qreal x = strip.rest_positions.at(i).x();
+        if (x > 30)
+        {
+            upper += positions.at(i).y();
+            ++upper_count;
+        }
+        else if (x < 10)
+        {
+            lower += positions.at(i).y();
+            ++lower_count;
+        }
+    }
+    upper /= static_cast<float>(qMax(1, upper_count));
+    lower /= static_cast<float>(qMax(1, lower_count));
+    float sheet_height = 0;
+    for (int i = 0; i < sheet.vertexCount(); ++i)
+    {
+        sheet_height += positions.at(static_cast<int>(sheet_offset) + i).y() / static_cast<float>(sheet.vertexCount());
+    }
+    QVERIFY2(upper > lower + 0.5f * static_cast<float>(settings.thickness)
+                 && sheet_height < lower + 0.5f * static_cast<float>(settings.thickness),
+             qUtf8Printable(QStringLiteral("the strip's halves are at %1 and %2 cm, the sheet at %3 cm")
+                                .arg(upper).arg(lower).arg(sheet_height)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void TST_ClothSolver::seamsCloseDespiteSelfContact_data() const
 {
     onProcessorAndDevice();
