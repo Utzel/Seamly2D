@@ -205,6 +205,10 @@ const qreal fold_strength = 10.0;
 // facings and collars fold, at right angles either way, and right sides together.
 const qreal fold_angles[] = {360.0, 270.0, 90.0, 0.0};
 
+// The seam types the Sew menu offers, by the angle they hold the pieces at, as VSeam says: none, flat, turned and
+// right sides together.
+const qreal seam_angles[] = {-1.0, 180.0, 360.0, 0.0};
+
 // Folds within this many degrees of the cloth onto itself start out folded; the part folded over lies this many cm off
 // the rest, on the side it folds to.
 const qreal folded_over = 45.0;
@@ -352,6 +356,8 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_fold_editor(new FoldEditor(this))
     , m_sew_action(nullptr)
     , m_flip_action(nullptr)
+    , m_seam_types(nullptr)
+    , m_other_seam_angle_action(nullptr)
     , m_remove_action(nullptr)
     , m_topstitch_action(nullptr)
     , m_every_edge_action(nullptr)
@@ -1170,10 +1176,16 @@ void GarmentViewWidget::scenePicked(quint32 id)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// The pattern's seams changed, by sewing here or by undo and redo.
+// The pattern's seams changed, by sewing here or by undo and redo. A drape going on goes on with them: sewn, flipped,
+// taken out or holding the pieces at another angle.
 void GarmentViewWidget::updateSeams()
 {
     m_seam_editor->setSeams(m_doc->getSeams());
+    if (m_runner->isRunning())
+    {
+        startSimulation();
+    }
+    updateActions();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1463,6 +1475,42 @@ void GarmentViewWidget::flipSeam()
         seams[index].reverse = !seams.at(index).reverse;
         saveSeams(tr("flip seam"), seams);
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A seam type was chosen in the Sew menu for the selected seam: the angle it holds the pieces at, or none.
+void GarmentViewWidget::chooseSeamType(QAction* action)
+{
+    const int index = m_seam_editor->selectedSeam();
+    QVector<VSeam> seams = m_doc->getSeams();
+    if (index < 0 || index >= seams.size())
+    {
+        updateActions();
+        return;
+    }
+
+    qreal angle = action->data().toDouble();
+    if (action == m_other_seam_angle_action)
+    {
+        bool chosen = false;
+        angle = QInputDialog::getDouble(this, tr("Seam Angle"),
+                                        tr("Angle the seam holds the pieces at, on the right side of the piece it is "
+                                           "sewn from, in degrees: 180 flat, 360 turned, the pieces wrong sides "
+                                           "together, 0 right sides together."),
+                                        seams.at(index).angle >= 0 ? seams.at(index).angle : 180.0, 0.0, 360.0, 1,
+                                        &chosen);
+        if (!chosen)
+        {
+            updateActions();
+            return;
+        }
+    }
+    if (!qFuzzyCompare(1.0 + angle, 1.0 + seams.at(index).angle))
+    {
+        seams[index].angle = angle;
+        saveSeams(tr("change seam type"), seams);
+    }
+    updateActions();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2214,6 +2262,7 @@ void GarmentViewWidget::startSimulation()
         seam.first = {stored.first.piece_id, stored.first.start_node, stored.first.end_node};
         seam.second = {stored.second.piece_id, stored.second.start_node, stored.second.end_node};
         seam.reverse = stored.reverse;
+        seam.angle = stored.angle;
         seams.append(seam);
     }
     for (const GarmentSeam& seam : symmetry.madeUp(seams))
@@ -2230,6 +2279,10 @@ void GarmentViewWidget::startSimulation()
                 second = second.reversed();
             }
             solver->addStitches(SeamStretch::stitches(first, second));
+            if (seam.angle >= 0)
+            {
+                solver->addSeamFold(first, second, seam.angle, fold_strength);
+            }
         }
     }
 
@@ -2351,6 +2404,18 @@ void GarmentViewWidget::updateActions()
     m_other_thread_action->setChecked(!known_thread);
 
     const bool seam_selected = m_seam_editor->selectedSeam() >= 0;
+    const qreal seam_angle = seam_selected ? m_doc->getSeams().value(m_seam_editor->selectedSeam()).angle : -1.0;
+    bool known_seam_angle = false;
+    for (QAction* type : m_seam_types->actions())
+    {
+        const qreal angle = type->data().toDouble();
+        const bool chosen = seam_selected && type != m_other_seam_angle_action
+                            && (angle < 0 ? seam_angle < 0 : qFuzzyCompare(1.0 + angle, 1.0 + seam_angle));
+        type->setEnabled(seam_selected);
+        type->setChecked(chosen);
+        known_seam_angle = known_seam_angle || chosen;
+    }
+    m_other_seam_angle_action->setChecked(seam_selected && !known_seam_angle);
     const bool placed_selected = m_scene_model->isArranging()
                                  && m_scene_model->isPlaced(m_scene_model->selectedPiece());
     m_flip_action->setEnabled(seam_selected);
@@ -3351,6 +3416,34 @@ void GarmentViewWidget::createToolBar()
     seam_lengths->setToolTip(tr("Label each seam with how much longer one of its sides is than the other, which "
                                 "has to be eased in; = where they are as long as each other"));
     connect(seam_lengths, &QAction::toggled, m_seam_editor, &SeamEditor::setLengthsShown);
+
+    // The selected seam's type, as CLO's fold angle on sewing lines: the angle it holds the pieces at, or none.
+    sew_menu->addSection(tr("Selected Seam"));
+    m_seam_types = new QActionGroup(this);
+    const QStringList seam_titles = {tr("Free"), tr("Flat"), tr("Turned"), tr("Right Sides Together")};
+    const QStringList seam_tips = {tr("The pieces bend across the seam as the cloth does around it"),
+                                   tr("The pieces lie flat across the seam, as at a seam pressed open: 180 degrees"),
+                                   tr("The pieces fold onto each other at the seam, wrong sides together, as at the "
+                                      "edge of a collar or of a facing: 360 degrees"),
+                                   tr("The pieces fold onto each other at the seam, right sides together: 0 degrees")};
+    for (int i = 0; i < seam_titles.size(); ++i)
+    {
+        QAction* action = sew_menu->addAction(seam_titles.at(i));
+        action->setData(seam_angles[i]);
+        action->setToolTip(seam_tips.at(i));
+        m_seam_types->addAction(action);
+    }
+    m_other_seam_angle_action = sew_menu->addAction(tr("Other Angle..."));
+    m_other_seam_angle_action->setData(180.0);
+    m_other_seam_angle_action->setToolTip(tr("Hold the pieces at any angle across the seam, on the right side of the "
+                                             "piece it is sewn from, from 0 to 360 degrees; 180 lies flat"));
+    m_seam_types->addAction(m_other_seam_angle_action);
+    for (QAction* action : m_seam_types->actions())
+    {
+        action->setCheckable(true);
+        action->setEnabled(false);
+    }
+    connect(m_seam_types, &QActionGroup::triggered, this, &GarmentViewWidget::chooseSeamType);
     m_sew_action->setMenu(sew_menu);
     if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_sew_action)))
     {

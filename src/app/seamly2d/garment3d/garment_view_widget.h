@@ -116,6 +116,7 @@ private slots:
     void               changeFabricImageWidth();
     void               removeFabricImage();
     void               flipSeam();
+    void               chooseSeamType(QAction* action);
     void               removeSelected();
     void               cancel();
     void               setArranging(bool arranging);
@@ -266,6 +267,8 @@ private:
     FoldEditor*                m_fold_editor;
     QAction*                   m_sew_action;
     QAction*                   m_flip_action;
+    QActionGroup*              m_seam_types;
+    QAction*                   m_other_seam_angle_action;
     QAction*                   m_remove_action;
     QAction*                   m_topstitch_action;
     QAction*                   m_every_edge_action;
