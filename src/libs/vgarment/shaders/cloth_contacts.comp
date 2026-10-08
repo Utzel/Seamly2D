@@ -50,6 +50,7 @@ layout(std430, binding = 9) buffer Pushes { float pushes[]; };
 
 const float tiny = 1e-9;
 const float clear_angle = 0.2;
+const float far_apart = 1e30;
 
 float share(float part, float whole)
 {
@@ -181,15 +182,24 @@ bool acrossContact(bool edges, vec4 weights)
                  : weights.y < 0.0 && weights.z < 0.0 && weights.w < 0.0;
 }
 
+// Parts of pieces in layers, side 2 or -2, don't push beside each other while the first is on the wrong side, nor
+// where the direction square to them isn't clear: they are taken to be infinitely far apart.
 float contactDistance(vec3 corners[4], bool edges, vec4 weights, vec3 gap, float side, out vec3 direction)
 {
     const vec3 normal = contactNormal(corners, edges);
     const float normal_length = length(normal);
+    const float way = side < 0.0 ? -1.0 : 1.0;
+    const bool clear = clearNormal(corners, edges, normal);
     float distance = length(gap);
-    if (side != 0.0 && acrossContact(edges, weights) && clearNormal(corners, edges, normal))
+    if (side != 0.0 && acrossContact(edges, weights) && clear)
     {
-        direction = normal * (side / normal_length);
+        direction = normal * (way / normal_length);
         distance = dot(gap, direction);
+    }
+    else if (abs(side) > 1.0 && (!clear || dot(gap, normal) * way < 0.0))
+    {
+        direction = normal_length > tiny ? normal * (way / normal_length) : vec3(0.0, 1.0, 0.0);
+        distance = far_apart;
     }
     else if (distance > tiny)
     {
@@ -197,7 +207,7 @@ float contactDistance(vec3 corners[4], bool edges, vec4 weights, vec3 gap, float
     }
     else
     {
-        direction = normal_length > tiny ? normal * ((side < 0.0 ? -1.0 : 1.0) / normal_length) : vec3(0.0, 1.0, 0.0);
+        direction = normal_length > tiny ? normal * (way / normal_length) : vec3(0.0, 1.0, 0.0);
     }
     return distance;
 }

@@ -76,6 +76,16 @@ struct ClothFold
     qreal            strength = 1.0;
 };
 
+/// @brief Where a piece of cloth is worn among the others, as CLO's layers: where pieces lie on each other facing the
+/// same way, one of a higher layer keeps to the outside of one of a lower layer, even from inside it, as a pocket lies
+/// on a front, a shell over its lining or a coat over a dress. A piece's outside is its right side, unless it is worn
+/// turned over.
+struct ClothLayer
+{
+    int  number = 0;
+    bool turned_over = false;
+};
+
 /// @brief Simulates sewn pieces of cloth draping over a body.
 ///
 /// Each step is an implicit Euler step solved with Vertex Block Descent (Chen et al., SIGGRAPH 2024): the vertices
@@ -100,6 +110,10 @@ struct ClothFold
 /// way to it in a step, so nothing passes through (the conservative bound of Chen et al.'s Offset Geometric Contact,
 /// SIGGRAPH 2025).
 ///
+/// Pieces worn in layers that lie on each other facing the same way push to the sides their layers say instead, the
+/// higher layer outside, so a piece that starts out on the wrong side, or was sewn on through the other, goes through
+/// it to its own side; and it is never pushed back by the cloth it lies beside on the wrong side meanwhile.
+///
 /// Stiff cloth needs more sweeps than a step can afford to settle, and without them it gives way slowly, as if it were
 /// soft. Chebyshev acceleration (Wang, SIGGRAPH Asia 2015), as Chen et al. use it, carries each sweep on further
 /// along the way the sweeps before went, which settles it in far fewer.
@@ -122,7 +136,8 @@ public:
 
     quint32            addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions,
                                const Fabric& fabric = Fabric(), qreal grain_angle = 90.0,
-                               const QVector<ClothFold>& folds = QVector<ClothFold>());
+                               const QVector<ClothFold>& folds = QVector<ClothFold>(),
+                               const ClothLayer& layer = ClothLayer());
     void               addStitches(const QVector<Stitch>& stitches);
     void               addSeamFold(const SeamStretch& first, const SeamStretch& second, qreal angle,
                                    qreal strength = 1.0);
@@ -192,7 +207,8 @@ private:
 
     // Two parts of the cloth that may touch: a vertex and a triangle, the vertex first, or two edges. The side says on
     // which side of the triangle, or of the second edge, the first part was when the step started, 1 or -1; 0 if they
-    // lay beside each other rather than one on the other. Parts too far apart to touch during the step aren't live.
+    // lay beside each other rather than one on the other. Of pieces in layers, it is 2 or -2 for the side their layers
+    // say the first part goes on, wherever it was. Parts too far apart to touch during the step aren't live.
     struct SelfContact
     {
         int    vertices[4] = {0, 0, 0, 0};
@@ -226,6 +242,8 @@ private:
     QVector<QPointF>   m_rest;         // where each vertex is in its flat piece
     QVector<int>       m_piece_start;  // where each piece's vertices start, and where the last one's end
     QVector<double>    m_rigidity;     // how stiffly each piece's fabric bends, in g cm²/s²
+    QVector<int>       m_layers;       // which layer each piece is worn in
+    QVector<double>    m_outside;      // which way each piece's outside faces from its triangles as wound, 1 or -1
     BodyCollider       m_collider;
 
     bool               m_prepared;
@@ -246,6 +264,8 @@ private:
     QVector<double>              m_self_found_at;   // where the vertices were when the self contacts were found
     QVector<double>              m_self_push;       // how each self contact pushes each of its vertices, nine
                                                     // numbers each; see pushSelfContacts()
+    QVector<double>              m_facing;          // which way the cloth around each vertex faces as wound when the
+                                                    // step started, x, y and z, for pieces in layers
     std::unique_ptr<ClothCompute> m_compute;        // the graphics card the sweeps run on, if any
     bool                         m_on_device;       // whether the cloth is on it
     ClothCompute::Step           m_device_step;     // where the parts of the packed cloth start
@@ -259,6 +279,9 @@ private:
     void               findSelfContactsAround(const QVector<double>& heading);
     bool               mayTouch(const SelfContact& contact, double furthest) const;
     void               startSelfContact(SelfContact* contact, const QVector<double>& heading);
+    bool               inLayers() const;
+    bool               apartInLayers(int a, int b) const;
+    double             layeredSide(const SelfContact& contact) const;
     void               pushSelfContacts(double time_step);
     void               solveVertex(int vertex, double time_step);
     double             bodyReach(int vertex) const;

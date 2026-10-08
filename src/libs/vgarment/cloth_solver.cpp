@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <numeric>
 
@@ -101,6 +102,10 @@ const double clear_angle = 0.2;
 // A vertex moves at most this share of the way to the nearest other cloth in a step, so two parts moving towards
 // each other can't pass through each other; parts already touching count as a thickness apart.
 const double self_bound_share = 0.45;
+
+// Pieces in layers lie on each other facing the same way where their outsides are at most this far apart, as the
+// cosine of the angle: 60 degrees. A sleeve's outside faces the body's beside it, and their layers don't count there.
+const double same_way = 0.5;
 
 // A fold onto itself, right side in or wrong side in, is held this many radians short of flat: right onto itself, the
 // two ways it can fold there come to the same angle, and the cloth wouldn't know which way to go.
@@ -478,17 +483,26 @@ bool acrossContact(bool edges, const double weights[4])
 //---------------------------------------------------------------------------------------------------------------------
 // How far apart two parts of cloth are, and the unit direction from the second to the first, given the gap between
 // them. Where the closest points are inside the triangle, or both edges, the distance is measured square to it on the
-// side the first part is meant to be on, negative once it has passed through. Elsewhere it is the gap's length.
+// side the first part is meant to be on, negative once it has passed through. Elsewhere it is the gap's length; but
+// parts of pieces in layers don't push there while the first is on the wrong side, nor where the direction square to
+// them isn't clear, as if they were infinitely far apart.
 double contactDistance(const Vec3 corners[4], bool edges, const double weights[4], const Vec3& gap, double side,
                        Vec3* direction)
 {
     const Vec3 normal = contactNormal(corners, edges);
     const double normal_length = normal.length();
+    const double way = side < 0 ? -1.0 : 1.0;
+    const bool clear = clearNormal(corners, edges, normal);
     double distance = gap.length();
-    if (side != 0 && acrossContact(edges, weights) && clearNormal(corners, edges, normal))
+    if (side != 0 && acrossContact(edges, weights) && clear)
     {
-        *direction = normal * (side / normal_length);
+        *direction = normal * (way / normal_length);
         distance = gap.dot(*direction);
+    }
+    else if (qAbs(side) > 1 && (!clear || gap.dot(normal) * way < 0))
+    {
+        *direction = normal_length > tiny ? normal * (way / normal_length) : Vec3{0.0, 1.0, 0.0};
+        distance = std::numeric_limits<double>::infinity();
     }
     else if (distance > tiny)
     {
@@ -496,7 +510,7 @@ double contactDistance(const Vec3 corners[4], bool edges, const double weights[4
     }
     else
     {
-        *direction = normal_length > tiny ? normal * ((side < 0 ? -1.0 : 1.0) / normal_length) : Vec3{0.0, 1.0, 0.0};
+        *direction = normal_length > tiny ? normal * (way / normal_length) : Vec3{0.0, 1.0, 0.0};
     }
     return distance;
 }
@@ -690,10 +704,10 @@ void ClothSolver::setSeamFolds(bool seam_folds)
 //---------------------------------------------------------------------------------------------------------------------
 /// @brief Adds a piece of cloth: its flat mesh, which gives its rest shape, where its vertices start out in cm, its
 /// fabric and the direction of its grain in the flat piece, in degrees anticlockwise from the piece's x axis, as
-/// the piece scene shows it, and the lines it is folded along. Returns the number of its first vertex; stitches and
-/// pins count vertices over all pieces.
+/// the piece scene shows it, the lines it is folded along and the layer it is worn in. Returns the number of its first
+/// vertex; stitches and pins count vertices over all pieces.
 quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions, const Fabric& fabric,
-                             qreal grain_angle, const QVector<ClothFold>& folds)
+                             qreal grain_angle, const QVector<ClothFold>& folds, const ClothLayer& layer)
 {
     const int offset = vertexCount();
     const int count = mesh.vertexCount();
@@ -776,6 +790,20 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
     {
         m_faces.append(offset + static_cast<int>(index));
     }
+
+    // Which way the piece's outside faces from its triangles as wound. Those turning clockwise as the piece scene shows
+    // them face its wrong side, as bendAcross() has it; the right side is out unless the piece is turned over.
+    double winding = 0;
+    for (int t = 0; t + 2 < mesh.indices.size(); t += 3)
+    {
+        const QPointF a = mesh.rest_positions.at(static_cast<int>(mesh.indices.at(t)));
+        const QPointF b = mesh.rest_positions.at(static_cast<int>(mesh.indices.at(t + 1)));
+        const QPointF c = mesh.rest_positions.at(static_cast<int>(mesh.indices.at(t + 2)));
+        winding += (b.x() - a.x()) * (c.y() - a.y()) - (c.x() - a.x()) * (b.y() - a.y());
+    }
+    const double wrong_side = winding > 0 ? 1.0 : winding < 0 ? -1.0 : 0.0;
+    m_layers.append(layer.number);
+    m_outside.append(layer.turned_over ? wrong_side : -wrong_side);
 
     // Across each inner edge the cloth resists bending. The weights are the cotangent ones of Bergou et al.; spread
     // over the two triangles' area, they make bending as stiff as the fabric's rigidity, to within a few percent.
@@ -1949,7 +1977,8 @@ void ClothSolver::solveVertex(int vertex, double time_step)
 //---------------------------------------------------------------------------------------------------------------------
 // Finds the parts of the cloth that may touch each other during the step: each vertex and the triangles, and each edge
 // and the edges, that were near when the step started, or further apart by as much as they are heading this step.
-// Parts sewn to each other are left out.
+// Parts sewn to each other are left out, and while pieces pass through each other, parts of different pieces but for
+// pieces in different layers.
 void ClothSolver::findSelfContacts()
 {
     const int count = vertexCount();
@@ -1982,6 +2011,22 @@ void ClothSolver::findSelfContacts()
         m_self_contacts.clear();
         findSelfContactsAround(heading);
         m_self_found_at = m_previous;
+    }
+
+    // Which way the cloth faces around each vertex, for pieces in layers to tell their outsides by.
+    m_facing.clear();
+    if (inLayers())
+    {
+        m_facing.fill(0.0, 3 * count);
+        for (int t = 0; t + 2 < m_faces.size(); t += 3)
+        {
+            const Vec3 a = load(m_previous, m_faces.at(t));
+            const Vec3 normal = cross(load(m_previous, m_faces.at(t + 1)) - a, load(m_previous, m_faces.at(t + 2)) - a);
+            for (int k = 0; k < 3; ++k)
+            {
+                store(m_facing, m_faces.at(t + k), load(m_facing, m_faces.at(t + k)) + normal);
+            }
+        }
     }
 
     // Which sides the parts start the step on, and how far their vertices may move in it.
@@ -2114,7 +2159,8 @@ void ClothSolver::findSelfContactsAround(const QVector<double>& heading)
             for (const int face : near_face)
             {
                 const int* corners = m_faces.constData() + 3 * face;
-                if (m_settings.pieces_pass_through && m_pieces.at(vertex) != m_pieces.at(corners[0]))
+                if (m_settings.pieces_pass_through && m_pieces.at(vertex) != m_pieces.at(corners[0])
+                    && !apartInLayers(vertex, corners[0]))
                 {
                     continue;
                 }
@@ -2176,7 +2222,8 @@ void ClothSolver::findSelfContactsAround(const QVector<double>& heading)
             for (const int other : near_edge)
             {
                 const int* second = m_edges.constData() + 2 * other;
-                if (m_settings.pieces_pass_through && m_pieces.at(first[0]) != m_pieces.at(second[0]))
+                if (m_settings.pieces_pass_through && m_pieces.at(first[0]) != m_pieces.at(second[0])
+                    && !apartInLayers(first[0], second[0]))
                 {
                     continue;
                 }
@@ -2279,6 +2326,20 @@ void ClothSolver::startSelfContact(SelfContact* contact, const QVector<double>& 
     }
     contact->live = gap.length() <= m_settings.thickness + self_margin / 4.0 + first_heading + second_heading;
 
+    // Parts of pieces in layers go on the sides their layers say. While pieces pass through each other, as they are
+    // sewn together, those of others don't touch.
+    const double layered = layeredSide(*contact);
+    if (layered != 0)
+    {
+        contact->side = 2.0 * layered;
+    }
+    else if (m_settings.pieces_pass_through
+             && m_pieces.at(contact->vertices[0]) != m_pieces.at(contact->vertices[first_count]))
+    {
+        contact->live = false;
+        return;
+    }
+
     // Only parts lying on each other can pass through each other.
     if (contact->side != 0)
     {
@@ -2288,6 +2349,68 @@ void ClothSolver::startSelfContact(SelfContact* contact, const QVector<double>& 
             m_self_bound[vertex] = qMin(m_self_bound.at(vertex), bound);
         }
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Whether the pieces are worn in more than one layer.
+bool ClothSolver::inLayers() const
+{
+    return std::adjacent_find(m_layers.cbegin(), m_layers.cend(), std::not_equal_to<int>()) != m_layers.cend();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Whether two vertices are of pieces worn in different layers.
+bool ClothSolver::apartInLayers(int a, int b) const
+{
+    return m_layers.at(m_pieces.at(a)) != m_layers.at(m_pieces.at(b));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The side the layers of two pieces say the first part of a contact goes on, 1 or -1, as SelfContact's side is: of a
+// higher layer, the side the second part's piece faces out to, else the other. 0 where they don't say: the parts are
+// of one layer, or of pieces not lying on each other facing the same way there, or of edges whose square direction
+// runs along the cloth rather than through it.
+double ClothSolver::layeredSide(const SelfContact& contact) const
+{
+    const int first_count = contact.edges ? 2 : 1;
+    const int first_piece = m_pieces.at(contact.vertices[0]);
+    const int second_piece = m_pieces.at(contact.vertices[first_count]);
+    if (m_facing.isEmpty() || m_layers.at(first_piece) == m_layers.at(second_piece))
+    {
+        return 0;
+    }
+
+    Vec3 corners[4];
+    for (int k = 0; k < 4; ++k)
+    {
+        corners[k] = load(m_previous, contact.vertices[k]);
+    }
+
+    // Which way each part faces out: a vertex or an edge as the cloth around it, a triangle as itself.
+    Vec3 first_out;
+    for (int k = 0; k < first_count; ++k)
+    {
+        first_out += load(m_facing, contact.vertices[k]);
+    }
+    first_out = first_out * m_outside.at(first_piece);
+    const Vec3 second_out = (contact.edges ? load(m_facing, contact.vertices[2]) + load(m_facing, contact.vertices[3])
+                                           : contactNormal(corners, false)) * m_outside.at(second_piece);
+    const double first_length = first_out.length();
+    const double second_length = second_out.length();
+    if (first_length < tiny || second_length < tiny
+        || first_out.dot(second_out) < same_way * first_length * second_length)
+    {
+        return 0;
+    }
+
+    const Vec3 normal = contactNormal(corners, contact.edges);
+    const double along = normal.dot(second_out);
+    if (qAbs(along) < lying_on * normal.length() * second_length || qAbs(along) <= tiny)
+    {
+        return 0;
+    }
+    const double out = along < 0 ? -1.0 : 1.0;
+    return m_layers.at(first_piece) > m_layers.at(second_piece) ? out : -out;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

@@ -47,6 +47,8 @@ private slots:
     void foldedClothKeepsItsLayers_data() const;
     void foldedClothKeepsItsLayers() const;
     void piecesPassThroughEachOtherButNotThemselves() const;
+    void layersKeepTheirOrder_data() const;
+    void layersKeepTheirOrder() const;
     void seamsCloseDespiteSelfContact_data() const;
     void seamsCloseDespiteSelfContact() const;
     void biasGivesMoreThanGrain() const;

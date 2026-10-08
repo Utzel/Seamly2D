@@ -622,6 +622,104 @@ void TST_ClothSolver::piecesPassThroughEachOtherButNotThemselves() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+void TST_ClothSolver::layersKeepTheirOrder_data() const
+{
+    QTest::addColumn<int>("sheet_layer");
+    QTest::addColumn<bool>("sheet_turned");
+    QTest::addColumn<int>("patch_layer");
+    QTest::addColumn<bool>("patch_turned");
+    QTest::addColumn<qreal>("start");
+    QTest::addColumn<bool>("sewing");
+    QTest::addColumn<bool>("over");
+    QTest::addColumn<bool>("on_device");
+    for (const bool on_device : {false, true})
+    {
+        const QString device = on_device ? QStringLiteral(", graphics card") : QString();
+        QTest::newRow(qPrintable(QStringLiteral("outer layer starting under") + device))
+            << 0 << false << 1 << false << -0.1 << false << true << on_device;
+        QTest::newRow(qPrintable(QStringLiteral("inner layer starting over") + device))
+            << 1 << false << 0 << false << 0.1 << false << false << on_device;
+        QTest::newRow(qPrintable(QStringLiteral("outer layer turned over, starting over") + device))
+            << 0 << true << 1 << true << 0.1 << false << false << on_device;
+        QTest::newRow(qPrintable(QStringLiteral("layers facing different ways") + device))
+            << 0 << false << 1 << true << -0.1 << false << false << on_device;
+        QTest::newRow(qPrintable(QStringLiteral("one layer") + device))
+            << 0 << false << 0 << false << -0.1 << false << false << on_device;
+        QTest::newRow(qPrintable(QStringLiteral("outer layer starting under, while sewn") + device))
+            << 0 << false << 1 << false << -0.1 << true << true << on_device;
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A patch starting just over or under a sheet held flat, its right side up, ends up on the side their layers say: the
+// higher layer outside, on the side the other piece turns out, whichever side it starts on, and even while pieces
+// pass through each other otherwise, as they are sewn together. Pieces of one layer, or facing different ways, keep
+// the sides they start on, here the patch falling away under the sheet.
+void TST_ClothSolver::layersKeepTheirOrder() const
+{
+    QFETCH(int, sheet_layer);
+    QFETCH(bool, sheet_turned);
+    QFETCH(int, patch_layer);
+    QFETCH(bool, patch_turned);
+    QFETCH(qreal, start);
+    QFETCH(bool, sewing);
+    QFETCH(bool, over);
+    QFETCH(bool, on_device);
+
+    ClothSettings settings;
+    settings.floor = false;
+    settings.pieces_pass_through = sewing;
+    ClothSolver solver(settings);
+    const PieceMesher mesher;
+    const GarmentMesh sheet = mesher.meshOutline(rectangle(0, 0, 30, 30, 1));
+    const GarmentMesh patch = mesher.meshOutline(rectangle(5, 5, 20, 20, 11));
+    ClothLayer sheet_wears;
+    sheet_wears.number = sheet_layer;
+    sheet_wears.turned_over = sheet_turned;
+    ClothLayer patch_wears;
+    patch_wears.number = patch_layer;
+    patch_wears.turned_over = patch_turned;
+    solver.addMesh(sheet, lyingFlat(sheet, 0), Fabric(), 90.0, {}, sheet_wears);
+    const int patch_offset = static_cast<int>(solver.addMesh(patch, lyingFlat(patch, start), Fabric(), 90.0, {},
+                                                             patch_wears));
+    for (int i = 0; i < patch_offset; ++i)
+    {
+        solver.setPinned(static_cast<quint32>(i), true);
+    }
+    ComputeDevice device;
+    if (on_device && !solver.useDevice(device.open()))
+    {
+        QSKIP("No graphics card here can compute");
+    }
+    for (int i = 0; i < 120; ++i)
+    {
+        solver.step(frame);
+    }
+    QCOMPARE(solver.isOnDevice(), on_device);
+    solver.useDevice(nullptr);
+
+    const QVector<QVector3D> positions = solver.positions();
+    float lowest = std::numeric_limits<float>::max();
+    float highest = -std::numeric_limits<float>::max();
+    for (int i = patch_offset; i < positions.size(); ++i)
+    {
+        lowest = qMin(lowest, positions.at(i).y());
+        highest = qMax(highest, positions.at(i).y());
+    }
+    const float thickness = static_cast<float>(settings.thickness);
+    const QString report = QStringLiteral("the patch is from %1 to %2 cm high, the sheet at 0").arg(lowest)
+                               .arg(highest);
+    if (over)
+    {
+        QVERIFY2(lowest > 0.5f * thickness && highest < 3.0f * thickness, qUtf8Printable(report));
+    }
+    else
+    {
+        QVERIFY2(highest < -0.5f * thickness, qUtf8Printable(report));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void TST_ClothSolver::seamsCloseDespiteSelfContact_data() const
 {
     onProcessorAndDevice();
