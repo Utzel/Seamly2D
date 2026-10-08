@@ -41,6 +41,8 @@ private slots:
     void undoRestoresSeams() const;
     void foldsAreReadBack() const;
     void undoRestoresFolds() const;
+    void elasticsAreReadBack() const;
+    void undoRestoresElastics() const;
     void olderPatternsAreConverted() const;
     void arrangementsAreReadBack() const;
     void garmentDataKeepsSchemaOrder() const;

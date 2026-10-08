@@ -105,6 +105,8 @@ const QString VAbstractPattern::TagFirstStretch         = QStringLiteral("first"
 const QString VAbstractPattern::TagSecondStretch        = QStringLiteral("second");
 const QString VAbstractPattern::TagFolds                = QStringLiteral("folds");
 const QString VAbstractPattern::TagFold                 = QStringLiteral("fold");
+const QString VAbstractPattern::TagElastics             = QStringLiteral("elastics");
+const QString VAbstractPattern::TagElastic              = QStringLiteral("elastic");
 const QString VAbstractPattern::TagArrangements         = QStringLiteral("arrangements");
 const QString VAbstractPattern::TagArrangement          = QStringLiteral("arrangement");
 const QString VAbstractPattern::TagLayers               = QStringLiteral("layers");
@@ -228,6 +230,7 @@ const QString VAbstractPattern::AttrDistance            = QStringLiteral("distan
 const QString VAbstractPattern::AttrLean                = QStringLiteral("lean");
 const QString VAbstractPattern::AttrSwing               = QStringLiteral("swing");
 const QString VAbstractPattern::AttrNumber              = QStringLiteral("number");
+const QString VAbstractPattern::AttrRatio               = QStringLiteral("ratio");
 const QString VAbstractPattern::AttrAvatar              = QStringLiteral("avatar");
 const QString VAbstractPattern::AttrEdgeLength          = QStringLiteral("edgeLength");
 const QString VAbstractPattern::AttrCopy                = QStringLiteral("copy");
@@ -2308,6 +2311,13 @@ bool VFold::operator==(const VFold& other) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+bool VElastic::operator==(const VElastic& other) const
+{
+    return piece_id == other.piece_id && start_node == other.start_node && end_node == other.end_node
+           && path_id == other.path_id && qFuzzyCompare(1.0 + ratio, 1.0 + other.ratio);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 bool VPieceArrangement::operator==(const VPieceArrangement& other) const
 {
     return piece_id == other.piece_id && part == other.part && qFuzzyCompare(1.0 + angle, 1.0 + other.angle)
@@ -2642,6 +2652,75 @@ void VAbstractPattern::setFolds(const QVector<VFold>& folds)
     }
 
     emit foldsChanged();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The elastics sewn into the pieces. An elastic can name a piece, a point or a path that is gone; it is kept, so
+/// undoing the deletion brings it back, and whoever uses it has to skip it.
+QVector<VElastic> VAbstractPattern::getElastics() const
+{
+    QVector<VElastic> elastics;
+    QDomElement element = documentElement().firstChildElement(TagElastics).firstChildElement(TagElastic);
+    while (!element.isNull())
+    {
+        VElastic elastic;
+        elastic.piece_id = GetParametrUInt(element, AttrPiece, NULL_ID_STR);
+        elastic.start_node = GetParametrUInt(element, AttrStart, NULL_ID_STR);
+        elastic.end_node = GetParametrUInt(element, AttrEnd, NULL_ID_STR);
+        elastic.path_id = GetParametrUInt(element, AttrPath, NULL_ID_STR);
+        elastic.ratio = GetParametrDouble(element, AttrRatio, QStringLiteral("0.8"));
+        elastics.append(elastic);
+
+        element = element.nextSiblingElement(TagElastic);
+    }
+    return elastics;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Replaces the elastics, one per segment or internal path at most. Meant to be called by the SaveElastics undo
+/// command.
+void VAbstractPattern::setElastics(const QVector<VElastic>& elastics)
+{
+    QDomElement pattern = documentElement();
+    QDomElement element = pattern.firstChildElement(TagElastics);
+
+    if (elastics.isEmpty())
+    {
+        if (!element.isNull())
+        {
+            pattern.removeChild(element);
+        }
+    }
+    else
+    {
+        if (element.isNull())
+        {
+            element = createGarmentElement(TagElastics);
+        }
+        else
+        {
+            RemoveAllChildren(element);
+        }
+
+        for (const VElastic& elastic : elastics)
+        {
+            QDomElement tag = createElement(TagElastic);
+            SetAttribute(tag, AttrPiece, elastic.piece_id);
+            if (elastic.path_id != NULL_ID)
+            {
+                SetAttribute(tag, AttrPath, elastic.path_id);
+            }
+            else
+            {
+                SetAttribute(tag, AttrStart, elastic.start_node);
+                SetAttribute(tag, AttrEnd, elastic.end_node);
+            }
+            SetAttribute(tag, AttrRatio, elastic.ratio);
+            element.appendChild(tag);
+        }
+    }
+
+    emit elasticsChanged();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -3122,13 +3201,13 @@ void VAbstractPattern::setDrape(const VGarmentDrape& drape)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Adds an empty element for the 3D garment's data where the schema wants it: the seams, the folds, the arrangements,
-// the layers, the fabrics, the topstitching, the avatar, then the drape, all before the draft blocks, which are added
-// at the end.
+// Adds an empty element for the 3D garment's data where the schema wants it: the seams, the folds, the elastics, the
+// arrangements, the layers, the fabrics, the topstitching, the avatar, then the drape, all before the draft blocks,
+// which are added at the end.
 QDomElement VAbstractPattern::createGarmentElement(const QString& tag)
 {
-    const QStringList order = {TagSeams, TagFolds, TagArrangements, TagLayers, TagFabrics, TagTopstitches, TagAvatar,
-                               TagDrape, TagDraftBlock};
+    const QStringList order = {TagSeams, TagFolds, TagElastics, TagArrangements, TagLayers, TagFabrics, TagTopstitches,
+                               TagAvatar, TagDrape, TagDraftBlock};
     QDomElement pattern = documentElement();
 
     QDomElement before;

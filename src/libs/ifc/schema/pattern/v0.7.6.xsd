@@ -200,6 +200,28 @@
             <xs:field xpath="@path"/>
           </xs:unique>
         </xs:element>
+        <xs:element name="elastics" minOccurs="0" maxOccurs="1">
+          <xs:complexType>
+            <xs:sequence minOccurs="0" maxOccurs="unbounded">
+              <xs:element name="elastic" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="piece" type="xs:unsignedInt" use="required"/>
+                  <xs:attribute name="start" type="xs:unsignedInt"/>
+                  <xs:attribute name="end" type="xs:unsignedInt"/>
+                  <xs:attribute name="path" type="xs:unsignedInt"/>
+                  <xs:attribute name="ratio" use="required">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:double">
+                        <xs:minInclusive value="0.1"/>
+                        <xs:maxInclusive value="1"/>
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
         <xs:element name="arrangements" minOccurs="0" maxOccurs="1">
           <xs:complexType>
             <xs:sequence minOccurs="0" maxOccurs="unbounded">

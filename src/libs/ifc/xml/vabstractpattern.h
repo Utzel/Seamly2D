@@ -149,6 +149,21 @@ struct VFold
     bool    operator==(const VFold& other) const;
 };
 
+/// An elastic sewn along a segment of a piece's seam line, from one point of its path to the next, or along one of its
+/// internal paths, as CLO's: it is that share of the line's length long, from 0.1 to 1, and gathers the cloth along it
+/// to that, as at an elastic waist or cuff, or for shirring. Along an internal path, the segment's points are NULL_ID,
+/// and along a segment the path is.
+struct VElastic
+{
+    quint32 piece_id {NULL_ID};
+    quint32 start_node {NULL_ID};
+    quint32 end_node {NULL_ID};
+    quint32 path_id {NULL_ID};
+    qreal   ratio {0.8};
+
+    bool    operator==(const VElastic& other) const;
+};
+
 /// Where a piece starts out on the avatar: wrapped around a part of the body, "body", "leftLeg", "rightLeg",
 /// "leftArm" or "rightArm", at an angle around it in degrees, 0 in front, and with its middle at a height in cm above
 /// the floor; on an arm, the height of the point of the arm's middle line the piece's middle is at. The piece can be
@@ -333,6 +348,9 @@ public:
 
     QVector<VFold>                 getFolds() const;
     void                           setFolds(const QVector<VFold>& folds);
+
+    QVector<VElastic>              getElastics() const;
+    void                           setElastics(const QVector<VElastic>& elastics);
 
     QVector<VPieceArrangement>     getArrangements() const;
     void                           setArrangements(const QVector<VPieceArrangement>& arrangements);
@@ -536,6 +554,8 @@ public:
     static const QString TagSecondStretch;
     static const QString TagFolds;
     static const QString TagFold;
+    static const QString TagElastics;
+    static const QString TagElastic;
     static const QString TagArrangements;
     static const QString TagArrangement;
     static const QString TagLayers;
@@ -659,6 +679,7 @@ public:
     static const QString AttrLean;
     static const QString AttrSwing;
     static const QString AttrNumber;
+    static const QString AttrRatio;
     static const QString AttrAvatar;
     static const QString AttrEdgeLength;
     static const QString AttrCopy;
@@ -780,6 +801,7 @@ signals:
     void           showPiece(quint32 id);
     void           seamsChanged();
     void           foldsChanged();
+    void           elasticsChanged();
     void           arrangementsChanged();
     void           layersChanged();
     void           fabricsChanged();

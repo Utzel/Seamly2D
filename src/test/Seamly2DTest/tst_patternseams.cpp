@@ -39,6 +39,7 @@
 #include "../vtools/undocommands/save_arrangements.h"
 #include "../vtools/undocommands/save_avatar.h"
 #include "../vtools/undocommands/save_fabrics.h"
+#include "../vtools/undocommands/save_elastics.h"
 #include "../vtools/undocommands/save_folds.h"
 #include "../vtools/undocommands/save_layers.h"
 #include "../vtools/undocommands/save_seams.h"
@@ -359,6 +360,44 @@ void TST_PatternSeams::undoRestoresFolds() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// Elastics keep the segment or the internal path they are sewn along and their ratio; none leave no element.
+void TST_PatternSeams::elasticsAreReadBack() const
+{
+    SeamsPattern pattern;
+    QVERIFY(pattern.getElastics().isEmpty());
+
+    const QVector<VElastic> elastics = {{10, 1, 2, NULL_ID, 0.8}, {20, NULL_ID, NULL_ID, 41, 0.65}};
+    pattern.setElastics(elastics);
+    QCOMPARE(pattern.getElastics(), elastics);
+    const QDomElement path_elastic = pattern.documentElement().firstChildElement(VAbstractPattern::TagElastics)
+                                                              .lastChildElement(VAbstractPattern::TagElastic);
+    QVERIFY(!path_elastic.hasAttribute(VAbstractPattern::AttrStart));
+    QCOMPARE(path_elastic.attribute(VAbstractPattern::AttrPath), QStringLiteral("41"));
+    QVERIFY(!(VElastic{10, 1, 2, NULL_ID, 0.8} == VElastic{10, 1, 2, NULL_ID, 0.7}));
+
+    pattern.setElastics(QVector<VElastic>());
+    QVERIFY(pattern.documentElement().firstChildElement(VAbstractPattern::TagElastics).isNull());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_PatternSeams::undoRestoresElastics() const
+{
+    SeamsPattern pattern;
+    const QVector<VElastic> before = {{10, 1, 2, NULL_ID, 0.8}};
+    const QVector<VElastic> after = {{10, 1, 2, NULL_ID, 0.7}, {20, NULL_ID, NULL_ID, 41, 0.9}};
+    pattern.setElastics(before);
+
+    QSignalSpy changes(&pattern, &VAbstractPattern::elasticsChanged);
+    QUndoStack stack;
+    stack.push(new SaveElastics(QStringLiteral("elastic"), before, after, &pattern));
+    QCOMPARE(pattern.getElastics(), after);
+
+    stack.undo();
+    QCOMPARE(pattern.getElastics(), before);
+    QCOMPARE(changes.count(), 2);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Patterns saved before seams existed open as they are.
 void TST_PatternSeams::olderPatternsAreConverted() const
 {
@@ -428,14 +467,15 @@ void TST_PatternSeams::arrangementsAreReadBack() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Whichever is made first, the seams come before the folds, those before the arrangements, those before the layers,
-// those before the fabrics, those before the topstitching, that before the avatar, that before the drape, and all
-// before the draft blocks. Pieces can be arranged on every part of the body.
+// Whichever is made first, the seams come before the folds, those before the elastics, those before the arrangements,
+// those before the layers, those before the fabrics, those before the topstitching, that before the avatar, that before
+// the drape, and all before the draft blocks. Pieces can be arranged on every part of the body.
 void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
 {
     SeamsPattern pattern;
     pattern.setDrape(drape());
     pattern.setLayers({{10, 2}, {30, 1}});
+    pattern.setElastics({{10, 1, 2, NULL_ID, 0.8}, {20, NULL_ID, NULL_ID, 41, 0.65}});
     pattern.setFolds({{10, 31, 0}, {20, 32, 270.5}});
     pattern.setAvatar(avatar(true, 52, 180.5, 104, 92, 108));
     VTopstitches topstitches;
@@ -467,7 +507,7 @@ void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
     QCOMPARE(childTags(pattern.documentElement()),
              QStringList({QStringLiteral("version"), QStringLiteral("unit"), QStringLiteral("measurements"),
                           QStringLiteral("finalMeasurements"), QStringLiteral("seams"), QStringLiteral("folds"),
-                          QStringLiteral("arrangements"), QStringLiteral("layers"),
+                          QStringLiteral("elastics"), QStringLiteral("arrangements"), QStringLiteral("layers"),
                           QStringLiteral("fabrics"), QStringLiteral("topstitches"), QStringLiteral("avatar"),
                           QStringLiteral("drape"), QStringLiteral("draftBlock"), QStringLiteral("draftBlock")}));
 
