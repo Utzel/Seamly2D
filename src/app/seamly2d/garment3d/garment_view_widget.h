@@ -271,6 +271,9 @@ private:
     QAction*                   m_rotate_counterclockwise_action;
     QAction*                   m_turn_over_action;
     QAction*                   m_take_off_action;
+    QAction*                   m_superimpose_over_action;
+    QAction*                   m_superimpose_under_action;
+    QAction*                   m_superimpose_side_action;
     QMenu*                     m_piece_menu;
     QAction*                   m_simulate_action;
     QAction*                   m_reset_action;
@@ -331,6 +334,8 @@ private:
     void               storeArrangement(quint32 piece, const PieceArrangement& wanted, const QString& text);
     PieceArrangement   sameWayRound(quint32 piece, PieceArrangement wanted) const;
     void               rotatePiece(qreal degrees);
+    void               superimposePiece(Superimpose how);
+    quint32            superimposePartner(quint32 piece, QVector<SewnSides>* seams = nullptr) const;
     QString            pointTitle(const ArrangementPoint& point) const;
     void               showArrangement(quint32 piece, const PieceArrangement& arrangement);
     void               callOffDrag();
@@ -347,8 +352,8 @@ private:
     QVector<QVector3D> piecePositions(quint32 id, const GarmentMesh& mesh) const;
     QVector<QVector3D> placedAt(quint32 id, const GarmentMesh& mesh, const PieceArrangement& arrangement,
                                 bool turned, qreal out = 0) const;
-    QSet<quint32>      turnedPairs() const;
-    bool               isTurnedPair(quint32 piece, const PieceArrangement& arrangement) const;
+    QSet<quint32>      turnedPairs(bool limbs) const;
+    bool               isTurnedPair(quint32 piece, const PieceArrangement& arrangement, bool limbs = true) const;
     qreal              acrossBody(const GarmentMesh& mesh, const QVector<QVector3D>& positions,
                                   const VSeamSide& side) const;
     CachedMesh         garmentMeshes(quint32 id, const PieceOutline& outline, PieceSymmetry wanted) const;

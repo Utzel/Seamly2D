@@ -46,6 +46,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QList>
+#include <QMap>
 #include <QPalette>
 #include <QPixmap>
 #include <QQmlError>
@@ -300,6 +301,9 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_rotate_counterclockwise_action(nullptr)
     , m_turn_over_action(nullptr)
     , m_take_off_action(nullptr)
+    , m_superimpose_over_action(nullptr)
+    , m_superimpose_under_action(nullptr)
+    , m_superimpose_side_action(nullptr)
     , m_piece_menu(nullptr)
     , m_simulate_action(nullptr)
     , m_reset_action(nullptr)
@@ -586,7 +590,8 @@ void GarmentViewWidget::rebuildScene()
         draped = m_mesh_cache.contains(patternPiece(draped.key())) ? std::next(draped) : m_draped.erase(draped);
     }
     m_turned_pairs.clear();  // turnedPairs() places body pieces, and those are never turned
-    m_turned_pairs = turnedPairs();
+    m_turned_pairs = turnedPairs(false);
+    m_turned_pairs = turnedPairs(true);  // then pieces sewn only to pieces on arms or legs follow those
 
     QVector<GarmentSceneModel::Piece> scene_pieces;
     QVector<ShownPiece> shown_pieces;
@@ -1030,13 +1035,14 @@ QVector<QVector3D> GarmentViewWidget::placedAt(quint32 id, const GarmentMesh& me
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// The pieces whose pairs are turned to their seams, as arranged.
-QSet<quint32> GarmentViewWidget::turnedPairs() const
+// The pieces whose pairs are turned to their seams, as arranged; with limbs, also by the pieces on arms or legs they
+// are sewn to, as those are turned now.
+QSet<quint32> GarmentViewWidget::turnedPairs(bool limbs) const
 {
     QSet<quint32> turned;
     for (auto arranged = m_arrangements.constBegin(); arranged != m_arrangements.constEnd(); ++arranged)
     {
-        if (isTurnedPair(arranged.key(), arranged.value()))
+        if (isTurnedPair(arranged.key(), arranged.value(), limbs))
         {
             turned.insert(arranged.key());
         }
@@ -1047,33 +1053,44 @@ QSet<quint32> GarmentViewWidget::turnedPairs() const
 //---------------------------------------------------------------------------------------------------------------------
 // Whether a piece cut twice, arranged so on an arm or a leg, is sewn mostly to body pieces on the other side of the
 // body: it is drafted for the other side. Turned, the mirrored copy goes where the piece was put, so a sleeve goes to
-// the armhole it is sewn to whichever arm it was put on.
-bool GarmentViewWidget::isTurnedPair(quint32 piece, const PieceArrangement& arrangement) const
+// the armhole it is sewn to whichever arm it was put on. With limbs, a piece sewn to no body piece goes by the pieces
+// on arms or legs it is sewn to instead, so a cuff goes with its sleeve.
+bool GarmentViewWidget::isTurnedPair(quint32 piece, const PieceArrangement& arrangement, bool limbs) const
 {
     int votes = 0;
     const CachedMesh& own = m_mesh_cache.value(piece);
     if (!m_wrap.isNull() && arrangement.part != BodyPart::Body && own.symmetry == PieceSymmetry::Pair)
     {
-        auto onBody = [this](quint32 partner)
+        auto onPart = [this, piece](quint32 partner, bool body)
         {
-            return m_arrangements.contains(partner) && m_arrangements.value(partner).part == BodyPart::Body
+            return partner != piece && m_arrangements.contains(partner)
+                   && (m_arrangements.value(partner).part == BodyPart::Body) == body
                    && !m_mesh_cache.value(partner).garment_mesh.isEmpty();
         };
 
         const QVector<QVector3D> placed = m_wrap->place(own.garment_mesh, arrangement);
-        for (const VSeam& seam : m_doc->getSeams())
+        for (const bool body : {true, false})
         {
-            for (const auto& sides : {std::make_pair(seam.first, seam.second), std::make_pair(seam.second, seam.first)})
+            for (const VSeam& seam : m_doc->getSeams())
             {
-                const quint32 partner = sides.second.piece_id;
-                if (sides.first.piece_id == piece && onBody(partner))
+                for (const auto& sides : {std::make_pair(seam.first, seam.second),
+                                          std::make_pair(seam.second, seam.first)})
                 {
-                    const CachedMesh& other = m_mesh_cache.value(partner);
-                    const qreal own_across = acrossBody(own.garment_mesh, placed, sides.first);
-                    const qreal other_across = acrossBody(other.garment_mesh,
-                                                          piecePositions(partner, other.garment_mesh), sides.second);
-                    votes += own_across * other_across < 0 ? 1 : -1;
+                    const quint32 partner = sides.second.piece_id;
+                    if (sides.first.piece_id == piece && onPart(partner, body) && (body || (limbs && votes == 0)))
+                    {
+                        const CachedMesh& other = m_mesh_cache.value(partner);
+                        const qreal own_across = acrossBody(own.garment_mesh, placed, sides.first);
+                        const qreal other_across = acrossBody(other.garment_mesh,
+                                                              piecePositions(partner, other.garment_mesh),
+                                                              sides.second);
+                        votes += own_across * other_across < 0 ? 1 : -1;
+                    }
                 }
+            }
+            if (votes != 0)
+            {
+                break;
             }
         }
     }
@@ -1337,6 +1354,94 @@ void GarmentViewWidget::rotatePiece(qreal degrees)
         arrangement.rotation = std::fmod(arrangement.rotation + degrees + 360.0, 360.0);
         storeArrangement(piece, arrangement, tr("rotate piece"));
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Lays the selected piece on the piece on the avatar it is sewn to the most, as CLO's Superimpose: over it, under it,
+// or beside it, its sides of their seams on that piece's, as one step. On a pair turned to its seams, whose copy is
+// where it is arranged, a piece cut twice is laid with its copy on that copy, and goes with it.
+void GarmentViewWidget::superimposePiece(Superimpose how)
+{
+    const quint32 piece = m_scene_model->selectedPiece();
+    QVector<SewnSides> seams;
+    const quint32 partner = superimposePartner(piece, &seams);
+    if (partner != 0 && !m_wrap.isNull() && m_mesh_cache.contains(piece))
+    {
+        const CachedMesh own = m_mesh_cache.value(piece);
+        const CachedMesh other = m_mesh_cache.value(partner);
+        const bool turned = m_turned_pairs.contains(partner);
+        const bool copies = turned && !own.mirror_mesh.isEmpty();
+        const PieceArrangement laid = m_wrap->superimposed(copies ? own.mirror_mesh : own.garment_mesh,
+                                                           turned ? other.mirror_mesh : other.garment_mesh,
+                                                           m_arrangements.value(partner), seams, how);
+        storeArrangement(piece, laid, tr("superimpose piece"));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The piece on the avatar a piece is sewn to the most, by the length of their seams, and the sides of those seams,
+// each in the order in which they meet; 0 if it is sewn to none on the avatar.
+quint32 GarmentViewWidget::superimposePartner(quint32 piece, QVector<SewnSides>* seams) const
+{
+    QMap<quint32, qreal> sewn;
+    const QVector<VSeam> all_seams = m_doc->getSeams();
+    for (const VSeam& seam : all_seams)
+    {
+        for (const auto& sides : {std::make_pair(seam.first, seam.second), std::make_pair(seam.second, seam.first)})
+        {
+            const quint32 partner = sides.second.piece_id;
+            if (sides.first.piece_id == piece && partner != piece && m_scene_model->isPlaced(partner)
+                && m_mesh_cache.contains(partner))
+            {
+                sewn[partner] += m_mesh_cache.value(partner).garment_mesh.stretch(sides.second.start_node,
+                                                                                  sides.second.end_node).length();
+            }
+        }
+    }
+
+    quint32 best = 0;
+    qreal most = 0;
+    for (auto partner = sewn.constBegin(); partner != sewn.constEnd(); ++partner)
+    {
+        if (partner.value() > most)
+        {
+            best = partner.key();
+            most = partner.value();
+        }
+    }
+
+    if (best != 0 && seams != nullptr && m_mesh_cache.contains(piece))
+    {
+        const GarmentMesh& own = m_mesh_cache.value(piece).garment_mesh;
+        const GarmentMesh& other = m_mesh_cache.value(best).garment_mesh;
+        for (const VSeam& seam : all_seams)
+        {
+            const bool first = seam.first.piece_id == piece && seam.second.piece_id == best;
+            const bool second = seam.second.piece_id == piece && seam.first.piece_id == best;
+            if (first || second)
+            {
+                const VSeamSide& own_side = first ? seam.first : seam.second;
+                const VSeamSide& other_side = first ? seam.second : seam.first;
+                SeamStretch own_stretch = own.stretch(own_side.start_node, own_side.end_node);
+                SeamStretch other_stretch = other.stretch(other_side.start_node, other_side.end_node);
+
+                // The second side of a seam turned around runs back from the end the first side starts at.
+                if (seam.reverse)
+                {
+                    if (first)
+                    {
+                        other_stretch = other_stretch.reversed();
+                    }
+                    else
+                    {
+                        own_stretch = own_stretch.reversed();
+                    }
+                }
+                seams->append({own_stretch.vertices(), other_stretch.vertices()});
+            }
+        }
+    }
+    return best;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1935,6 +2040,10 @@ void GarmentViewWidget::updateActions()
     m_rotate_counterclockwise_action->setEnabled(on_avatar);
     m_turn_over_action->setEnabled(on_avatar);
     m_take_off_action->setEnabled(on_avatar);
+    const bool sewn_to_placed = !m_wrap.isNull() && superimposePartner(m_scene_model->selectedPiece()) != 0;
+    m_superimpose_over_action->setEnabled(sewn_to_placed);
+    m_superimpose_under_action->setEnabled(sewn_to_placed);
+    m_superimpose_side_action->setEnabled(sewn_to_placed);
 
     const bool has_avatar = m_scene_model->hasAvatar();
     m_avatar_action->setEnabled(!measuredAvatar().hasMeasurements());
@@ -2940,9 +3049,35 @@ void GarmentViewWidget::createToolBar()
     m_take_off_action->setToolTip(tr("Put the selected piece back on the board"));
     connect(m_take_off_action, &QAction::triggered, this, &GarmentViewWidget::takePieceOff);
 
+    // As CLO's Superimpose: the selected piece laid on the piece on the avatar it is sewn to the most.
+    m_superimpose_over_action = new QAction(tr("Superimpose Over"), this);
+    m_superimpose_over_action->setToolTip(tr("Lay the selected piece over the piece on the avatar it is sewn to, its "
+                                             "sewn edges on that piece's, as a pocket or a patch lies"));
+    connect(m_superimpose_over_action, &QAction::triggered, this, [this]()
+    {
+        superimposePiece(Superimpose::Over);
+    });
+    m_superimpose_under_action = new QAction(tr("Superimpose Under"), this);
+    m_superimpose_under_action->setToolTip(tr("Lay the selected piece under the piece on the avatar it is sewn to, its "
+                                              "sewn edges on that piece's, as a facing or a lining lies"));
+    connect(m_superimpose_under_action, &QAction::triggered, this, [this]()
+    {
+        superimposePiece(Superimpose::Under);
+    });
+    m_superimpose_side_action = new QAction(tr("Superimpose Side"), this);
+    m_superimpose_side_action->setToolTip(tr("Put the selected piece beside the piece on the avatar it is sewn to, "
+                                             "edge to edge along their longest seam, as a collar or the next panel "
+                                             "goes"));
+    connect(m_superimpose_side_action, &QAction::triggered, this, [this]()
+    {
+        superimposePiece(Superimpose::Side);
+    });
+
     QMenu* arrange_menu = new QMenu(this);
     arrange_menu->setToolTipsVisible(true);
     arrange_menu->addActions({m_rotate_clockwise_action, m_rotate_counterclockwise_action, m_turn_over_action});
+    arrange_menu->addSeparator();
+    arrange_menu->addActions({m_superimpose_over_action, m_superimpose_under_action, m_superimpose_side_action});
     arrange_menu->addSeparator();
     arrange_menu->addAction(m_take_off_action);
     m_arrange_action->setMenu(arrange_menu);
