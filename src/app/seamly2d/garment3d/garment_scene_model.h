@@ -72,6 +72,8 @@ class GarmentSceneModel : public QAbstractListModel
     Q_PROPERTY(bool checksShown READ isChecksShown NOTIFY checksShownChanged)
     Q_PROPERTY(bool avatarShown READ isAvatarShown NOTIFY avatarShownChanged)
     Q_PROPERTY(bool meshShown READ isMeshShown NOTIFY meshShownChanged)
+    Q_PROPERTY(bool simulating READ isSimulating NOTIFY simulatingChanged)
+    Q_PROPERTY(QVariantList pins READ pins NOTIFY pinsChanged)
     Q_PROPERTY(qreal checkRepeat READ checkRepeat CONSTANT)
 
 public:
@@ -176,12 +178,23 @@ public:
     void                   setHiddenPieces(const QSet<quint32>& pieces);
     void                   requestView(qreal pitch, qreal yaw);
 
+    bool                   isSimulating() const;
+    void                   setSimulating(bool simulating);
+    QVariantList           pins() const;
+    void                   setPins(const QVector<QVector3D>& pins);
+
     Q_INVOKABLE void       pickPiece(int id);
     Q_INVOKABLE void       placeAt(qreal x, qreal y, qreal z);
     Q_INVOKABLE bool       grabPiece(int id, qreal x, qreal y, qreal z);
     Q_INVOKABLE void       dragTo(qreal x, qreal y, qreal z);
     Q_INVOKABLE void       dropPiece();
     Q_INVOKABLE QVariant   restPoint(int id, const QVector3D& point) const;
+    Q_INVOKABLE bool       pullCloth(int id, qreal x, qreal y, qreal z);
+    Q_INVOKABLE bool       pullPin(int index);
+    Q_INVOKABLE void       pullTo(qreal x, qreal y, qreal z);
+    Q_INVOKABLE void       releasePull();
+    Q_INVOKABLE void       pinCloth(int id, qreal x, qreal y, qreal z);
+    Q_INVOKABLE void       unpin(int index);
 
 signals:
     void                   pieceCountChanged();
@@ -197,6 +210,14 @@ signals:
     void                   avatarShownChanged();
     void                   meshShownChanged();
     void                   viewRequested(qreal pitch, qreal yaw);
+    void                   simulatingChanged();
+    void                   pinsChanged();
+    void                   pullRequested(quint32 id, const QVector3D& point);
+    void                   pinPullRequested(int index);
+    void                   pullMoved(const QVector3D& point);
+    void                   pullReleased();
+    void                   pinRequested(quint32 id, const QVector3D& point);
+    void                   unpinRequested(int index);
     void                   placeRequested(const QVector3D& point);
     void                   grabRequested(quint32 id, const QVector3D& point);
     void                   dragRequested(const QVector3D& point);
@@ -254,6 +275,8 @@ private:
     bool                   m_avatar_shown;
     bool                   m_mesh_shown;
     QSet<quint32>          m_hidden_pieces;
+    bool                   m_simulating;
+    QVariantList           m_pins;
     QColor                 m_thread_color;
     QHash<QByteArray, FabricImage> m_images;
 

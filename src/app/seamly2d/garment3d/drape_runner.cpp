@@ -25,6 +25,8 @@
 #include "drape_runner.h"
 
 #include <QElapsedTimer>
+#include <QMutexLocker>
+#include <QSet>
 #include <QThread>
 
 #include "../vgarment/cloth_solver.h"
@@ -58,6 +60,13 @@ const int check_steps = steps_per_second / 6;
 // seconds; then they fall onto the body.
 const qreal sewn_gap = 1.0;
 const int max_sewing_steps = 10 * steps_per_second;
+
+// Held cloth moves to where it is held at most this fast, in cm/s, as a hand would, so a quick jerk of the mouse
+// doesn't tear it.
+const qreal hold_speed = 300.0;
+
+// At rest, the runner looks this often, in ms, whether the cloth is held somewhere else or pulled.
+const unsigned long idle_ms = 15;
 } // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -69,6 +78,10 @@ DrapeRunner::DrapeRunner(QObject* parent)
     , m_frame_pending(false)
     , m_on_device(true)
     , m_device()
+    , m_holds_mutex()
+    , m_holds()
+    , m_holds_changes(0)
+    , m_pulling(false)
 {}
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -143,6 +156,26 @@ void DrapeRunner::setOnDevice(bool on_device)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief Where the cloth is held, by the solver's vertices it is held by; replaces what was held before, also while
+/// running. Vertices the solver doesn't have are left out.
+void DrapeRunner::setHolds(const QHash<int, QVector3D>& holds)
+{
+    QMutexLocker locker(&m_holds_mutex);
+    if (holds != m_holds)
+    {
+        m_holds = holds;
+        ++m_holds_changes;
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Whether the cloth is being pulled; while it is, it isn't taken to be at rest.
+void DrapeRunner::setPulling(bool pulling)
+{
+    m_pulling = pulling;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // The simulation loop, on the runner's thread. Pieces held up in the air would fall past where they belong before
 // their seams close, so they are sewn first and only then let go. While being sewn they may pass through each other
 // to get to their seams, and they keep no speed from one step to the next: the seams pull hard, and cloth flung
@@ -158,7 +191,11 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation, Comput
     since_frame.start();
     int steps = 0;
     int falling_steps = 0;
+    int moving_steps = 0;  // since the start, or since the cloth was last held somewhere else or pulled
     bool resting = false;
+    bool waiting = false;  // at rest, until the cloth is held somewhere else or pulled
+    int holds_seen = m_holds_changes;
+    bool was_pulling = m_pulling;
     QVector<QVector3D> window_start = solver->positions();
 
     const QVector3D gravity = solver->settings().gravity;
@@ -166,6 +203,46 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation, Comput
     const qreal air_damping = solver->settings().air_damping;
     const bool self_contact = solver->settings().self_contact;
     bool sewing = solver->widestStitch() > sewn_gap;
+
+    // The vertices held are pinned and taken to where they are held, as far as a step goes.
+    QSet<int> held;
+    auto hold = [this, &solver, &held]()
+    {
+        QHash<int, QVector3D> holds;
+        {
+            QMutexLocker locker(&m_holds_mutex);
+            holds = m_holds;
+        }
+        for (auto vertex = held.begin(); vertex != held.end();)
+        {
+            if (holds.contains(*vertex))
+            {
+                ++vertex;
+            }
+            else
+            {
+                solver->setPinned(static_cast<quint32>(*vertex), false);
+                vertex = held.erase(vertex);
+            }
+        }
+        const float furthest = static_cast<float>(hold_speed * time_step);
+        for (auto where = holds.cbegin(); where != holds.cend(); ++where)
+        {
+            if (where.key() < 0 || where.key() >= solver->vertexCount())
+            {
+                continue;
+            }
+            const quint32 vertex = static_cast<quint32>(where.key());
+            if (!held.contains(where.key()))
+            {
+                solver->setPinned(vertex, true);
+                held.insert(where.key());
+            }
+            const QVector3D at = solver->position(vertex);
+            const QVector3D way = where.value() - at;
+            solver->moveVertex(vertex, way.length() > furthest ? at + way.normalized() * furthest : where.value());
+        }
+    };
     if (sewing)
     {
         solver->setGravity(QVector3D());
@@ -176,8 +253,32 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation, Comput
 
     while (!m_stopping)
     {
+        if (waiting)
+        {
+            if (!m_pulling && m_holds_changes == holds_seen)
+            {
+                QThread::msleep(idle_ms);
+                continue;
+            }
+            waiting = false;
+            emit woke(generation);
+        }
+
+        // Held somewhere else, or pulled or let go: whether the cloth is at rest is found out afresh.
+        const bool pulling = m_pulling;
+        const int changes = m_holds_changes;
+        if (pulling != was_pulling || changes != holds_seen)
+        {
+            resting = false;
+            moving_steps = 0;
+            window_start = solver->positions();
+        }
+        was_pulling = pulling;
+        holds_seen = changes;
+        hold();
         solver->step(time_step);
         ++steps;
+        ++moving_steps;
         falling_steps += sewing ? 0 : 1;
 
         if (sewing && steps % check_steps == 0 && (solver->widestStitch() <= sewn_gap || steps >= max_sewing_steps))
@@ -189,7 +290,7 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation, Comput
             solver->setSelfContact(self_contact);
         }
 
-        if (steps % resting_window == 0)
+        if (moving_steps % resting_window == 0)
         {
             const QVector<QVector3D> positions = solver->positions();
             const float furthest = static_cast<float>(resting_speed * time_step * resting_window);
@@ -202,7 +303,8 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation, Comput
             resting = moving <= positions.size() / restless_share;
         }
 
-        const bool at_rest = !sewing && falling_steps >= earliest_rest && resting;
+        const bool at_rest = !sewing && falling_steps >= earliest_rest && moving_steps >= earliest_rest && resting
+                             && !m_pulling;
         if (at_rest || (!m_frame_pending && since_frame.elapsed() >= frame_interval_ms))
         {
             m_frame_pending = true;
@@ -213,7 +315,7 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation, Comput
         if (at_rest)
         {
             emit settled(generation);
-            m_stopping = true;
+            waiting = true;
         }
     }
 

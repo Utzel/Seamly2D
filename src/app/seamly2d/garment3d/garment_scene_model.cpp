@@ -198,6 +198,8 @@ GarmentSceneModel::GarmentSceneModel(QObject* parent)
     , m_avatar_shown(true)
     , m_mesh_shown(false)
     , m_hidden_pieces()
+    , m_simulating(false)
+    , m_pins()
     , m_thread_color()
     , m_images()
 {}
@@ -855,6 +857,108 @@ void GarmentSceneModel::setHiddenPieces(const QSet<quint32>& pieces)
         {
             emit dataChanged(index(0), index(static_cast<int>(m_rows.size()) - 1), {PieceShownRole});
         }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Whether the cloth is draping, which lets it be pulled with the mouse.
+bool GarmentSceneModel::isSimulating() const
+{
+    return m_simulating;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentSceneModel::setSimulating(bool simulating)
+{
+    if (simulating != m_simulating)
+    {
+        m_simulating = simulating;
+        emit simulatingChanged();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Where the pins holding the cloth are, in scene coordinates.
+QVariantList GarmentSceneModel::pins() const
+{
+    return m_pins;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentSceneModel::setPins(const QVector<QVector3D>& pins)
+{
+    QVariantList shown;
+    for (const QVector3D& pin : pins)
+    {
+        shown.append(pin);
+    }
+    if (shown != m_pins)
+    {
+        m_pins = shown;
+        emit pinsChanged();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML when the cloth of a piece is pressed on while draping, at a point in scene coordinates: a
+/// piece on the avatar is taken hold of there and follows the mouse until let go. Says whether it was taken hold of.
+bool GarmentSceneModel::pullCloth(int id, qreal x, qreal y, qreal z)
+{
+    const bool pulled = m_simulating && id != 0 && isPlaced(static_cast<quint32>(id));
+    if (pulled)
+    {
+        emit pullRequested(static_cast<quint32>(id),
+                           QVector3D(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)));
+    }
+    return pulled;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML when a pin is pressed on while draping: it follows the mouse, the cloth with it. Says whether
+/// it was taken hold of.
+bool GarmentSceneModel::pullPin(int index)
+{
+    const bool pulled = m_simulating && index >= 0 && index < m_pins.size();
+    if (pulled)
+    {
+        emit pinPullRequested(index);
+    }
+    return pulled;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML while the cloth or a pin is held, with where the mouse is, in scene coordinates.
+void GarmentSceneModel::pullTo(qreal x, qreal y, qreal z)
+{
+    emit pullMoved(QVector3D(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML when the cloth or a pin held is let go.
+void GarmentSceneModel::releasePull()
+{
+    emit pullReleased();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML when a piece is clicked to pin it, at a point in scene coordinates; only pieces on the avatar
+/// are pinned.
+void GarmentSceneModel::pinCloth(int id, qreal x, qreal y, qreal z)
+{
+    if (id != 0 && isPlaced(static_cast<quint32>(id)))
+    {
+        emit pinRequested(static_cast<quint32>(id),
+                          QVector3D(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML when a pin is clicked to take it out.
+void GarmentSceneModel::unpin(int index)
+{
+    if (index >= 0 && index < m_pins.size())
+    {
+        emit unpinRequested(index);
     }
 }
 

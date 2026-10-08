@@ -25,6 +25,8 @@
 #ifndef DRAPE_RUNNER_H
 #define DRAPE_RUNNER_H
 
+#include <QHash>
+#include <QMutex>
 #include <QObject>
 #include <QSharedPointer>
 #include <QString>
@@ -41,12 +43,15 @@ class QThread;
 /// @brief Runs a cloth simulation on a thread of its own and hands out where the cloth is, a frame at a time.
 ///
 /// The simulation runs as fast as it can, not in real time, so a drape settles quickly. A new frame is only sent
-/// once the last one was shown, so a slow view never falls behind. Once the cloth has come to rest the runner
-/// stops by itself. Each start counts up the generation, so frames still on their way from an earlier run can be
-/// told apart.
+/// once the last one was shown, so a slow view never falls behind. Once the cloth has come to rest the runner says so
+/// and waits, working out nothing, until the cloth is held somewhere else or pulled, or it is stopped. Each start
+/// counts up the generation, so frames still on their way from an earlier run can be told apart.
 ///
 /// The solver's sweeps run on the graphics card, if there is one that can compute and it isn't switched off; the
 /// runner opens it on its thread for each run and closes it again after.
+///
+/// Vertices can be held, by pins or by the mouse pulling the cloth: they stay where they are held, moving there as fast
+/// as a hand would, and the cloth around them follows. While the cloth is pulled, it isn't taken to be at rest.
 class DrapeRunner : public QObject
 {
     Q_OBJECT
@@ -61,10 +66,13 @@ public:
     int                generation() const;
     void               frameShown();
     void               setOnDevice(bool on_device);
+    void               setHolds(const QHash<int, QVector3D>& holds);
+    void               setPulling(bool pulling);
 
 signals:
     void               frameReady(int generation, const QVector<QVector3D>& positions);
     void               settled(int generation);
+    void               woke(int generation);
     void               computing(int generation, const QString& device);
 
 private:
@@ -76,6 +84,10 @@ private:
     std::atomic<bool>  m_frame_pending;
     bool               m_on_device;
     std::unique_ptr<ComputeDevice> m_device;
+    QMutex             m_holds_mutex;
+    QHash<int, QVector3D> m_holds;
+    std::atomic<int>   m_holds_changes;
+    std::atomic<bool>  m_pulling;
 
     void               run(QSharedPointer<ClothSolver> solver, int generation, ComputeDevice* device);
 };

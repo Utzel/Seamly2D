@@ -82,6 +82,8 @@ public:
                        GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QWidget* parent = nullptr);
     virtual           ~GarmentViewWidget();
 
+    bool               isDraping() const;
+
 signals:
     void               pieceSelected(quint32 id);
 
@@ -137,8 +139,16 @@ private slots:
     void               saveSnapshot();
     void               hideSelectedPiece();
     void               showAllPieces();
+    void               pullCloth(quint32 piece, const QVector3D& point);
+    void               pullPin(int index);
+    void               movePull(const QVector3D& point);
+    void               releasePull();
+    void               pinCloth(quint32 piece, const QVector3D& point);
+    void               unpin(int index);
+    void               removeAllPins();
     void               drapeFrame(int generation, const QVector<QVector3D>& positions);
     void               drapeSettled(int generation);
+    void               drapeWoke(int generation);
     void               updateActions();
 
 private:
@@ -206,6 +216,25 @@ private:
         int     count = 0;
     };
 
+    // A pin holding the cloth on the avatar: on which piece, where in the flat piece, and where it holds it, in scene
+    // coordinates.
+    struct ClothPin
+    {
+        quint32   piece = 0;
+        QPointF   rest;
+        QVector3D position;
+    };
+
+    // What the mouse holds while draping: the cloth at a place in a flat piece and where it pulls it, or a pin.
+    struct ClothPull
+    {
+        bool      active = false;
+        quint32   piece = 0;
+        QPointF   rest;
+        QVector3D target;
+        int       pin = -1;  ///< the pin held; -1 for cloth
+    };
+
     VContainer*                m_data;
     VAbstractPattern*          m_doc;
     GarmentSceneModel*         m_scene_model;
@@ -226,6 +255,7 @@ private:
     QAction*                   m_reset_action;
     QAction*                   m_fine_action;
     QAction*                   m_device_action;
+    QAction*                   m_remove_pins_action;
     QAction*                   m_fit_action;
     QActionGroup*              m_fit_maps;
     QAction*                   m_checks_action;
@@ -261,6 +291,9 @@ private:
     QVector<GarmentPiece>      m_garment_pieces;
     DrapeRunner*               m_runner;
     PieceDrag                  m_drag;
+    QVector<ClothPin>          m_pins;
+    bool                       m_resting;
+    ClothPull                  m_pull;
 
     void               createScene();
     void               createToolBar();
@@ -291,6 +324,8 @@ private:
     CachedMesh         garmentMeshes(quint32 id, const PieceOutline& outline, PieceSymmetry wanted) const;
     void               startSimulation();
     void               updateHint();
+    int                drapeVertex(quint32 piece, const QPointF& rest) const;
+    void               updateHolds();
     void               updateAvatar();
     AvatarRequest      wantedAvatar() const;
     AvatarRequest      measuredAvatar() const;

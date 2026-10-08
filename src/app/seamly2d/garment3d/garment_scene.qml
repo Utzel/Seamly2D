@@ -91,6 +91,9 @@ Rectangle {
     // Set while a placed piece is dragged around the avatar, which holds the camera still.
     property bool draggingPiece: false
 
+    // Set while the cloth, or a pin, is pulled with the mouse while draping, which holds the camera still too.
+    property bool pulling: false
+
     // Set while a snapshot is taken, which leaves out the hints over the scene.
     property bool capturing: false
 
@@ -106,6 +109,27 @@ Rectangle {
                 return results[i].scenePosition
             }
         }
+        return root.rayPoint(x, y)
+    }
+
+    // The pin within pickDistance pixels of a point of the view, the nearest; -1 for none.
+    function pinNear(x, y) {
+        const pins = root.sceneModel.pins
+        let found = -1
+        let nearest = root.pickDistance
+        for (let i = 0; i < pins.length; ++i) {
+            const at = view.mapFrom3DScene(pins[i])
+            const apart = Math.hypot(at.x - x, at.y - y)
+            if (apart <= nearest) {
+                nearest = apart
+                found = i
+            }
+        }
+        return found
+    }
+
+    // The point along the ray through a point of the view as far from the eye as where the mouse took hold.
+    function rayPoint(x, y) {
         const near = view.mapTo3DScene(Qt.vector3d(x, y, 0))
         const far = view.mapTo3DScene(Qt.vector3d(x, y, 100))
         return near.plus(far.minus(near).normalized().times(root.dragDistance))
@@ -290,6 +314,29 @@ Rectangle {
             tilingModeVertical: Texture.Repeat
             generateMipmaps: true
             mipFilter: Texture.Linear
+        }
+
+        // The pins holding the cloth, small heads in the highlight color, as large on the screen however far off.
+        Repeater3D {
+            model: root.sceneModel.pins
+
+            delegate: Model {
+                required property var modelData
+
+                source: "#Sphere"
+                position: modelData
+                scale: {
+                    const size = camera.scenePosition.minus(modelData).length() * 0.00012
+                    return Qt.vector3d(size, size, size)
+                }
+                castsShadows: false
+
+                materials: PrincipledMaterial {
+                    baseColor: root.highlightColor
+                    roughness: 0.35
+                    metalness: 0.0
+                }
+            }
         }
 
         // The pieces, flat on a board; with an avatar the board stands behind it.
@@ -502,7 +549,7 @@ Rectangle {
         anchors.fill: parent
         origin: orbit_origin
         camera: camera
-        mouseEnabled: !root.draggingPiece
+        mouseEnabled: !root.draggingPiece && !root.pulling
 
         // While arranging, a placed piece pressed on follows the mouse around the avatar until it is let go.
         PointHandler {
@@ -543,7 +590,67 @@ Rectangle {
 
         // While arranging, a click on the avatar places the selected piece there; while topstitching, a click near an
         // edge stitches it. Otherwise seams get the click first, and what they leave selects a piece.
+        // While draping, cloth on the avatar pressed on is held by the mouse and pulled where it goes, at the distance
+        // it was taken hold of; a pin pressed on moves with the mouse, the cloth with it.
+        PointHandler {
+            id: pull_handler
+            enabled: root.sceneModel.simulating && !root.sceneModel.arranging && !root.seamEditor.sewing
+                     && !root.stitchEditor.stitching
+            acceptedButtons: Qt.LeftButton
+            acceptedModifiers: Qt.NoModifier
+
+            onActiveChanged: {
+                if (pull_handler.active) {
+                    const x = pull_handler.point.position.x
+                    const y = pull_handler.point.position.y
+                    const pin = root.pinNear(x, y)
+                    const eye = view.mapTo3DScene(Qt.vector3d(x, y, 0))
+                    if (pin >= 0) {
+                        root.pulling = root.sceneModel.pullPin(pin)
+                        root.dragDistance = root.sceneModel.pins[pin].minus(eye).length()
+                    } else {
+                        const result = view.pick(x, y)
+                        const target = result.objectHit
+                        if (target && target.pieceId !== undefined) {
+                            root.pulling = root.sceneModel.pullCloth(target.pieceId, result.scenePosition.x,
+                                                                     result.scenePosition.y, result.scenePosition.z)
+                            root.dragDistance = result.scenePosition.minus(eye).length()
+                        }
+                    }
+                } else if (root.pulling) {
+                    root.pulling = false
+                    root.sceneModel.releasePull()
+                }
+            }
+            onPointChanged: {
+                if (root.pulling && pull_handler.active) {
+                    const at = root.rayPoint(pull_handler.point.position.x, pull_handler.point.position.y)
+                    root.sceneModel.pullTo(at.x, at.y, at.z)
+                }
+            }
+        }
+
+        // Shift+click pins the cloth on the avatar where it is clicked, or takes a pin clicked out.
         TapHandler {
+            acceptedModifiers: Qt.ShiftModifier
+            enabled: !root.sceneModel.arranging && !root.seamEditor.sewing && !root.stitchEditor.stitching
+
+            onTapped: (event_point) => {
+                const pin = root.pinNear(event_point.position.x, event_point.position.y)
+                const result = view.pick(event_point.position.x, event_point.position.y)
+                const target = result.objectHit
+                if (pin >= 0) {
+                    root.sceneModel.unpin(pin)
+                } else if (target && target.pieceId !== undefined) {
+                    root.sceneModel.pinCloth(target.pieceId, result.scenePosition.x, result.scenePosition.y,
+                                             result.scenePosition.z)
+                }
+            }
+        }
+
+        TapHandler {
+            acceptedModifiers: Qt.NoModifier
+
             onTapped: (event_point) => {
                 const x = event_point.position.x
                 const y = event_point.position.y

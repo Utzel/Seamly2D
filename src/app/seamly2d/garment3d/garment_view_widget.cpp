@@ -66,6 +66,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <limits>
 #include <tuple>
 #include <utility>
 
@@ -267,6 +268,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_reset_action(nullptr)
     , m_fine_action(nullptr)
     , m_device_action(nullptr)
+    , m_remove_pins_action(nullptr)
     , m_fit_action(nullptr)
     , m_fit_maps(nullptr)
     , m_checks_action(nullptr)
@@ -301,6 +303,9 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_drape_pieces()
     , m_runner(new DrapeRunner(this))
     , m_drag()
+    , m_pins()
+    , m_resting(false)
+    , m_pull()
 {
     QVBoxLayout* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -336,10 +341,17 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     connect(m_scene_model, &GarmentSceneModel::grabRequested, this, &GarmentViewWidget::grabPiece);
     connect(m_scene_model, &GarmentSceneModel::dragRequested, this, &GarmentViewWidget::dragPiece);
     connect(m_scene_model, &GarmentSceneModel::dropRequested, this, &GarmentViewWidget::dropPiece);
+    connect(m_scene_model, &GarmentSceneModel::pullRequested, this, &GarmentViewWidget::pullCloth);
+    connect(m_scene_model, &GarmentSceneModel::pinPullRequested, this, &GarmentViewWidget::pullPin);
+    connect(m_scene_model, &GarmentSceneModel::pullMoved, this, &GarmentViewWidget::movePull);
+    connect(m_scene_model, &GarmentSceneModel::pullReleased, this, &GarmentViewWidget::releasePull);
+    connect(m_scene_model, &GarmentSceneModel::pinRequested, this, &GarmentViewWidget::pinCloth);
+    connect(m_scene_model, &GarmentSceneModel::unpinRequested, this, &GarmentViewWidget::unpin);
     connect(m_scene_model, &GarmentSceneModel::selectedPieceChanged, this, &GarmentViewWidget::updateActions);
     connect(m_scene_model, &GarmentSceneModel::avatarChanged, this, &GarmentViewWidget::updateActions);
     connect(m_runner, &DrapeRunner::frameReady, this, &GarmentViewWidget::drapeFrame);
     connect(m_runner, &DrapeRunner::settled, this, &GarmentViewWidget::drapeSettled);
+    connect(m_runner, &DrapeRunner::woke, this, &GarmentViewWidget::drapeWoke);
     connect(m_runner, &DrapeRunner::computing, this, &GarmentViewWidget::showComputing);
 }
 
@@ -614,6 +626,13 @@ void GarmentViewWidget::rebuildScene()
     m_seam_editor->setSeams(m_doc->getSeams());
     m_seam_editor->setUnit(qApp->patternUnit());
     m_seam_editor->setPieces(shown_pieces);
+
+    // Pins only hold pieces on the avatar.
+    m_pins.erase(std::remove_if(m_pins.begin(), m_pins.end(), [this](const ClothPin& pin)
+    {
+        return !m_scene_model->isPlaced(pin.piece);
+    }), m_pins.end());
+    updateHolds();
     showSeamsOnAvatar();
 
     updateAvatar();
@@ -705,9 +724,10 @@ void GarmentViewWidget::avatarFitted()
             m_scene_model->setAvatar(result.positions, m_body_model->triangles(), m_body_model->skinVertexCount(),
                                      avatarNote(result));
 
-            // A new body takes the drape with it; arranged pieces are put on it afresh.
+            // A new body takes the drape and the pins with it; arranged pieces are put on it afresh.
             m_simulate_action->setChecked(false);
             m_draped.clear();
+            m_pins.clear();
             m_wrap.reset(new BodyWrap(*m_body_model, result.positions));
             m_collider = BodyCollider(result.positions.mid(0, m_body_model->skinVertexCount()),
                                       m_body_model->triangles());
@@ -1356,6 +1376,8 @@ void GarmentViewWidget::startSimulation()
     }
 
     solver->setCollider(m_collider);
+    updateHolds();
+    m_resting = false;
     m_runner->start(solver);
 }
 
@@ -1365,6 +1387,7 @@ void GarmentViewWidget::resetDrape()
 {
     m_simulate_action->setChecked(false);
     m_draped.clear();
+    m_pins.clear();
     rebuildScene();
 }
 
@@ -1389,12 +1412,31 @@ void GarmentViewWidget::drapeFrame(int generation, const QVector<QVector3D>& pos
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// The cloth came to rest, so the simulation stopped by itself.
+/// @brief Whether the cloth is moving: the drape is on and hasn't come to rest.
+bool GarmentViewWidget::isDraping() const
+{
+    return m_runner->isRunning() && !m_resting;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The cloth came to rest. The drape stays on, working out nothing, until the cloth is pulled or pinned somewhere else.
 void GarmentViewWidget::drapeSettled(int generation)
 {
     if (generation == m_runner->generation())
     {
-        m_simulate_action->setChecked(false);
+        m_resting = true;
+        updateHint();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The cloth at rest was pulled or pinned somewhere else, so it drapes again.
+void GarmentViewWidget::drapeWoke(int generation)
+{
+    if (generation == m_runner->generation())
+    {
+        m_resting = false;
+        updateHint();
     }
 }
 
@@ -1443,6 +1485,8 @@ void GarmentViewWidget::updateActions()
     m_reset_action->setEnabled(!m_draped.isEmpty());
     m_export_action->setEnabled(has_avatar && !m_scene_model->placedPieces().isEmpty());
     m_snapshot_action->setEnabled(m_scene_model->pieceCount() > 0 || has_avatar);
+    m_remove_pins_action->setEnabled(!m_pins.isEmpty());
+    m_scene_model->setSimulating(m_runner->isRunning());
     m_hide_piece_action->setEnabled(m_scene_model->selectedPiece() != 0);
     m_show_pieces_action->setEnabled(!m_scene_model->hiddenPieces().isEmpty());
 
@@ -1951,6 +1995,166 @@ void GarmentViewWidget::saveSnapshot()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// The cloth of a piece on the avatar was taken hold of while draping, at a point in scene coordinates: it is held
+// there, then pulled after the mouse.
+void GarmentViewWidget::pullCloth(quint32 piece, const QVector3D& point)
+{
+    const QVariant rest = m_scene_model->restPoint(static_cast<int>(piece), point);
+    if (rest.isValid())
+    {
+        m_pull = ClothPull();
+        m_pull.active = true;
+        m_pull.piece = piece;
+        m_pull.rest = rest.toPointF();
+        m_pull.target = point;
+        m_runner->setPulling(true);
+        updateHolds();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A pin was taken hold of while draping: it follows the mouse, the cloth with it.
+void GarmentViewWidget::pullPin(int index)
+{
+    if (index >= 0 && index < m_pins.size())
+    {
+        m_pull = ClothPull();
+        m_pull.active = true;
+        m_pull.pin = index;
+        m_runner->setPulling(true);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The mouse holding the cloth or a pin moved to a point in scene coordinates.
+void GarmentViewWidget::movePull(const QVector3D& point)
+{
+    if (m_pull.active)
+    {
+        if (m_pull.pin >= 0 && m_pull.pin < m_pins.size())
+        {
+            m_pins[m_pull.pin].position = point;
+        }
+        else
+        {
+            m_pull.target = point;
+        }
+        updateHolds();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The cloth or the pin held is let go: the cloth falls back, a pin stays where it was put.
+void GarmentViewWidget::releasePull()
+{
+    m_pull = ClothPull();
+    updateHolds();
+    m_runner->setPulling(false);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A piece on the avatar was clicked to pin it, at a point in scene coordinates: the cloth there is held where it is.
+void GarmentViewWidget::pinCloth(quint32 piece, const QVector3D& point)
+{
+    const QVariant rest = m_scene_model->restPoint(static_cast<int>(piece), point);
+    if (rest.isValid())
+    {
+        m_pins.append({piece, rest.toPointF(), point});
+        updateHolds();
+        updateActions();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::unpin(int index)
+{
+    if (index >= 0 && index < m_pins.size())
+    {
+        if (m_pull.pin >= 0)
+        {
+            m_pull = ClothPull();
+            m_runner->setPulling(false);
+        }
+        m_pins.remove(index);
+        updateHolds();
+        updateActions();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::removeAllPins()
+{
+    m_pins.clear();
+    if (m_pull.pin >= 0)
+    {
+        m_pull = ClothPull();
+        m_runner->setPulling(false);
+    }
+    updateHolds();
+    updateActions();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The vertex of the drape being simulated nearest to a place in a flat piece on the avatar; -1 if the piece isn't
+// draping.
+int GarmentViewWidget::drapeVertex(quint32 piece, const QPointF& rest) const
+{
+    for (const DrapePiece& drape_piece : m_drape_pieces)
+    {
+        if (drape_piece.id != piece)
+        {
+            continue;
+        }
+        for (const GarmentPiece& garment_piece : m_garment_pieces)
+        {
+            if (garment_piece.id == piece && garment_piece.mesh.vertexCount() == drape_piece.count)
+            {
+                int nearest = -1;
+                qreal shortest = std::numeric_limits<qreal>::infinity();
+                for (int i = 0; i < garment_piece.mesh.vertexCount(); ++i)
+                {
+                    const qreal distance = QLineF(garment_piece.mesh.rest_positions.at(i), rest).length();
+                    if (distance < shortest)
+                    {
+                        shortest = distance;
+                        nearest = i;
+                    }
+                }
+                return nearest < 0 ? -1 : drape_piece.offset + nearest;
+            }
+        }
+    }
+    return -1;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Tells the drape where the cloth is held, by the pins and by the mouse, and the scene where the pins are.
+void GarmentViewWidget::updateHolds()
+{
+    QHash<int, QVector3D> holds;
+    QVector<QVector3D> pins;
+    for (const ClothPin& pin : m_pins)
+    {
+        const int vertex = drapeVertex(pin.piece, pin.rest);
+        if (vertex >= 0)
+        {
+            holds.insert(vertex, pin.position);
+        }
+        pins.append(pin.position);
+    }
+    if (m_pull.active && m_pull.pin < 0)
+    {
+        const int vertex = drapeVertex(m_pull.piece, m_pull.rest);
+        if (vertex >= 0)
+        {
+            holds.insert(vertex, m_pull.target);
+        }
+    }
+    m_runner->setHolds(holds);
+    m_scene_model->setPins(pins);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Hides the selected piece, and its copy, in the scene; they still drape.
 void GarmentViewWidget::hideSelectedPiece()
 {
@@ -2055,7 +2259,10 @@ void GarmentViewWidget::updateHint()
     QString hint;
     if (m_runner->isRunning())
     {
-        hint = tr("Draping. Simulate stops it, Reset puts the pieces back where they were arranged.");
+        hint = m_resting ? tr("At rest. Drag the cloth to pull it, Shift+click to pin it there or to take a pin out. "
+                              "Simulate stops draping, Reset puts the pieces back where they were arranged.")
+                         : tr("Draping. Drag the cloth to pull it, Shift+click to pin it there or to take a pin out. "
+                              "Simulate stops draping, Reset puts the pieces back where they were arranged.");
     }
     else if (m_scene_model->isArranging())
     {
@@ -2255,8 +2462,9 @@ void GarmentViewWidget::createToolBar()
 
     m_simulate_action = tool_bar->addAction(tr("Simulate"));
     m_simulate_action->setCheckable(true);
-    m_simulate_action->setToolTip(tr("Drape the pieces on the avatar, sewn together by their seams; Space starts and "
-                                     "stops it"));
+    m_simulate_action->setToolTip(tr("Drape the pieces on the avatar, sewn together by their seams; at rest, the "
+                                     "cloth can be pulled and pinned until draping is switched off again. Space "
+                                     "starts and stops it"));
     m_simulate_action->setShortcut(Qt::Key_Space);
     m_simulate_action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
     addAction(m_simulate_action);
@@ -2277,6 +2485,11 @@ void GarmentViewWidget::createToolBar()
     m_device_action->setToolTip(tr("Work out the drape on the graphics card, which is much faster, if it can; "
                                    "otherwise on the processor"));
     connect(m_device_action, &QAction::toggled, this, &GarmentViewWidget::setOnDevice);
+    simulate_menu->addSeparator();
+    m_remove_pins_action = simulate_menu->addAction(tr("Remove All Pins"));
+    m_remove_pins_action->setToolTip(tr("Take out every pin holding the cloth; Shift+click on the cloth pins it, on a pin "
+                                        "takes that one out"));
+    connect(m_remove_pins_action, &QAction::triggered, this, &GarmentViewWidget::removeAllPins);
     m_simulate_action->setMenu(simulate_menu);
     if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_simulate_action)))
     {
