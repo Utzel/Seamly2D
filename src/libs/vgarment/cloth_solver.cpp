@@ -25,6 +25,7 @@
 #include "cloth_solver.h"
 
 #include <QHash>
+#include <QLineF>
 #include <QtConcurrent/QtConcurrentMap>
 #include <QThread>
 #include <QtMath>
@@ -114,6 +115,11 @@ const double fold_short_of_flat = 5.0 * M_PI / 180.0;
 // A hinge further than this many radians from the angle it holds pulls no harder than this far: cloth starting flat
 // on a fold onto itself would otherwise be thrown about by it.
 const double hardest_pull = M_PI / 4.0;
+
+// An elastic's membranes are strips this wide, in cm, the width its stiffness is given for; and it is at least this
+// share of its line long.
+const double elastic_width = 1.0;
+const double shortest_elastic = 0.1;
 
 //---------------------------------------------------------------------------------------------------------------------
 struct Vec3
@@ -1035,6 +1041,63 @@ void ClothSolver::addSeamFold(const SeamStretch& first, const SeamStretch& secon
         hinge.seam = true;
         hinge.rest_angle = rest_angle;
         m_hinges.append(hinge);
+    }
+    m_prepared = false;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Sews an elastic along a line of the cloth, as ClothElastic says. Each edge of the line, in one piece, gets a
+/// membrane stretching only along it, drafted as long as the elastic's share of the edge, a strip 1 cm wide as stiff as
+/// the elastic, which the sweeps solve as they do the cloth's. It needs a third corner, which doesn't move it: one of a
+/// triangle at the edge.
+void ClothSolver::addElastic(const ClothElastic& elastic)
+{
+    const int count = vertexCount();
+    QHash<quint64, int> third_corner;
+    for (int i = 0; i + 1 < elastic.vertices.size(); ++i)
+    {
+        third_corner.insert(edgeKey(elastic.vertices.at(i), elastic.vertices.at(i + 1)), -1);
+    }
+    for (int f = 0; f + 2 < m_faces.size(); f += 3)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            const quint64 key = edgeKey(static_cast<quint32>(m_faces.at(f + k)),
+                                        static_cast<quint32>(m_faces.at(f + (k + 1) % 3)));
+            const auto edge = third_corner.find(key);
+            if (edge != third_corner.end() && edge.value() < 0)
+            {
+                edge.value() = m_faces.at(f + (k + 2) % 3);
+            }
+        }
+    }
+
+    const double ratio = qMax(elastic.ratio, shortest_elastic);
+    for (int i = 0; i + 1 < elastic.vertices.size(); ++i)
+    {
+        const int a = static_cast<int>(elastic.vertices.at(i));
+        const int b = static_cast<int>(elastic.vertices.at(i + 1));
+        const int c = third_corner.value(edgeKey(elastic.vertices.at(i), elastic.vertices.at(i + 1)), -1);
+        if (a == b || a >= count || b >= count || c < 0 || m_pieces.at(a) != m_pieces.at(b))
+        {
+            continue;
+        }
+        const double length = QLineF(m_rest.at(a), m_rest.at(b)).length() * ratio;
+        if (length <= tiny)
+        {
+            continue;
+        }
+
+        // The deformation gradient's weft column is the edge as stretched from that length; its warp is none.
+        Membrane membrane;
+        membrane.vertices[0] = a;
+        membrane.vertices[1] = b;
+        membrane.vertices[2] = c;
+        membrane.area = length * elastic_width;
+        membrane.shape[0][0] = -1.0 / length;
+        membrane.shape[1][0] = 1.0 / length;
+        membrane.weft = elastic.stiffness / elastic_width;
+        m_membranes.append(membrane);
     }
     m_prepared = false;
 }

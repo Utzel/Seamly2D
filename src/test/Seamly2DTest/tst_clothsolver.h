@@ -51,6 +51,8 @@ private slots:
     void layersKeepTheirOrder() const;
     void piecesGatherIntoOneSeam_data() const;
     void piecesGatherIntoOneSeam() const;
+    void elasticGathersTheCloth_data() const;
+    void elasticGathersTheCloth() const;
     void seamsCloseDespiteSelfContact_data() const;
     void seamsCloseDespiteSelfContact() const;
     void biasGivesMoreThanGrain() const;

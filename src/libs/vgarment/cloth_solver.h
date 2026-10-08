@@ -76,6 +76,17 @@ struct ClothFold
     qreal            strength = 1.0;
 };
 
+/// @brief An elastic sewn along a line of the cloth, as CLO's: the vertices along it, in order, counting over all
+/// pieces, the share of the line's drafted length the elastic is long, which it pulls the cloth together to, gathering
+/// it, and how hard it pulls once stretched, in g cm/s² for each time its own length it is stretched by: 10 N for a soft
+/// elastic band about 1 cm wide.
+struct ClothElastic
+{
+    QVector<quint32> vertices;
+    qreal            ratio = 0.8;
+    qreal            stiffness = 1.0e6;
+};
+
 /// @brief Where a piece of cloth is worn among the others, as CLO's layers: where pieces lie on each other facing the
 /// same way, one of a higher layer keeps to the outside of one of a lower layer, even from inside it, as a pocket lies
 /// on a front, a shell over its lining or a coat over a dress. A piece's outside is its right side, unless it is worn
@@ -99,8 +110,9 @@ struct ClothLayer
 /// resists bending with Bergou et al.'s quadratic bending (SCA 2006); along a fold, it holds the fold's angle instead,
 /// with the discrete shells' hinge (Grinspun et al., SCA 2003). Both are given in what fabric testing measures,
 /// so the cloth behaves the same however finely it is meshed; only stretching stiffer than the sweeps of a step can
-/// follow is taken to be as stiff as they can. Stitches pull the sides of seams together, the body pushes the cloth
-/// out and holds it by friction. As in the paper, each vertex picks the body
+/// follow is taken to be as stiff as they can. An elastic stretches along each edge of its line as a membrane drafted
+/// that edge's share long and no wider, so the sweeps take it as they take the cloth. Stitches pull the sides of seams
+/// together, the body pushes the cloth out and holds it by friction. As in the paper, each vertex picks the body
 /// triangle it may touch once per step and keeps it through the sweeps. Large colours are solved in parallel.
 ///
 /// The cloth also keeps its thickness from itself: the parts of it that may touch, a vertex and a triangle or two
@@ -141,6 +153,7 @@ public:
     void               addStitches(const QVector<Stitch>& stitches);
     void               addSeamFold(const SeamStretch& first, const SeamStretch& second, qreal angle,
                                    qreal strength = 1.0);
+    void               addElastic(const ClothElastic& elastic);
     void               setCollider(const BodyCollider& collider);
     void               setPinned(quint32 vertex, bool pinned);
     void               moveVertex(quint32 vertex, const QVector3D& position);

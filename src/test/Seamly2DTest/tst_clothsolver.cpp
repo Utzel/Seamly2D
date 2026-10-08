@@ -788,6 +788,57 @@ void TST_ClothSolver::piecesGatherIntoOneSeam() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+void TST_ClothSolver::elasticGathersTheCloth_data() const
+{
+    onProcessorAndDevice();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// An elastic half as long as the top edge of a 40 cm strip, sewn along it, gathers it to about 20 cm; the strip's bottom
+// edge, without, stays about as wide as it is drafted.
+void TST_ClothSolver::elasticGathersTheCloth() const
+{
+    QFETCH(bool, on_device);
+    ClothSettings settings;
+    settings.floor = false;
+    settings.gravity = QVector3D();
+    ClothSolver solver(settings);
+    const GarmentMesh strip = PieceMesher().meshOutline(rectangle(0, 0, 40, 10, 1));
+    solver.addMesh(strip, standing(strip));
+    ClothElastic elastic;
+    elastic.vertices = strip.stretch(1, 2).vertices();
+    elastic.ratio = 0.5;
+    solver.addElastic(elastic);
+    ComputeDevice device;
+    if (on_device && !solver.useDevice(device.open()))
+    {
+        QSKIP("No graphics card here can compute");
+    }
+    for (int i = 0; i < 300; ++i)
+    {
+        solver.step(frame);
+    }
+    QCOMPARE(solver.isOnDevice(), on_device);
+    solver.useDevice(nullptr);
+
+    const QVector<QVector3D> positions = solver.positions();
+    auto at = [&strip, &positions](const QPointF& rest)
+    {
+        int nearest = 0;
+        for (int i = 0; i < strip.vertexCount(); ++i)
+        {
+            nearest = QLineF(strip.rest_positions.at(i), rest).length()
+                              < QLineF(strip.rest_positions.at(nearest), rest).length() ? i : nearest;
+        }
+        return positions.at(nearest);
+    };
+    const float top = (at(QPointF(40, 0)) - at(QPointF(0, 0))).length();
+    const float bottom = (at(QPointF(40, 10)) - at(QPointF(0, 10))).length();
+    QVERIFY2(top > 16.0f && top < 25.0f && bottom > 30.0f,
+             qUtf8Printable(QStringLiteral("the top edge is %1 cm wide, the bottom %2").arg(top).arg(bottom)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void TST_ClothSolver::seamsCloseDespiteSelfContact_data() const
 {
     onProcessorAndDevice();
