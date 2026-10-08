@@ -257,6 +257,86 @@ void TST_ClothSolver::pinnedClothHangs() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+void TST_ClothSolver::heldClothFollowsTheHand_data() const
+{
+    onProcessorAndDevice();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A cloth hanging from its top edge, taken by a corner of its bottom edge and pulled 10 cm forward, follows the hand:
+// the corner is where it is held, the cloth beside it comes along, the top edge stays. Let go, it swings back.
+void TST_ClothSolver::heldClothFollowsTheHand() const
+{
+    QFETCH(bool, on_device);
+    ComputeDevice device;
+    ClothSolver solver;
+    const GarmentMesh mesh = PieceMesher().meshOutline(rectangle(0, 0, 20, 20, 1));
+    const QVector<QVector3D> flat = lyingFlat(mesh, 100);
+    solver.addMesh(mesh, flat);
+    auto nearest = [&mesh](const QPointF& rest)
+    {
+        int found = 0;
+        for (int i = 1; i < mesh.vertexCount(); ++i)
+        {
+            if (QLineF(mesh.rest_positions.at(i), rest).length() < QLineF(mesh.rest_positions.at(found), rest).length())
+            {
+                found = i;
+            }
+        }
+        return static_cast<quint32>(found);
+    };
+    for (int i = 0; i < mesh.vertexCount(); ++i)
+    {
+        solver.setPinned(static_cast<quint32>(i), qAbs(mesh.rest_positions.at(i).y()) < 1e-9);
+    }
+    const quint32 corner = nearest(QPointF(20, 20));
+    const quint32 beside = nearest(QPointF(17, 20));
+    const quint32 top = nearest(QPointF(10, 0));
+    if (on_device && !solver.useDevice(device.open()))
+    {
+        QSKIP("No graphics card here can compute");
+    }
+
+    for (int i = 0; i < 180; ++i)
+    {
+        solver.step(frame);
+    }
+    const QVector3D hanging = solver.position(corner);
+    const QVector3D beside_hanging = solver.position(beside);
+
+    // The hanging cloth lies across z; the hand pulls the corner out of it over half a second, then holds it there.
+    const QVector3D hand = hanging + QVector3D(0, 0, 10);
+    solver.setPinned(corner, true);
+    for (int i = 1; i <= 30; ++i)
+    {
+        solver.moveVertex(corner, hanging + (hand - hanging) * (static_cast<float>(i) / 30.0f));
+        solver.step(frame);
+    }
+    for (int i = 0; i < 60; ++i)
+    {
+        solver.step(frame);
+    }
+    const QVector3D held = solver.position(corner);
+    const float beside_moved = qAbs(solver.position(beside).z() - beside_hanging.z());
+    const QString report = QStringLiteral("corner held at %1 cm from the hand, beside it moved %2 cm, top edge moved %3 cm")
+                               .arg((held - hand).length()).arg(beside_moved)
+                               .arg((solver.position(top) - flat.at(static_cast<int>(top))).length());
+    QVERIFY2((held - hand).length() < 1e-3f, qUtf8Printable(report));
+    QVERIFY2(beside_moved > 5.0f, qUtf8Printable(report));
+    QVERIFY2((solver.position(top) - flat.at(static_cast<int>(top))).length() < 1e-3f, qUtf8Printable(report));
+
+    solver.setPinned(corner, false);
+    for (int i = 0; i < 300; ++i)
+    {
+        solver.step(frame);
+    }
+    QCOMPARE(solver.isOnDevice(), on_device);
+    solver.useDevice(nullptr);
+    const float back = qAbs(solver.position(corner).z() - hanging.z());
+    QVERIFY2(back < 2.0f, qUtf8Printable(QStringLiteral("let go, the corner is %1 cm off where it hung").arg(back)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Two pieces 5 cm apart, the right side of one sewn to the left side of the other, tops together.
 void TST_ClothSolver::stitchesCloseTheGap() const
 {

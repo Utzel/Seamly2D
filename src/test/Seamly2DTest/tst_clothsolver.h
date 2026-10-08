@@ -37,6 +37,8 @@ private slots:
     void freeFallFollowsGravity() const;
     void fullAirDampingKeepsNoSpeed() const;
     void pinnedClothHangs() const;
+    void heldClothFollowsTheHand_data() const;
+    void heldClothFollowsTheHand() const;
     void stitchesCloseTheGap() const;
     void colliderMeasuresDistance() const;
     void clothRestsOnSphere_data() const;

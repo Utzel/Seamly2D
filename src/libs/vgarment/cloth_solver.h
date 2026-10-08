@@ -106,11 +106,13 @@ public:
     void               addStitches(const QVector<Stitch>& stitches);
     void               setCollider(const BodyCollider& collider);
     void               setPinned(quint32 vertex, bool pinned);
+    void               moveVertex(quint32 vertex, const QVector3D& position);
     bool               useDevice(QRhi* device);
     bool               isOnDevice() const;
 
     int                vertexCount() const;
     QVector<QVector3D> positions() const;
+    QVector3D          position(quint32 vertex) const;
     QVector<QVector3D> velocities() const;
     qreal              widestStitch() const;
 

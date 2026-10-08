@@ -788,6 +788,18 @@ void ClothSolver::setPinned(quint32 vertex, bool pinned)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief Puts a vertex somewhere, at rest, as a hand holding the cloth there does. Pinned, it stays there through
+/// the steps, and the cloth around it follows.
+void ClothSolver::moveVertex(quint32 vertex, const QVector3D& position)
+{
+    if (static_cast<int>(vertex) < vertexCount())
+    {
+        store(m_position, static_cast<int>(vertex), Vec3{position.x(), position.y(), position.z()});
+        store(m_velocity, static_cast<int>(vertex), Vec3());
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief Runs the sweeps on the graphics card from the next step on, or with none on the processor again. Must be
 /// called on the thread that steps, which the device was opened on, and with none before the device closes. False if
 /// the card can't compute.
@@ -832,6 +844,19 @@ QVector<QVector3D> ClothSolver::positions() const
                                    static_cast<float>(position.z)));
     }
     return positions;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Where a vertex is, in cm.
+QVector3D ClothSolver::position(quint32 vertex) const
+{
+    QVector3D at;
+    if (static_cast<int>(vertex) < vertexCount())
+    {
+        const Vec3 position = load(m_position, static_cast<int>(vertex));
+        at = QVector3D(static_cast<float>(position.x), static_cast<float>(position.y), static_cast<float>(position.z));
+    }
+    return at;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
