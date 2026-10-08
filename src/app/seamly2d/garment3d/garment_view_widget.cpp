@@ -49,6 +49,7 @@
 #include <QPalette>
 #include <QPixmap>
 #include <QQmlError>
+#include <QQuickItem>
 #include <QQuickView>
 #include <QQuickWindow>
 #include <QSignalBlocker>
@@ -273,6 +274,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_view_action(nullptr)
     , m_hide_piece_action(nullptr)
     , m_show_pieces_action(nullptr)
+    , m_snapshot_action(nullptr)
     , m_fabric_box(nullptr)
     , m_image_action(nullptr)
     , m_image_width_action(nullptr)
@@ -1440,6 +1442,7 @@ void GarmentViewWidget::updateActions()
     m_simulate_action->setEnabled(has_avatar);
     m_reset_action->setEnabled(!m_draped.isEmpty());
     m_export_action->setEnabled(has_avatar && !m_scene_model->placedPieces().isEmpty());
+    m_snapshot_action->setEnabled(m_scene_model->pieceCount() > 0 || has_avatar);
     m_hide_piece_action->setEnabled(m_scene_model->selectedPiece() != 0);
     m_show_pieces_action->setEnabled(!m_scene_model->hiddenPieces().isEmpty());
 
@@ -1903,6 +1906,47 @@ void GarmentViewWidget::exportDrape()
     {
         QMessageBox::warning(this, tr("Export Drape"), tr("The drape could not be saved as %1.\n%2")
                                                            .arg(QDir::toNativeSeparators(path), error));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The 3D view as it is now, saved as an image, without the hints over it.
+void GarmentViewWidget::saveSnapshot()
+{
+    if (m_quick_view == nullptr || m_quick_view->rootObject() == nullptr)
+    {
+        return;
+    }
+
+    const QString png_filter = tr("PNG image (*.png)");
+    const QString jpg_filter = tr("JPEG image (*.jpg)");
+    const QFileInfo pattern(qApp->getFilePath());
+    const QString folder = qApp->getFilePath().isEmpty() ? QDir::homePath() : pattern.absolutePath();
+    const QString name = qApp->getFilePath().isEmpty() ? tr("garment") : pattern.completeBaseName();
+
+    QString filter = png_filter;
+    QString path = QFileDialog::getSaveFileName(this, tr("Save Snapshot"),
+                                                QDir(folder).filePath(name + QStringLiteral(".png")),
+                                                png_filter + QStringLiteral(";;") + jpg_filter, &filter,
+                                                qApp->Settings()->getUseNativeFileDialogs());
+    if (path.isEmpty())
+    {
+        return;
+    }
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    if (suffix != QLatin1String("png") && suffix != QLatin1String("jpg") && suffix != QLatin1String("jpeg"))
+    {
+        path += filter == jpg_filter ? QStringLiteral(".jpg") : QStringLiteral(".png");
+    }
+
+    QQuickItem* scene = m_quick_view->rootObject();
+    scene->setProperty("capturing", true);
+    const QImage image = m_quick_view->grabWindow();
+    scene->setProperty("capturing", false);
+    if (image.isNull() || !image.save(path))
+    {
+        QMessageBox::warning(this, tr("Save Snapshot"),
+                             tr("The snapshot could not be saved as %1.").arg(QDir::toNativeSeparators(path)));
     }
 }
 
@@ -2382,6 +2426,10 @@ void GarmentViewWidget::createToolBar()
         button->setPopupMode(QToolButton::InstantPopup);
     }
 
+    m_snapshot_action = tool_bar->addAction(tr("Snapshot"));
+    m_snapshot_action->setToolTip(tr("Save the 3D view as it is now as an image: PNG or JPG"));
+    connect(m_snapshot_action, &QAction::triggered, this, &GarmentViewWidget::saveSnapshot);
+
     m_export_action = tool_bar->addAction(tr("Export"));
     m_export_action->setToolTip(tr("Save the pieces on the avatar as they hang, and the avatar, for other 3D programs: "
                                    "glTF or OBJ"));
@@ -2416,6 +2464,7 @@ void GarmentViewWidget::updateIcons()
         m_checks_action->setIcon(toolIcon(QStringLiteral("checks")));
         m_image_action->setIcon(toolIcon(QStringLiteral("fabric_image")));
         m_view_action->setIcon(toolIcon(QStringLiteral("views")));
+        m_snapshot_action->setIcon(toolIcon(QStringLiteral("snapshot")));
         m_export_action->setIcon(toolIcon(QStringLiteral("export")));
     }
 }

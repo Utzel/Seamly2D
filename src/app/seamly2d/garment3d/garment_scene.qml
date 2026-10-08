@@ -91,6 +91,9 @@ Rectangle {
     // Set while a placed piece is dragged around the avatar, which holds the camera still.
     property bool draggingPiece: false
 
+    // Set while a snapshot is taken, which leaves out the hints over the scene.
+    property bool capturing: false
+
     // How far from the eye the mouse took hold of the dragged piece, in cm.
     property real dragDistance: 0
 
@@ -631,7 +634,7 @@ Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         anchors.margins: 6
-        visible: root.sceneModel.pieceCount > 0 || root.sceneModel.hasAvatar
+        visible: (root.sceneModel.pieceCount > 0 || root.sceneModel.hasAvatar) && !root.capturing
         readonly property string task: root.sceneModel.hint !== "" ? root.sceneModel.hint
                                        : root.stitchEditor.hint !== "" ? root.stitchEditor.hint
                                                                        : root.seamEditor.hint
@@ -692,7 +695,7 @@ Rectangle {
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.margins: 6
-        visible: root.sceneModel.avatarNote !== ""
+        visible: root.sceneModel.avatarNote !== "" && !root.capturing
         text: root.sceneModel.avatarNote
         color: root.textColor
         font.pointSize: 8

@@ -134,6 +134,7 @@ private slots:
     void               showStitchPreview();
     void               showSeamsOnAvatar();
     void               exportDrape();
+    void               saveSnapshot();
     void               hideSelectedPiece();
     void               showAllPieces();
     void               drapeFrame(int generation, const QVector<QVector3D>& positions);
@@ -232,6 +233,7 @@ private:
     QAction*                   m_view_action;
     QAction*                   m_hide_piece_action;
     QAction*                   m_show_pieces_action;
+    QAction*                   m_snapshot_action;
     QComboBox*                 m_fabric_box;
     QAction*                   m_image_action;
     QAction*                   m_image_width_action;
