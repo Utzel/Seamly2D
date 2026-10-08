@@ -230,12 +230,15 @@ void TST_GarmentSymmetry::seamsBetweenPairsGetTwins() const
     symmetry.setPiece(10, PieceSymmetry::Pair);
     symmetry.setPiece(20, PieceSymmetry::Pair);
 
-    const QVector<GarmentSeam> made_up = symmetry.madeUp({seam(10, 1, 2, 20, 3, 4, true)});
+    GarmentSeam turned = seam(10, 1, 2, 20, 3, 4, true);
+    turned.angle = 360;
+    const QVector<GarmentSeam> made_up = symmetry.madeUp({turned});
     QCOMPARE(made_up.size(), 2);
     const GarmentSeam& twin = made_up.at(1);
     QCOMPARE(twin.first, GarmentSeamSide({PieceOutline::mirrorId(10), 1, 2}));
     QCOMPARE(twin.second, GarmentSeamSide({PieceOutline::mirrorId(20), 3, 4}));
     QVERIFY(twin.reverse);
+    QCOMPARE(twin.angle, 360.0);
 }
 
 //---------------------------------------------------------------------------------------------------------------------

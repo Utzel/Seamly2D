@@ -54,6 +54,8 @@ private slots:
     void shearFollowsFromBias() const;
     void foldsHoldTheirAngle_data() const;
     void foldsHoldTheirAngle() const;
+    void seamsHoldTheirAngle_data() const;
+    void seamsHoldTheirAngle() const;
     void deviceSweepsAsProcessor() const;
 
 private:

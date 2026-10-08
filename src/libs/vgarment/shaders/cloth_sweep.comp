@@ -41,6 +41,7 @@ layout(std140, binding = 0) uniform Step
     int   self_roles;            // in contacts
     int   self_contacts;         // in contacts: eight for each self contact
     int   self_contact_count;
+    int   seam_folds;            // whether seams hold their angles
 } this_step;
 
 // The colour this dispatch sweeps.
@@ -70,8 +71,8 @@ layout(std430, binding = 5) buffer Stopped { int stopped[]; };
 layout(std430, binding = 6) readonly buffer Topology { int topology[]; };
 
 // The membranes (shape of corners 0 and 1; shape of corner 2 and the area; weft, warp and shear stiffness), the
-// hinges (weights; stiffness, the angle a fold holds, whether it is a fold), the stitches (how far along the edge) and
-// the body's triangles (corners; normal).
+// hinges (weights; stiffness, the angle a fold holds, whether it is a fold, whether across a seam), the stitches (how
+// far along the edge) and the body's triangles (corners; normal).
 layout(std430, binding = 7) readonly buffer Terms { vec4 terms[]; };
 
 // The body triangle each vertex may touch, or -1, then the self contacts: where each vertex's start, the roles
@@ -334,6 +335,10 @@ void addHinge(int role, vec3 position, vec3 moved, inout vec3 force, inout Mat3 
     const vec4 weights = terms[this_step.hinges + 2 * hinge];
     const vec4 hold = terms[this_step.hinges + 2 * hinge + 1];
     const float stiffness = hold.x;
+    if (hold.w > 0.5 && this_step.seam_folds == 0)
+    {
+        return;
+    }
     if (hold.z > 0.5)
     {
         addFold(hinge, corner, stiffness, hold.y, position, moved, force, hessian);

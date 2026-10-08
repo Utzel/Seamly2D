@@ -48,12 +48,15 @@ struct GarmentSeamSide
     bool    operator==(const GarmentSeamSide& other) const;
 };
 
-/// @brief Two sides sewn together, their starts meeting, or with reverse the first side's start the second's end.
+/// @brief Two sides sewn together, their starts meeting, or with reverse the first side's start the second's end, and
+/// the angle the seam holds the pieces at, on the first side's right side, as ClothFold says; less than 0 for none,
+/// the pieces bending across it as they will.
 struct GarmentSeam
 {
     GarmentSeamSide first;
     GarmentSeamSide second;
     bool            reverse = false;
+    qreal           angle = -1.0;
 };
 
 /// @brief Makes up the seams of a garment that is the same on the left and the right.

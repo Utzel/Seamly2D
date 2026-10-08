@@ -680,6 +680,14 @@ void ClothSolver::setPiecesPassThrough(bool pass_through)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief Lets seams hold the angles they are sewn at from the next step on, or not, as while the pieces are sewn
+/// together and the sides of the seams hang apart.
+void ClothSolver::setSeamFolds(bool seam_folds)
+{
+    m_settings.seam_folds = seam_folds;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief Adds a piece of cloth: its flat mesh, which gives its rest shape, where its vertices start out in cm, its
 /// fabric and the direction of its grain in the flat piece, in degrees anticlockwise from the piece's x axis, as
 /// the piece scene shows it, and the lines it is folded along. Returns the number of its first vertex; stitches and
@@ -785,6 +793,7 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
         return qAbs(u.x() * v.y() - u.y() * v.x()) / 2.0;
     };
     const double rigidity = fabric.bending * micro_newton_metre;
+    m_rigidity.append(rigidity);
 
     // The edges along folds, and which fold each is of.
     QHash<quint64, int> fold_of_edge;
@@ -876,6 +885,128 @@ void ClothSolver::addStitches(const QVector<Stitch>& stitches)
             m_stitches.append({static_cast<int>(stitch.vertex), static_cast<int>(stitch.edge_start),
                                static_cast<int>(stitch.edge_end), stitch.along});
         }
+    }
+    m_prepared = false;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Has a seam hold the cloth at an angle across it, as ClothFold says on the first side's right side, as stiffly
+/// as a fold of that strength in the two pieces' fabrics: 180 for a seam that lies flat, 360 for one turned, as at the
+/// edge of a collar or a facing. The sides are those the seam's stitches sew, the second running the way the first
+/// does, and their vertices count over all pieces. Each edge of the first side gets a hinge with the triangle of the
+/// second's piece at the same place along the seam.
+void ClothSolver::addSeamFold(const SeamStretch& first, const SeamStretch& second, qreal angle, qreal strength)
+{
+    const QVector<quint32>& first_vertices = first.vertices();
+    const QVector<quint32>& second_vertices = second.vertices();
+    const int count = vertexCount();
+    if (first_vertices.size() < 2 || second_vertices.size() < 2 || first.length() <= tiny || second.length() <= tiny)
+    {
+        return;
+    }
+
+    // The triangles at each edge of the seam's sides.
+    QHash<quint64, QVector<int>> faces_at;
+    QSet<quint64> wanted;
+    for (const QVector<quint32>* side : {&first_vertices, &second_vertices})
+    {
+        for (int i = 0; i + 1 < side->size(); ++i)
+        {
+            wanted.insert(edgeKey(side->at(i), side->at(i + 1)));
+        }
+    }
+    for (int f = 0; f + 2 < m_faces.size(); f += 3)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            const quint64 key = edgeKey(static_cast<quint32>(m_faces.at(f + k)),
+                                        static_cast<quint32>(m_faces.at(f + (k + 1) % 3)));
+            if (wanted.contains(key))
+            {
+                faces_at[key].append(f);
+            }
+        }
+    }
+    // The corner of a triangle at the edge from a to b, and whether the triangle runs from a to b.
+    auto opposite = [this, &faces_at](int a, int b, bool* forward)
+    {
+        const QVector<int> faces = faces_at.value(edgeKey(static_cast<quint32>(a), static_cast<quint32>(b)));
+        if (faces.isEmpty())
+        {
+            return -1;
+        }
+        const int f = faces.first();
+        for (int k = 0; k < 3; ++k)
+        {
+            if (m_faces.at(f + k) == a)
+            {
+                *forward = m_faces.at(f + (k + 1) % 3) == b;
+            }
+        }
+        for (int k = 0; k < 3; ++k)
+        {
+            if (m_faces.at(f + k) != a && m_faces.at(f + k) != b)
+            {
+                return m_faces.at(f + k);
+            }
+        }
+        return -1;
+    };
+    auto rest_area = [this](int a, int b, int c)
+    {
+        const QPointF u = m_rest.at(b) - m_rest.at(a);
+        const QPointF v = m_rest.at(c) - m_rest.at(a);
+        return qAbs(u.x() * v.y() - u.y() * v.x()) / 2.0;
+    };
+
+    const double fullest = M_PI - fold_short_of_flat;
+    const double rest_angle = qBound(-fullest, M_PI - qDegreesToRadians(angle), fullest);
+    const QVector<qreal>& first_along = first.distances();
+    const QVector<qreal>& second_along = second.distances();
+    for (int i = 0; i + 1 < first_vertices.size(); ++i)
+    {
+        const int a = static_cast<int>(first_vertices.at(i));
+        const int b = static_cast<int>(first_vertices.at(i + 1));
+        if (a == b || a >= count || b >= count)
+        {
+            continue;
+        }
+        bool forward = true;
+        const int c = opposite(a, b, &forward);
+
+        // The second side's edge at the same place along the seam, and the corner opposite it.
+        const qreal at = (first_along.value(i) + first_along.value(i + 1)) / 2.0 / first.length() * second.length();
+        int j = 0;
+        while (j + 2 < second_vertices.size() && second_along.value(j + 1) < at)
+        {
+            ++j;
+        }
+        const int p = static_cast<int>(second_vertices.at(j));
+        const int q = static_cast<int>(second_vertices.at(j + 1));
+        bool unused = true;
+        const int d = p != q && p < count && q < count ? opposite(p, q, &unused) : -1;
+        if (c < 0 || d < 0)
+        {
+            continue;
+        }
+
+        const double areas = rest_area(a, b, c) + rest_area(p, q, d);
+        if (areas <= tiny)
+        {
+            continue;
+        }
+        Hinge hinge;
+        hinge.vertices[0] = forward ? a : b;
+        hinge.vertices[1] = forward ? b : a;
+        hinge.vertices[2] = c;
+        hinge.vertices[3] = d;
+        const QPointF edge = m_rest.at(b) - m_rest.at(a);
+        const double rigidity = (m_rigidity.value(m_pieces.at(a)) + m_rigidity.value(m_pieces.at(d))) / 2.0;
+        hinge.stiffness = strength * 6.0 * rigidity * QPointF::dotProduct(edge, edge) / areas;
+        hinge.fold = true;
+        hinge.seam = true;
+        hinge.rest_angle = rest_angle;
+        m_hinges.append(hinge);
     }
     m_prepared = false;
 }
@@ -1174,6 +1305,7 @@ bool ClothSolver::sweepOnDevice(double time_step)
     step.max_move = static_cast<float>(max_move);
     step.friction_rest = static_cast<float>(friction_rest);
     step.vertex_count = count;
+    step.seam_folds = m_settings.seam_folds ? 1 : 0;
 
     // Where each vertex starts the sweeps and whether it is pinned; where it started the step and how far the cloth
     // near it lets it move; where it would go by itself and its mass.
@@ -1316,7 +1448,7 @@ ClothCompute::Cloth ClothSolver::packedCloth()
         terms << static_cast<float>(hinge.weights[0]) << static_cast<float>(hinge.weights[1])
               << static_cast<float>(hinge.weights[2]) << static_cast<float>(hinge.weights[3])
               << static_cast<float>(hinge.stiffness) << static_cast<float>(hinge.rest_angle)
-              << (hinge.fold ? 1.0f : 0.0f) << 0.0f;
+              << (hinge.fold ? 1.0f : 0.0f) << (hinge.seam ? 1.0f : 0.0f);
     }
 
     step.stitch_corners = static_cast<qint32>(topology.size());
@@ -1375,6 +1507,15 @@ void ClothSolver::prepare()
         }
         neighbours[hinge.vertices[2]].append(hinge.vertices[3]);
         neighbours[hinge.vertices[3]].append(hinge.vertices[2]);
+        if (hinge.seam)
+        {
+            // The corner across the seam isn't next to the edge's ends in any mesh.
+            for (int k = 0; k < 2; ++k)
+            {
+                neighbours[hinge.vertices[k]].append(hinge.vertices[3]);
+                neighbours[hinge.vertices[3]].append(hinge.vertices[k]);
+            }
+        }
     }
 
     m_stitched = QVector<QVector<int>>(count);
@@ -1688,6 +1829,10 @@ void ClothSolver::solveVertex(int vertex, double time_step)
     for (const Role& role : m_vertex_hinges.at(vertex))
     {
         const Hinge& hinge = m_hinges.at(role.term);
+        if (hinge.seam && !m_settings.seam_folds)
+        {
+            continue;
+        }
         if (hinge.fold)
         {
             Vec3 corners[4];

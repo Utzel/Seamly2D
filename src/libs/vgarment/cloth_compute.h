@@ -73,7 +73,8 @@ public:
         qint32 self_roles = 0;
         qint32 self_contacts = 0;
         qint32 self_contact_count = 0;
-        qint32 padding[3] = {0, 0, 0};  // to whole vectors, as Direct3D has uniform blocks
+        qint32 seam_folds = 1;
+        qint32 padding[2] = {0, 0};  // to whole vectors, as Direct3D has uniform blocks
     };
 
     /// @brief What stays the same from step to step: the topology, the colours' vertices first, the terms, four

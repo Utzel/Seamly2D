@@ -78,6 +78,7 @@ QVector<GarmentSeam> GarmentSymmetry::madeUp(const QVector<GarmentSeam>& seams) 
             if (mirrored(seam.first, &twin.first, &first_turned) && mirrored(seam.second, &twin.second, &second_turned))
             {
                 twin.reverse = seam.reverse != (first_turned != second_turned);
+                twin.angle = seam.angle;
                 made_up.append(twin);
             }
         }

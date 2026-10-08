@@ -248,6 +248,7 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation, Comput
         solver->setFriction(0);
         solver->setAirDamping(1.0 / time_step);
         solver->setPiecesPassThrough(true);
+        solver->setSeamFolds(false);
     }
 
     while (!m_stopping)
@@ -287,6 +288,7 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation, Comput
             solver->setFriction(friction);
             solver->setAirDamping(air_damping);
             solver->setPiecesPassThrough(false);
+            solver->setSeamFolds(true);
         }
 
         if (moving_steps % resting_window == 0)

@@ -873,6 +873,93 @@ void TST_ClothSolver::foldsHoldTheirAngle() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+void TST_ClothSolver::seamsHoldTheirAngle_data() const
+{
+    QTest::addColumn<qreal>("angle");
+    QTest::addColumn<bool>("seam_folds");
+    QTest::addColumn<bool>("on_device");
+    for (const bool on_device : {false, true})
+    {
+        const QString where = on_device ? QStringLiteral(", graphics card") : QString();
+        QTest::newRow(qPrintable(QStringLiteral("right side in at a right angle") + where)) << 90.0 << true << on_device;
+        QTest::newRow(qPrintable(QStringLiteral("wrong side in at a right angle") + where)) << 270.0 << true
+                                                                                          << on_device;
+        QTest::newRow(qPrintable(QStringLiteral("turned, wrong sides together") + where)) << 360.0 << true
+                                                                                         << on_device;
+        QTest::newRow(qPrintable(QStringLiteral("not while sewing") + where)) << 90.0 << false << on_device;
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Two squares sewn edge to edge, lying flat, come to the seam's angle on the first one's right side, as a fold does;
+// with seams not holding their angles, as while the pieces are sewn together, they stay flat.
+void TST_ClothSolver::seamsHoldTheirAngle() const
+{
+    QFETCH(qreal, angle);
+    QFETCH(bool, seam_folds);
+    QFETCH(bool, on_device);
+
+    const GarmentMesh left = PieceMesher().meshOutline(rectangle(0, 0, 10, 10, 1));
+    const GarmentMesh right = PieceMesher().meshOutline(rectangle(10, 0, 10, 10, 11));
+    ClothSettings settings;
+    settings.floor = false;
+    settings.self_contact = false;
+    settings.gravity = QVector3D();
+    settings.seam_folds = seam_folds;
+    ClothSolver solver(settings);
+    const quint32 left_offset = solver.addMesh(left, standing(left));
+    const quint32 right_offset = solver.addMesh(right, standing(right));
+    const SeamStretch first = left.stretch(2, 3, left_offset);
+    const SeamStretch second = right.stretch(14, 11, right_offset).reversed();
+    solver.addStitches(SeamStretch::stitches(first, second));
+    solver.addSeamFold(first, second, angle);
+    ComputeDevice device;
+    if (on_device && !solver.useDevice(device.open()))
+    {
+        QSKIP("No graphics card here can compute");
+    }
+    for (int i = 0; i < 300; ++i)
+    {
+        solver.step(frame);
+    }
+    QCOMPARE(solver.isOnDevice(), on_device);
+    solver.useDevice(nullptr);
+
+    const QVector<QVector3D> positions = solver.positions();
+    auto at = [&positions](const GarmentMesh& mesh, quint32 offset, const QPointF& rest)
+    {
+        int nearest = 0;
+        for (int i = 0; i < mesh.vertexCount(); ++i)
+        {
+            nearest = QLineF(mesh.rest_positions.at(i), rest).length()
+                              < QLineF(mesh.rest_positions.at(nearest), rest).length() ? i : nearest;
+        }
+        return positions.at(static_cast<int>(offset) + nearest);
+    };
+    const QVector3D top = at(left, left_offset, QPointF(10, 0));
+    const QVector3D along = (at(left, left_offset, QPointF(10, 10)) - top).normalized();
+    const QVector3D middle = (top + at(left, left_offset, QPointF(10, 10))) / 2.0f;
+    auto across = [&along, &middle](const QVector3D& point)
+    {
+        const QVector3D offset = point - middle;
+        return (offset - along * QVector3D::dotProduct(offset, along)).normalized();
+    };
+    const QVector3D first_way = across(at(left, left_offset, QPointF(0, 5)));
+    const QVector3D second_way = across(at(right, right_offset, QPointF(20, 5)));
+    const QVector3D right_side = QVector3D::crossProduct(at(left, left_offset, QPointF(0, 5))
+                                                             - at(left, left_offset, QPointF(0, 0)),
+                                                         at(left, left_offset, QPointF(5, 0))
+                                                             - at(left, left_offset, QPointF(0, 0))).normalized();
+    const qreal between = qRadiansToDegrees(qAcos(qBound(-1.0f, QVector3D::dotProduct(first_way, second_way), 1.0f)));
+    const qreal wanted = !seam_folds ? 180.0 : qMax(5.0, angle <= 180.0 ? angle : 360.0 - angle);
+    const float towards = QVector3D::dotProduct(second_way, right_side);
+    const bool side_right = !seam_folds || (angle < 180.0 ? towards > 0 : towards < 0);
+    QVERIFY2(qAbs(between - wanted) < 10.0 && side_right,
+             qUtf8Printable(QStringLiteral("the squares meet at %1 degrees, the second %2 the first's right side")
+                                .arg(between).arg(towards > 0 ? QStringLiteral("towards") : QStringLiteral("away from"))));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // The sweeps on the graphics card move the cloth as those on the processor do, through every force there is: a strip
 // folded onto itself along a fold lies on the floor, two sheets sewn together lie on a ball, one corner pinned.
 // Without the floor and self contact, they agree within what single precision tells apart. Where cloth rests on cloth
@@ -919,8 +1006,10 @@ void TST_ClothSolver::deviceSweepsAsProcessor() const
         solver.addMesh(strip, folded, Fabric(), 90.0, {fold});
         const quint32 left_offset = solver.addMesh(left, lyingFlat(left, 10.0 + settings.thickness));
         const quint32 right_offset = solver.addMesh(right, lyingFlat(right, 10.0 + settings.thickness));
-        solver.addStitches(SeamStretch::stitches(left.stretch(12, 13, left_offset),
-                                                 right.stretch(24, 21, right_offset).reversed()));
+        const SeamStretch sewn_left = left.stretch(12, 13, left_offset);
+        const SeamStretch sewn_right = right.stretch(24, 21, right_offset).reversed();
+        solver.addStitches(SeamStretch::stitches(sewn_left, sewn_right));
+        solver.addSeamFold(sewn_left, sewn_right, 180.0);
         solver.setPinned(left_offset, true);
         if (on_device && !solver.useDevice(device.rhi()))
         {

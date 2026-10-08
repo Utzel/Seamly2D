@@ -54,6 +54,8 @@ struct ClothSettings
     bool      self_contact = true;             ///< whether the cloth keeps from passing through itself
     bool      pieces_pass_through = false;     ///< whether pieces pass through each other, as they may while they
                                                ///< are sewn together; each piece still keeps from passing through itself
+    bool      seam_folds = true;               ///< whether seams hold the angles they are sewn at; not while the
+                                               ///< pieces are sewn together, when the sides of the seams hang apart
     bool      floor = true;                    ///< whether the cloth lands on a floor
     qreal     floor_height = 0.0;              ///< in cm
     QVector3D gravity = QVector3D(0.0f, -981.0f, 0.0f);
@@ -116,11 +118,14 @@ public:
     void               setAirDamping(qreal air_damping);
     void               setSelfContact(bool self_contact);
     void               setPiecesPassThrough(bool pass_through);
+    void               setSeamFolds(bool seam_folds);
 
     quint32            addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions,
                                const Fabric& fabric = Fabric(), qreal grain_angle = 90.0,
                                const QVector<ClothFold>& folds = QVector<ClothFold>());
     void               addStitches(const QVector<Stitch>& stitches);
+    void               addSeamFold(const SeamStretch& first, const SeamStretch& second, qreal angle,
+                                   qreal strength = 1.0);
     void               setCollider(const BodyCollider& collider);
     void               setPinned(quint32 vertex, bool pinned);
     void               moveVertex(quint32 vertex, const QVector3D& position);
@@ -151,7 +156,8 @@ private:
 
     // Two triangles of cloth sharing an edge, which resist bending across it: the edge's ends, then the corners
     // opposite, how much each counts, and how stiffly, in g/s². Along a fold, they hold an angle instead, in radians
-    // as bendAcross() measures it; the triangles are those wound as the mesh winds them, abc and bad.
+    // as bendAcross() measures it; the triangles are those wound as the mesh winds them, abc and bad. Across a seam,
+    // abc is of the first side's piece, d the corner opposite the second side there.
     struct Hinge
     {
         int    vertices[4] = {0, 0, 0, 0};
@@ -159,6 +165,7 @@ private:
         double stiffness = 0;
         bool   fold = false;
         double rest_angle = 0;
+        bool   seam = false;
     };
 
     // A membrane or hinge a vertex takes part in, and as which of its corners.
@@ -218,6 +225,7 @@ private:
     QVector<int>       m_pieces;       // which piece each vertex is of, in the order they were added
     QVector<QPointF>   m_rest;         // where each vertex is in its flat piece
     QVector<int>       m_piece_start;  // where each piece's vertices start, and where the last one's end
+    QVector<double>    m_rigidity;     // how stiffly each piece's fabric bends, in g cm²/s²
     BodyCollider       m_collider;
 
     bool               m_prepared;
