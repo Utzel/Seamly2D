@@ -29,6 +29,7 @@
 #include <QtMath>
 #include <QtTest>
 
+#include <algorithm>
 #include <limits>
 
 #include "../vgarment/body_collider.h"
@@ -1084,4 +1085,95 @@ void TST_BodyModel::piecesMoveAndTilt() const
     arm_leaning.lean = 30;
     arm_leaning.swing = -20;
     QVERIFY(worstStrain(wrap.place(mesh, arm_leaning)) - worstStrain(wrap.place(mesh, elbow.arrangement)) < 1e-3);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A facing sewn along its top to the top of a front panel: superimposed under the panel it lies just inside it, over
+// it just outside it, its body down over the panel's either way; beside it, it stands up from the seam as far out.
+// Its top lies along the panel's top whichever way.
+void TST_BodyModel::superimposedPiecesLieOnTheirPartner() const
+{
+    const BodyModel model;
+    const QVector<QVector3D> positions = model.evaluate(female());
+    const BodyWrap wrap(model, positions);
+    const QVector3D pelvis = model.joint(positions, QStringLiteral("pelvis"));
+    const GarmentMesh panel = PieceMesher().meshPolygon({QPointF(0, 0), QPointF(30, 0), QPointF(30, 40),
+                                                         QPointF(0, 40)});
+    const GarmentMesh facing = PieceMesher().meshPolygon({QPointF(0, 0), QPointF(30, 0), QPointF(30, 8),
+                                                          QPointF(0, 8)});
+    auto topOf = [](const GarmentMesh& mesh)
+    {
+        QVector<quint32> top;
+        for (const quint32 vertex : mesh.boundary)
+        {
+            if (qAbs(mesh.rest_positions.at(static_cast<int>(vertex)).y()) < 1e-6)
+            {
+                top.append(vertex);
+            }
+        }
+        std::sort(top.begin(), top.end(), [&mesh](quint32 a, quint32 b)
+        {
+            return mesh.rest_positions.at(static_cast<int>(a)).x() < mesh.rest_positions.at(static_cast<int>(b)).x();
+        });
+        return top;
+    };
+    auto reach = [&pelvis](const QVector3D& point)
+    {
+        return qSqrt(qPow(point.x() - pelvis.x(), 2) + qPow(point.z() - pelvis.z(), 2));
+    };
+    auto middleOf = [](const QVector<QVector3D>& placed)
+    {
+        QVector3D middle;
+        for (const QVector3D& point : placed)
+        {
+            middle += point / static_cast<float>(placed.size());
+        }
+        return middle;
+    };
+
+    const PieceArrangement front = wrap.points().at(wrap.pointNamed(QStringLiteral("body-waist-front"))).arrangement;
+    const QVector<QVector3D> panel_placed = wrap.place(panel, front);
+    const QVector<quint32> panel_top = topOf(panel);
+    const QVector<quint32> facing_top = topOf(facing);
+    const SewnSides seam{facing_top, panel_top};
+    const QVector3D panel_top_middle = (panel_placed.at(static_cast<int>(panel_top.first()))
+                                        + panel_placed.at(static_cast<int>(panel_top.last()))) / 2.0f;
+
+    for (const Superimpose how : {Superimpose::Under, Superimpose::Over, Superimpose::Side})
+    {
+        const PieceArrangement laid = wrap.superimposed(facing, panel, front, {seam}, how);
+        const QVector<QVector3D> placed = wrap.place(facing, laid);
+        const QString name = how == Superimpose::Under ? QStringLiteral("under")
+                             : how == Superimpose::Over ? QStringLiteral("over") : QStringLiteral("beside");
+        QVERIFY(laid.part == BodyPart::Body);
+        QVERIFY(laid.point.isEmpty());
+
+        // Its top on the panel's, end to end.
+        for (const bool start : {true, false})
+        {
+            const QVector3D own = placed.at(static_cast<int>(start ? facing_top.first() : facing_top.last()));
+            const QVector3D other = panel_placed.at(static_cast<int>(start ? panel_top.first() : panel_top.last()));
+            QVERIFY2((own - other).length() < 1.0f, qUtf8Printable(QStringLiteral("%1: a top corner %2 cm off")
+                                                                       .arg(name).arg((own - other).length())));
+        }
+
+        // Its body down over the panel, just in or out from it, or up from the seam, as far out.
+        const QVector3D middle = middleOf(placed);
+        const qreal panel_reach = reach(panel_top_middle);
+        const QVector3D top_middle = (placed.at(static_cast<int>(facing_top.first()))
+                                      + placed.at(static_cast<int>(facing_top.last()))) / 2.0f;
+        if (how == Superimpose::Side)
+        {
+            QVERIFY2(middle.y() > panel_top_middle.y() + 3.0f, qUtf8Printable(QString::number(middle.y())));
+            QVERIFY2(qAbs(reach(top_middle) - panel_reach) < 0.3, qUtf8Printable(QString::number(reach(top_middle))));
+        }
+        else
+        {
+            QVERIFY2(middle.y() < panel_top_middle.y() - 3.0f, qUtf8Printable(QString::number(middle.y())));
+            const qreal off = reach(top_middle) - panel_reach;
+            QVERIFY2(how == Superimpose::Over ? off > 0.3 && off < 0.8 : off < -0.3 && off > -0.8,
+                     qUtf8Printable(QStringLiteral("%1: %2 cm out from the panel").arg(name).arg(off)));
+            QVERIFY(laid.turned_over == false);
+        }
+    }
 }

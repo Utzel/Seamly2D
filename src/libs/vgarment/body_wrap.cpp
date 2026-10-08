@@ -24,6 +24,7 @@
 
 #include "body_wrap.h"
 
+#include <QLineF>
 #include <QPolygonF>
 #include <QRectF>
 #include <QtMath>
@@ -81,6 +82,17 @@ const qreal calf_share = 0.3;
 // The frame at a piece's middle is found from points this many cm to either side of the middle and above and below it.
 const qreal frame_step = 0.5;
 
+// Superimposed, a piece starts this many cm out from or in from the piece it is laid on, clear of it. Each side of a
+// seam is matched at this many places along it, spread by length, and the piece is moved this many times to put its
+// side of the seams where the other's is, and turned this many times to lay it along the other's.
+const qreal layer_gap = 0.5;
+const int seam_samples = 12;
+const int superimpose_steps = 6;
+const int superimpose_turns = 3;
+
+// A piece put closer in than usual still starts this many cm off the body.
+const qreal closest_clearance = 0.5;
+
 // An arm's arrangement points sit as far from its middle line as its skin reaches up to this many cm up and down the
 // arm from them, and up to this many degrees around it either way.
 const qreal arm_point_reach = 2.0;
@@ -113,6 +125,86 @@ qreal widestWrapRadius(qreal width)
 qreal cross(const QPointF& origin, const QPointF& a, const QPointF& b)
 {
     return (a.x() - origin.x()) * (b.y() - origin.y()) - (a.y() - origin.y()) * (b.x() - origin.x());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Where a place along a line through points is: the segment it is on and how far along that segment.
+struct LinePlace
+{
+    int   segment = 0;
+    qreal t = 0;
+};
+
+//---------------------------------------------------------------------------------------------------------------------
+// Places at even shares of a line's length, from its start to its end.
+QVector<LinePlace> evenPlaces(const QVector<QPointF>& line, int count)
+{
+    QVector<qreal> reached(line.size(), 0);
+    for (int i = 1; i < line.size(); ++i)
+    {
+        reached[i] = reached.at(i - 1) + QLineF(line.at(i - 1), line.at(i)).length();
+    }
+    QVector<LinePlace> places;
+    for (int k = 0; k < count && line.size() >= 2; ++k)
+    {
+        const qreal wanted = reached.last() * k / (count - 1);
+        LinePlace place;
+        while (place.segment < line.size() - 2 && reached.at(place.segment + 1) < wanted)
+        {
+            ++place.segment;
+        }
+        const qreal length = reached.at(place.segment + 1) - reached.at(place.segment);
+        place.t = length > 0 ? qBound(0.0, (wanted - reached.at(place.segment)) / length, 1.0) : 0.0;
+        places.append(place);
+    }
+    return places;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+template <typename Point>
+Point pointAt(const QVector<Point>& line, const LinePlace& place)
+{
+    return line.at(place.segment) * static_cast<float>(1.0 - place.t)
+           + line.at(place.segment + 1) * static_cast<float>(place.t);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The turn, in degrees as PieceArrangement::rotation takes it, that best lays points, first mirrored left to right if
+// asked, on others about their middles, and how far off they then are, squared and summed.
+qreal bestTurn(const QVector<QPointF>& from, const QVector<QPointF>& onto, bool mirrored, qreal* error)
+{
+    QPointF from_middle;
+    QPointF onto_middle;
+    for (int i = 0; i < from.size(); ++i)
+    {
+        from_middle += from.at(i) / from.size();
+        onto_middle += onto.at(i) / onto.size();
+    }
+    auto relative = [&from_middle, mirrored](const QPointF& point)
+    {
+        const QPointF away = point - from_middle;
+        return mirrored ? QPointF(-away.x(), away.y()) : away;
+    };
+
+    qreal along = 0;
+    qreal across = 0;
+    for (int i = 0; i < from.size(); ++i)
+    {
+        const QPointF p = relative(from.at(i));
+        const QPointF q = onto.at(i) - onto_middle;
+        along += p.x() * q.x() + p.y() * q.y();
+        across += p.x() * q.y() - p.y() * q.x();
+    }
+    const qreal turn = qAtan2(across, along);
+    *error = 0;
+    for (int i = 0; i < from.size(); ++i)
+    {
+        const QPointF p = relative(from.at(i));
+        const QPointF turned(p.x() * qCos(turn) - p.y() * qSin(turn), p.x() * qSin(turn) + p.y() * qCos(turn));
+        const QPointF off = turned - (onto.at(i) - onto_middle);
+        *error += off.x() * off.x() + off.y() * off.y();
+    }
+    return qRadiansToDegrees(turn);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -312,6 +404,227 @@ QVector<QVector3D> BodyWrap::place(const GarmentMesh& mesh, const PieceArrangeme
         }
     }
     return placed;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Where a piece goes laid on the piece it is sewn to, as CLO's Superimpose does it: on the same part of the
+/// body, its sides of the seams on the partner's, its body over or under the partner's, or beside it, edge to edge, a
+/// little further out, in, or as far out.
+///
+/// The piece is turned in the flat, and mirrored if it has to be, which turns it over, so its sides of the seams lie
+/// along the partner's as the partner is put on the avatar; over or under, its body lies on the partner's side of the
+/// seams, beside, along the longest seam only, on the other side. Then it is moved around the part, up or down and out
+/// or in until its sides of the seams are where the partner's are.
+PieceArrangement BodyWrap::superimposed(const GarmentMesh& piece, const GarmentMesh& partner,
+                                        const PieceArrangement& partner_arrangement, const QVector<SewnSides>& seams,
+                                        Superimpose how) const
+{
+    const QVector<QPointF> partner_flat = arranged(partner, partner_arrangement);
+    const QVector<QVector3D> partner_placed = place(partner, partner_arrangement);
+
+    // Where the seams are matched, on each piece, the longest seam's side first.
+    QVector<QVector<quint32>> piece_sides;
+    QVector<QVector<quint32>> partner_sides;
+    QVector<QVector<LinePlace>> piece_places;
+    QVector<QVector<LinePlace>> partner_places;
+    QVector<QPointF> piece_points;
+    QVector<QPointF> partner_points;
+    QPointF chord_start;
+    QPointF chord_end;
+    qreal longest = -1;
+
+    // Beside its partner, a piece meets it edge to edge along one seam, the longest.
+    auto partnerLength = [&partner_flat](const SewnSides& seam)
+    {
+        qreal length = 0;
+        for (int i = 1; i < seam.partner.size(); ++i)
+        {
+            length += QLineF(partner_flat.value(static_cast<int>(seam.partner.at(i - 1))),
+                             partner_flat.value(static_cast<int>(seam.partner.at(i)))).length();
+        }
+        return length;
+    };
+    QVector<SewnSides> used = seams;
+    if (how == Superimpose::Side && !seams.isEmpty())
+    {
+        used = {*std::max_element(seams.cbegin(), seams.cend(), [&partnerLength](const SewnSides& a, const SewnSides& b)
+        {
+            return partnerLength(a) < partnerLength(b);
+        })};
+    }
+
+    for (const SewnSides& seam : used)
+    {
+        if (seam.piece.size() < 2 || seam.partner.size() < 2)
+        {
+            continue;
+        }
+        QVector<QPointF> own_line;
+        QVector<QPointF> partner_line;
+        for (const quint32 vertex : seam.piece)
+        {
+            own_line.append(piece.rest_positions.value(static_cast<int>(vertex)));
+        }
+        for (const quint32 vertex : seam.partner)
+        {
+            partner_line.append(partner_flat.value(static_cast<int>(vertex)));
+        }
+        const QVector<LinePlace> own_places = evenPlaces(own_line, seam_samples);
+        const QVector<LinePlace> other_places = evenPlaces(partner_line, seam_samples);
+        for (int k = 0; k < seam_samples; ++k)
+        {
+            piece_points.append(pointAt(own_line, own_places.at(k)));
+            partner_points.append(pointAt(partner_line, other_places.at(k)));
+        }
+        piece_sides.append(seam.piece);
+        partner_sides.append(seam.partner);
+        piece_places.append(own_places);
+        partner_places.append(other_places);
+
+        const qreal length = QLineF(partner_line.first(), partner_line.last()).length();
+        if (length > longest)
+        {
+            longest = length;
+            chord_start = partner_line.first();
+            chord_end = partner_line.last();
+        }
+    }
+
+    PieceArrangement arrangement = partner_arrangement;
+    arrangement.point.clear();
+    if (piece_points.isEmpty())
+    {
+        return arrangement;
+    }
+
+    // Which side of the seams a body lies on, as the partner is put on the avatar.
+    const QPointF chord = chord_end - chord_start;
+    auto sideOf = [&chord, &chord_start](const QPointF& point)
+    {
+        return chord.x() * (point.y() - chord_start.y()) - chord.y() * (point.x() - chord_start.x()) >= 0;
+    };
+    QPointF partner_middle;
+    for (const QPointF& point : partner_flat)
+    {
+        partner_middle += point / partner_flat.size();
+    }
+    QPointF piece_middle;
+    QPointF seam_middle;
+    for (int i = 0; i < piece_points.size(); ++i)
+    {
+        seam_middle += piece_points.at(i) / piece_points.size();
+    }
+    for (const QPointF& point : piece.rest_positions)
+    {
+        piece_middle += point / piece.rest_positions.size();
+    }
+    QPointF partner_seam_middle;
+    for (const QPointF& point : partner_points)
+    {
+        partner_seam_middle += point / partner_points.size();
+    }
+
+    // Turned as drafted or mirrored, whichever lays its body on the wanted side; if both or neither do, whichever
+    // fits better.
+    bool mirrored = false;
+    qreal turn = 0;
+    qreal best_error = std::numeric_limits<qreal>::infinity();
+    bool best_side = false;
+    for (const bool mirror : {false, true})
+    {
+        qreal error = 0;
+        const qreal degrees = bestTurn(piece_points, partner_points, mirror, &error);
+        const qreal radians = qDegreesToRadians(degrees);
+        QPointF away = piece_middle - seam_middle;
+        away.setX(mirror ? -away.x() : away.x());
+        const QPointF body(partner_seam_middle.x() + away.x() * qCos(radians) - away.y() * qSin(radians),
+                           partner_seam_middle.y() + away.x() * qSin(radians) + away.y() * qCos(radians));
+        const bool same_side = sideOf(body) == sideOf(partner_middle);
+        const bool wanted_side = (how == Superimpose::Side) != same_side;
+        if ((wanted_side && !best_side) || (wanted_side == best_side && error < best_error))
+        {
+            mirrored = mirror;
+            turn = degrees;
+            best_error = error;
+            best_side = wanted_side;
+        }
+    }
+    arrangement.turned_over = mirrored;
+    arrangement.rotation = std::fmod(turn + 360.0, 360.0);
+
+    // Moved until its sides of the seams are on the partner's, a little out or in, or as far out.
+    auto seamPoints = [](const QVector<QVector3D>& placed, const QVector<QVector<quint32>>& sides,
+                         const QVector<QVector<LinePlace>>& places)
+    {
+        QVector<QVector3D> points;
+        for (int s = 0; s < sides.size(); ++s)
+        {
+            QVector<QVector3D> line;
+            for (const quint32 vertex : sides.at(s))
+            {
+                line.append(placed.value(static_cast<int>(vertex)));
+            }
+            for (const LinePlace& place : places.at(s))
+            {
+                points.append(pointAt(line, place));
+            }
+        }
+        return points;
+    };
+    auto middleOf = [](const QVector<QVector3D>& points)
+    {
+        QVector3D middle;
+        for (const QVector3D& point : points)
+        {
+            middle += point / static_cast<float>(points.size());
+        }
+        return middle;
+    };
+    const QVector<QVector3D> partner_seams = seamPoints(partner_placed, partner_sides, partner_places);
+    const QVector3D target = middleOf(partner_seams);
+    const qreal layer = how == Superimpose::Over ? layer_gap : (how == Superimpose::Under ? -layer_gap : 0.0);
+    const qreal target_radius = radiusAt(arrangement.part, target) + layer;
+    const PieceArrangement at_target = arrangementOn(arrangement.part, target);
+
+    // Each piece is wrapped around a cylinder of its own, around its own height's axis, so laid along the partner's
+    // seams in the flat, it can come out a little turned on the avatar. Seen from outside there, it is turned back by
+    // as much as best lays its sides of the seams along the partner's, as in the flat, and moved again.
+    const QVector3D out = outAt(arrangement.part, target);
+    const QVector3D level = qAbs(out.y()) < 0.9f ? QVector3D(0, 1, 0) : QVector3D(1, 0, 0);
+    const QVector3D across = QVector3D::crossProduct(level, out).normalized();
+    const QVector3D up = QVector3D::crossProduct(out, across);
+    auto seenFromOutside = [&across, &up](const QVector<QVector3D>& points)
+    {
+        QVector<QPointF> seen;
+        for (const QVector3D& point : points)
+        {
+            seen.append(QPointF(QVector3D::dotProduct(point, across), QVector3D::dotProduct(point, up)));
+        }
+        return seen;
+    };
+    for (int turning = 0; turning < superimpose_turns; ++turning)
+    {
+        QVector<QVector3D> placed;
+        for (int step = 0; step < superimpose_steps; ++step)
+        {
+            placed = place(piece, arrangement);
+            const QVector3D current = middleOf(seamPoints(placed, piece_sides, piece_places));
+            const PieceArrangement at_current = arrangementOn(arrangement.part, current);
+            arrangement.angle = std::remainder(arrangement.angle + at_target.angle - at_current.angle, 360.0);
+            arrangement.height += at_target.height - at_current.height;
+            arrangement.distance = qMax(arrangement.distance + target_radius - radiusAt(arrangement.part, current),
+                                        closest_clearance - clearance);
+        }
+        if (turning + 1 < superimpose_turns)
+        {
+            // How far to turn it anticlockwise, seen from outside with up as up; the rotation turns clockwise.
+            qreal error = 0;
+            const QVector<QVector3D> own_seams = seamPoints(place(piece, arrangement), piece_sides, piece_places);
+            const qreal off = bestTurn(seenFromOutside(own_seams), seenFromOutside(partner_seams), false, &error);
+            arrangement.rotation = std::fmod(arrangement.rotation - off + 720.0, 360.0);
+        }
+    }
+    return arrangement;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -867,6 +1180,41 @@ qreal BodyWrap::armReach(int side, qreal along, qreal angle) const
         }
     }
     return reach > 0 ? reach : armRadius(side, from, to);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Straight out from a part's axis, or from an arm's middle line, through a point.
+QVector3D BodyWrap::outAt(BodyPart part, const QVector3D& point) const
+{
+    const int arm = armSide(part);
+    QVector3D out;
+    if (arm >= 0)
+    {
+        out = point - m_arm_lines[arm].pointAt(m_arm_lines[arm].alongNearest(point));
+    }
+    else
+    {
+        const QVector3D axis = axisAt(part, point.y());
+        out = QVector3D(point.x() - axis.x(), 0.0f, point.z() - axis.z());
+    }
+    return out.normalized();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// How far a point is from a part's axis, or from an arm's middle line.
+qreal BodyWrap::radiusAt(BodyPart part, const QVector3D& point) const
+{
+    const int arm = armSide(part);
+    qreal distance = 0;
+    if (arm >= 0)
+    {
+        m_arm_lines[arm].alongNearest(point, &distance);
+    }
+    else
+    {
+        distance = horizontalDistance(point, axisAt(part, point.y()));
+    }
+    return distance;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

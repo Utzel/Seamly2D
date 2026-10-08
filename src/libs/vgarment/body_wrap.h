@@ -72,6 +72,23 @@ struct PieceFrame
     QVector3D out;
 };
 
+/// @brief How a piece is laid on a piece it is sewn to, as CLO's Superimpose: over it, as a pocket or a collar lies,
+/// under it, as a facing or a lining does, or beside it, edge to edge, as the next panel.
+enum class Superimpose : quint8
+{
+    Over,
+    Under,
+    Side
+};
+
+/// @brief The two sides of a seam between a piece and the piece it is sewn to, as their vertices, in the order in
+/// which they meet: the first of each at the same end.
+struct SewnSides
+{
+    QVector<quint32> piece;
+    QVector<quint32> partner;
+};
+
 /// @brief A place on the avatar to put pieces at, as CLO's arrangement points. Left and right are the avatar's own,
 /// as for its legs and arms.
 struct ArrangementPoint
@@ -114,6 +131,9 @@ public:
     PieceArrangement   resolved(const PieceArrangement& arrangement) const;
     QVector<QVector3D> place(const GarmentMesh& mesh, const PieceArrangement& arrangement, qreal out = 0) const;
     PieceFrame         frameOf(const GarmentMesh& mesh, const PieceArrangement& arrangement) const;
+    PieceArrangement   superimposed(const GarmentMesh& piece, const GarmentMesh& partner,
+                                    const PieceArrangement& partner_arrangement, const QVector<SewnSides>& seams,
+                                    Superimpose how) const;
     QVector3D          mirrored(const QVector3D& point) const;
 
     const QVector<ArrangementPoint>& points() const;
@@ -166,6 +186,8 @@ private:
     void               addArmPoints(int side, const QString& level, qreal along, qreal outside);
     qreal              armAngle(int side, qreal along, const QVector3D& towards) const;
     qreal              armReach(int side, qreal along, qreal angle) const;
+    qreal              radiusAt(BodyPart part, const QVector3D& point) const;
+    QVector3D          outAt(BodyPart part, const QVector3D& point) const;
 
     static int         armSide(BodyPart part);
     static QVector<QPointF> arranged(const GarmentMesh& mesh, const PieceArrangement& arrangement);
