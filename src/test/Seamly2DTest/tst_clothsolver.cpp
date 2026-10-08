@@ -783,12 +783,21 @@ void TST_ClothSolver::shearFollowsFromBias() const
 void TST_ClothSolver::foldsHoldTheirAngle_data() const
 {
     QTest::addColumn<qreal>("angle");
-    QTest::newRow("right side in at a right angle") << 90.0;
-    QTest::newRow("wrong side in at a right angle") << 270.0;
-    QTest::newRow("right side almost onto itself") << 20.0;
-    QTest::newRow("wrong side almost onto itself") << 340.0;
-    QTest::newRow("right side onto itself") << 0.0;
-    QTest::newRow("wrong side onto itself") << 360.0;
+    QTest::addColumn<bool>("on_device");
+    const QVector<QPair<QString, qreal>> folds = {{QStringLiteral("right side in at a right angle"), 90.0},
+                                                  {QStringLiteral("wrong side in at a right angle"), 270.0},
+                                                  {QStringLiteral("right side almost onto itself"), 20.0},
+                                                  {QStringLiteral("wrong side almost onto itself"), 340.0},
+                                                  {QStringLiteral("right side onto itself"), 0.0},
+                                                  {QStringLiteral("wrong side onto itself"), 360.0}};
+    for (const bool on_device : {false, true})
+    {
+        for (const auto& fold : folds)
+        {
+            const QString row = fold.first + (on_device ? QStringLiteral(", graphics card") : QString());
+            QTest::newRow(qPrintable(row)) << fold.second << on_device;
+        }
+    }
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -798,6 +807,7 @@ void TST_ClothSolver::foldsHoldTheirAngle_data() const
 void TST_ClothSolver::foldsHoldTheirAngle() const
 {
     QFETCH(qreal, angle);
+    QFETCH(bool, on_device);
 
     PieceOutline outline = rectangle(0, 0, 20, 10, 1);
     OutlineLine line;
@@ -816,10 +826,17 @@ void TST_ClothSolver::foldsHoldTheirAngle() const
     fold.vertices = strip.lines.first().vertices;
     fold.angle = angle;
     solver.addMesh(strip, standing(strip), Fabric(), 90.0, {fold});
+    ComputeDevice device;
+    if (on_device && !solver.useDevice(device.open()))
+    {
+        QSKIP("No graphics card here can compute");
+    }
     for (int i = 0; i < 300; ++i)
     {
         solver.step(frame);
     }
+    QCOMPARE(solver.isOnDevice(), on_device);
+    solver.useDevice(nullptr);
 
     const QVector<QVector3D> positions = solver.positions();
     auto at = [&strip, &positions](const QPointF& rest)

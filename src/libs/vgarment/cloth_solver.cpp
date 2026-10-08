@@ -106,6 +106,10 @@ const double self_bound_share = 0.45;
 // two ways it can fold there come to the same angle, and the cloth wouldn't know which way to go.
 const double fold_short_of_flat = 5.0 * M_PI / 180.0;
 
+// A hinge further than this many radians from the angle it holds pulls no harder than this far: cloth starting flat
+// on a fold onto itself would otherwise be thrown about by it.
+const double hardest_pull = M_PI / 4.0;
+
 //---------------------------------------------------------------------------------------------------------------------
 struct Vec3
 {
@@ -387,6 +391,27 @@ bool bendAcross(const Vec3 corners[4], double* angle, Vec3 gradient[4])
     gradient[2] = first_part * -length;
     gradient[3] = second_part * -length;
     return true;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// How far a hinge is bent past the angle it holds, both as bendAcross() measures them. The full turn is cut on the far
+// side from where the hinge folds to, and at least a quarter turn from flat: a hinge folding the cloth onto itself is
+// nearly as far from flat one way round as the other, and has to pull it its own way from flat, and back from a little
+// the other way.
+double bentPast(double angle, double rest)
+{
+    // The turn the angle is taken within, from just past its lower end: the cut, below the rest angle or above it.
+    const double lowest = rest >= 0 ? qMin(rest - M_PI, -M_PI / 2.0) : qMax(rest + M_PI, M_PI / 2.0) - 2.0 * M_PI;
+    double turned = angle;
+    while (turned <= lowest)
+    {
+        turned += 2.0 * M_PI;
+    }
+    while (turned > lowest + 2.0 * M_PI)
+    {
+        turned -= 2.0 * M_PI;
+    }
+    return turned - rest;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1680,10 +1705,11 @@ void ClothSolver::solveVertex(int vertex, double time_step)
                     rate += gradient[k].dot(k == role.corner ? moved
                                                              : corners[k] - load(m_previous, hinge.vertices[k]));
                 }
-                const double off = std::remainder(angle - hinge.rest_angle, 2.0 * M_PI);
+                const double off = bentPast(angle, hinge.rest_angle);
+                const double pulled = qBound(-hardest_pull, off, hardest_pull);
                 const Vec3& slope = gradient[role.corner];
-                force -= slope * (hinge.stiffness * (off + rate * damping));
-                hessian.addOuter(slope, hinge.stiffness * (1.0 + damping));
+                force -= slope * (hinge.stiffness * (pulled + rate * damping));
+                hessian.addOuter(slope, hinge.stiffness * (hardest_pull / qMax(qAbs(off), hardest_pull) + damping));
             }
             continue;
         }

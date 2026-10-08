@@ -307,12 +307,21 @@ void addFold(int hinge, int corner, float stiffness, float rest, vec3 position, 
         {
             rate += dot(gradient[k], change[k]);
         }
-        const float full_turn = 6.2831853;
-        float off = angle - rest;
-        off -= full_turn * round(off / full_turn);
+        // How far past the angle it holds, the full turn cut as bentPast() in the solver cuts it.
+        const float half_turn = 3.14159265;
+        const float lowest = rest >= 0.0 ? min(rest - half_turn, -half_turn / 2.0)
+                                         : max(rest + half_turn, half_turn / 2.0) - 2.0 * half_turn;
+        float turned = angle;
+        turned += turned <= lowest ? 2.0 * half_turn : 0.0;
+        turned -= turned > lowest + 2.0 * half_turn ? 2.0 * half_turn : 0.0;
+        const float off = turned - rest;
+
+        // As hard as the hardest pull at most, as in the solver.
+        const float hardest_pull = half_turn / 4.0;
+        const float pulled = clamp(off, -hardest_pull, hardest_pull);
         const vec3 slope = gradient[corner];
-        force -= stiffness * (off + rate * this_step.damping) * slope;
-        addOuter(hessian, slope, stiffness * (1.0 + this_step.damping));
+        force -= stiffness * (pulled + rate * this_step.damping) * slope;
+        addOuter(hessian, slope, stiffness * (hardest_pull / max(abs(off), hardest_pull) + this_step.damping));
     }
 }
 
