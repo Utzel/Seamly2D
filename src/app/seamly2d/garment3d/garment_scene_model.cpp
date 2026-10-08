@@ -195,6 +195,9 @@ GarmentSceneModel::GarmentSceneModel(QObject* parent)
     , m_fit_map(FitMap::None)
     , m_body()
     , m_checks_shown(false)
+    , m_avatar_shown(true)
+    , m_mesh_shown(false)
+    , m_hidden_pieces()
     , m_thread_color()
     , m_images()
 {}
@@ -241,6 +244,12 @@ QVariant GarmentSceneModel::data(const QModelIndex& index, int role) const
             case PieceTextureRole:
                 value = QVariant::fromValue(static_cast<QObject*>(row.image.data));
                 break;
+            case PieceEdgesRole:
+                value = QVariant::fromValue(static_cast<QObject*>(row.edges));
+                break;
+            case PieceShownRole:
+                value = !m_hidden_pieces.contains(patternPiece(row.id));
+                break;
             case PieceTextureSizeRole:
                 if (row.image.data != nullptr)
                 {
@@ -278,6 +287,8 @@ QHash<int, QByteArray> GarmentSceneModel::roleNames() const
             {PieceThreadColorRole, QByteArrayLiteral("pieceThreadColor")},
             {PieceTextureRole, QByteArrayLiteral("pieceTexture")},
             {PieceTextureSizeRole, QByteArrayLiteral("pieceTextureSize")},
+            {PieceEdgesRole, QByteArrayLiteral("pieceEdges")},
+            {PieceShownRole, QByteArrayLiteral("pieceShown")},
             {SelectedRole, QByteArrayLiteral("selected")},
             {PlacedRole, QByteArrayLiteral("placed")}};
 }
@@ -313,6 +324,7 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.preview = pieces.at(i).preview;
             showMesh(row);
             row.outline->setOutline(row.mesh, row.positions, row.thickness);
+            showEdges(row);
             showStitches(row);
         }
         updateImages();
@@ -330,6 +342,7 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
         {
             row.geometry->deleteLater();
             row.outline->deleteLater();
+            row.edges->deleteLater();
             row.stitch_geometry->deleteLater();
             row.preview_geometry->deleteLater();
         }
@@ -365,6 +378,9 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
             row.outline = new PieceGeometry();
             row.outline->setParent(this);
             row.outline->setOutline(piece.mesh, piece.positions, piece.thickness);
+            row.edges = new PieceGeometry();
+            row.edges->setParent(this);
+            showEdges(row);
             row.stitches = piece.stitches;
             row.preview = piece.preview;
             row.stitch_geometry = new StitchGeometry();
@@ -410,6 +426,7 @@ void GarmentSceneModel::setPiecePositions(quint32 id, const QVector<QVector3D>& 
             row.positions = positions;
             showMesh(row);
             row.outline->setOutline(row.mesh, positions, row.thickness);
+            showEdges(row);
             showStitches(row);
         }
     }
@@ -778,6 +795,77 @@ qreal GarmentSceneModel::checkRepeat() const
     return check_repeat;
 }
 
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Whether the avatar is shown. Hidden, the cloth still drapes on it, and it shows while arranging, to put
+/// pieces on.
+bool GarmentSceneModel::isAvatarShown() const
+{
+    return m_avatar_shown;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentSceneModel::setAvatarShown(bool shown)
+{
+    if (shown != m_avatar_shown)
+    {
+        m_avatar_shown = shown;
+        emit avatarShownChanged();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Whether the edges of the triangles the cloth is made of are shown, as the drape works them out.
+bool GarmentSceneModel::isMeshShown() const
+{
+    return m_mesh_shown;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentSceneModel::setMeshShown(bool shown)
+{
+    if (shown != m_mesh_shown)
+    {
+        m_mesh_shown = shown;
+        for (const Row& row : m_rows)
+        {
+            showEdges(row);
+        }
+        emit meshShownChanged();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The pattern pieces not shown, with their copies; they still drape. A hidden piece isn't selected.
+QSet<quint32> GarmentSceneModel::hiddenPieces() const
+{
+    return m_hidden_pieces;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentSceneModel::setHiddenPieces(const QSet<quint32>& pieces)
+{
+    if (pieces != m_hidden_pieces)
+    {
+        m_hidden_pieces = pieces;
+        if (m_hidden_pieces.contains(m_selected_piece))
+        {
+            setSelectedPiece(0);
+        }
+        if (!m_rows.isEmpty())
+        {
+            emit dataChanged(index(0), index(static_cast<int>(m_rows.size()) - 1), {PieceShownRole});
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Asks the scene to look at everything from a direction: turned up or down by the pitch and around by the
+/// yaw, in degrees, 0 and 0 from the front.
+void GarmentSceneModel::requestView(qreal pitch, qreal yaw)
+{
+    emit viewRequested(pitch, yaw);
+}
+
 
 //---------------------------------------------------------------------------------------------------------------------
 /// @brief Shows the avatar, a body given by its vertex positions in cm. The note says how far it is from the wanted
@@ -1040,6 +1128,13 @@ QVector<QColor> GarmentSceneModel::vertexColors(const Row& row) const
         colors.append(scaleColor(scale, value));
     }
     return colors;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The edges of the row's triangles where it is, if the mesh is shown; nothing otherwise.
+void GarmentSceneModel::showEdges(const Row& row) const
+{
+    row.edges->setEdges(m_mesh_shown ? row.mesh : GarmentMesh(), row.positions, row.thickness);
 }
 
 //---------------------------------------------------------------------------------------------------------------------

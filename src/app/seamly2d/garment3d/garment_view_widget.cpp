@@ -270,6 +270,9 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_fit_maps(nullptr)
     , m_checks_action(nullptr)
     , m_export_action(nullptr)
+    , m_view_action(nullptr)
+    , m_hide_piece_action(nullptr)
+    , m_show_pieces_action(nullptr)
     , m_fabric_box(nullptr)
     , m_image_action(nullptr)
     , m_image_width_action(nullptr)
@@ -1437,6 +1440,8 @@ void GarmentViewWidget::updateActions()
     m_simulate_action->setEnabled(has_avatar);
     m_reset_action->setEnabled(!m_draped.isEmpty());
     m_export_action->setEnabled(has_avatar && !m_scene_model->placedPieces().isEmpty());
+    m_hide_piece_action->setEnabled(m_scene_model->selectedPiece() != 0);
+    m_show_pieces_action->setEnabled(!m_scene_model->hiddenPieces().isEmpty());
 
     // With nothing to step back from, Esc is left to the main window.
     const bool stitching = m_stitch_editor->isStitching();
@@ -1902,6 +1907,27 @@ void GarmentViewWidget::exportDrape()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// Hides the selected piece, and its copy, in the scene; they still drape.
+void GarmentViewWidget::hideSelectedPiece()
+{
+    const quint32 selected = m_scene_model->selectedPiece();
+    if (selected != 0)
+    {
+        QSet<quint32> hidden = m_scene_model->hiddenPieces();
+        hidden.insert(selected);
+        m_scene_model->setHiddenPieces(hidden);
+        updateActions();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentViewWidget::showAllPieces()
+{
+    m_scene_model->setHiddenPieces(QSet<quint32>());
+    updateActions();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // The garment to export: each piece on the avatar, and the copy of a piece cut twice, where the scene shows it, with
 // its color and its flat shape, and the image of its fabric laid on it as the scene lays it; and the avatar, in the
 // grey the scene draws it in.
@@ -2185,7 +2211,11 @@ void GarmentViewWidget::createToolBar()
 
     m_simulate_action = tool_bar->addAction(tr("Simulate"));
     m_simulate_action->setCheckable(true);
-    m_simulate_action->setToolTip(tr("Drape the pieces on the avatar, sewn together by their seams"));
+    m_simulate_action->setToolTip(tr("Drape the pieces on the avatar, sewn together by their seams; Space starts and "
+                                     "stops it"));
+    m_simulate_action->setShortcut(Qt::Key_Space);
+    m_simulate_action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    addAction(m_simulate_action);
     connect(m_simulate_action, &QAction::toggled, this, &GarmentViewWidget::setSimulating);
 
     // How finely the cloth drapes is a setting of the simulation, in its menu.
@@ -2292,6 +2322,66 @@ void GarmentViewWidget::createToolBar()
 
     tool_bar = add_group();
 
+    // Where the garment is looked at from, and what shows; with keys laid out as on a number pad, the front at the
+    // bottom.
+    m_view_action = tool_bar->addAction(tr("View"));
+    m_view_action->setToolTip(tr("Look at the garment from the front, the back, a side or the top, and show or hide "
+                                 "the avatar, the cloth's triangles and pieces"));
+    QMenu* view_menu = new QMenu(this);
+    view_menu->setToolTipsVisible(true);
+    const struct
+    {
+        QString text;
+        int     key;
+        qreal   pitch;
+        qreal   yaw;
+    } views[] = {{tr("Front"), Qt::Key_2, 0, 0},
+                 {tr("Back"), Qt::Key_8, 0, 180},
+                 {tr("Left Side"), Qt::Key_4, 0, 90},
+                 {tr("Right Side"), Qt::Key_6, 0, -90},
+                 {tr("Top"), Qt::Key_5, -90, 0}};
+    for (const auto& view : views)
+    {
+        QAction* action = view_menu->addAction(view.text);
+        action->setShortcut(view.key);
+        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        addAction(action);
+        const qreal pitch = view.pitch;
+        const qreal yaw = view.yaw;
+        connect(action, &QAction::triggered, m_scene_model, [this, pitch, yaw]()
+        {
+            m_scene_model->requestView(pitch, yaw);
+        });
+    }
+    view_menu->addSeparator();
+    QAction* avatar_shown = view_menu->addAction(tr("Show Avatar"));
+    avatar_shown->setCheckable(true);
+    avatar_shown->setChecked(true);
+    avatar_shown->setToolTip(tr("Hidden, the cloth still drapes on the avatar, and it shows while arranging"));
+    connect(avatar_shown, &QAction::toggled, m_scene_model, &GarmentSceneModel::setAvatarShown);
+    QAction* mesh_shown = view_menu->addAction(tr("Show Mesh"));
+    mesh_shown->setCheckable(true);
+    mesh_shown->setToolTip(tr("Show the triangles the cloth is made of, as the drape works them out"));
+    connect(mesh_shown, &QAction::toggled, m_scene_model, &GarmentSceneModel::setMeshShown);
+    view_menu->addSeparator();
+    m_hide_piece_action = view_menu->addAction(tr("Hide Selected Piece"));
+    m_hide_piece_action->setToolTip(tr("Hide the selected piece, and its copy, to see what is under it; it still "
+                                       "drapes"));
+    m_hide_piece_action->setShortcut(Qt::Key_H);
+    m_hide_piece_action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    addAction(m_hide_piece_action);
+    connect(m_hide_piece_action, &QAction::triggered, this, &GarmentViewWidget::hideSelectedPiece);
+    m_show_pieces_action = view_menu->addAction(tr("Show All Pieces"));
+    m_show_pieces_action->setShortcut(Qt::SHIFT | Qt::Key_H);
+    m_show_pieces_action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    addAction(m_show_pieces_action);
+    connect(m_show_pieces_action, &QAction::triggered, this, &GarmentViewWidget::showAllPieces);
+    m_view_action->setMenu(view_menu);
+    if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_view_action)))
+    {
+        button->setPopupMode(QToolButton::InstantPopup);
+    }
+
     m_export_action = tool_bar->addAction(tr("Export"));
     m_export_action->setToolTip(tr("Save the pieces on the avatar as they hang, and the avatar, for other 3D programs: "
                                    "glTF or OBJ"));
@@ -2325,6 +2415,7 @@ void GarmentViewWidget::updateIcons()
         m_fit_action->setIcon(toolIcon(QStringLiteral("strain")));
         m_checks_action->setIcon(toolIcon(QStringLiteral("checks")));
         m_image_action->setIcon(toolIcon(QStringLiteral("fabric_image")));
+        m_view_action->setIcon(toolIcon(QStringLiteral("views")));
         m_export_action->setIcon(toolIcon(QStringLiteral("export")));
     }
 }

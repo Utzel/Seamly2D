@@ -28,6 +28,7 @@
 #include <QColor>
 #include <QHash>
 #include <QPointF>
+#include <QSet>
 #include <QVector3D>
 #include <QtMath>
 
@@ -40,6 +41,9 @@ namespace
 // Position, normal and texture coordinates, as floats, and the color when the vertices have one.
 const int floats_per_vertex = 3 + 3 + 2 + 2;
 const int floats_per_color = 4;
+
+// The triangles' edges are drawn this far off the cloth's faces, in cm, so the faces don't hide them.
+const float edge_lift = 0.02f;
 
 //---------------------------------------------------------------------------------------------------------------------
 // The color in linear RGB, as vertex colors are.
@@ -258,6 +262,78 @@ QVector<QPointF> PieceGeometry::grainPositions(const GarmentMesh& mesh, qreal gr
         positions.append(QPointF(QPointF::dotProduct(rest, weft), QPointF::dotProduct(rest, warp)));
     }
     return positions;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Replaces the geometry with lines along the edges of the mesh's triangles, at the given positions in cm, or
+/// flat on the board without them, on the front face and the back face of cloth as thick as given, in cm. An empty mesh
+/// leaves nothing to draw.
+void PieceGeometry::setEdges(const GarmentMesh& mesh, const QVector<QVector3D>& positions, qreal thickness)
+{
+    clear();
+    if (mesh.vertexCount() == 0)
+    {
+        update();
+        return;
+    }
+
+    const QVector<QVector3D> placed = placedPositions(mesh, positions);
+    const QVector<QVector3D> normals = vertexNormals(mesh, placed);
+    const float off = static_cast<float>(qMax(thickness, 0.0) / 2.0) + edge_lift;
+    const int count = static_cast<int>(placed.size());
+
+    // Each vertex on the front face, then on the back face.
+    QVector<QVector3D> drawn;
+    drawn.reserve(2 * count);
+    for (int face = 0; face < 2; ++face)
+    {
+        const float side = face == 0 ? off : -off;
+        for (int i = 0; i < count; ++i)
+        {
+            drawn.append(placed.at(i) + normals.at(i) * side);
+        }
+    }
+
+    QSet<quint64> edges;
+    QVector<quint32> ends;
+    for (int i = 0; i + 2 < mesh.indices.size(); i += 3)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            const quint32 a = mesh.indices.at(i + k);
+            const quint32 b = mesh.indices.at(i + (k + 1) % 3);
+            if (!edges.contains(edgeKey(a, b)))
+            {
+                edges.insert(edgeKey(a, b));
+                ends << a << b << a + static_cast<quint32>(count) << b + static_cast<quint32>(count);
+            }
+        }
+    }
+
+    const int vertex_bytes = 3 * static_cast<int>(sizeof(float));
+    QByteArray vertex_data(static_cast<int>(drawn.size()) * vertex_bytes, Qt::Uninitialized);
+    float* vertex = reinterpret_cast<float*>(vertex_data.data());
+    for (const QVector3D& position : drawn)
+    {
+        *vertex++ = position.x();
+        *vertex++ = position.y();
+        *vertex++ = position.z();
+    }
+    const QByteArray index_data(reinterpret_cast<const char*>(ends.constData()),
+                                static_cast<int>(ends.size() * static_cast<int>(sizeof(quint32))));
+
+    QVector3D minimum;
+    QVector3D maximum;
+    bounds(drawn, &minimum, &maximum);
+
+    setStride(vertex_bytes);
+    setPrimitiveType(PrimitiveType::Lines);
+    addAttribute(Attribute::PositionSemantic, 0, Attribute::F32Type);
+    addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
+    setVertexData(vertex_data);
+    setIndexData(index_data);
+    setBounds(minimum, maximum);
+    update();
 }
 
 //---------------------------------------------------------------------------------------------------------------------

@@ -29,6 +29,7 @@
 #include <QColor>
 #include <QHash>
 #include <QRectF>
+#include <QSet>
 #include <QSize>
 #include <QString>
 #include <QStringList>
@@ -69,6 +70,8 @@ class GarmentSceneModel : public QAbstractListModel
     Q_PROPERTY(QVariantList fitColors READ fitColors NOTIFY fitMapChanged)
     Q_PROPERTY(QStringList fitLabels READ fitLabels NOTIFY fitMapChanged)
     Q_PROPERTY(bool checksShown READ isChecksShown NOTIFY checksShownChanged)
+    Q_PROPERTY(bool avatarShown READ isAvatarShown NOTIFY avatarShownChanged)
+    Q_PROPERTY(bool meshShown READ isMeshShown NOTIFY meshShownChanged)
     Q_PROPERTY(qreal checkRepeat READ checkRepeat CONSTANT)
 
 public:
@@ -94,6 +97,8 @@ public:
         PieceThreadColorRole,
         PieceTextureRole,
         PieceTextureSizeRole,
+        PieceEdgesRole,
+        PieceShownRole,
         SelectedRole,
         PlacedRole
     };
@@ -163,6 +168,14 @@ public:
     void                   setChecksShown(bool shown);
     qreal                  checkRepeat() const;
 
+    bool                   isAvatarShown() const;
+    void                   setAvatarShown(bool shown);
+    bool                   isMeshShown() const;
+    void                   setMeshShown(bool shown);
+    QSet<quint32>          hiddenPieces() const;
+    void                   setHiddenPieces(const QSet<quint32>& pieces);
+    void                   requestView(qreal pitch, qreal yaw);
+
     Q_INVOKABLE void       pickPiece(int id);
     Q_INVOKABLE void       placeAt(qreal x, qreal y, qreal z);
     Q_INVOKABLE bool       grabPiece(int id, qreal x, qreal y, qreal z);
@@ -181,6 +194,9 @@ signals:
     void                   hintChanged();
     void                   fitMapChanged();
     void                   checksShownChanged();
+    void                   avatarShownChanged();
+    void                   meshShownChanged();
+    void                   viewRequested(qreal pitch, qreal yaw);
     void                   placeRequested(const QVector3D& point);
     void                   grabRequested(quint32 id, const QVector3D& point);
     void                   dragRequested(const QVector3D& point);
@@ -214,6 +230,7 @@ private:
         QVector<ThreadStitch> preview;
         PieceGeometry* geometry = nullptr;
         PieceGeometry* outline = nullptr;
+        PieceGeometry* edges = nullptr;
         StitchGeometry* stitch_geometry = nullptr;
         StitchGeometry* preview_geometry = nullptr;
     };
@@ -234,6 +251,9 @@ private:
     FitMap                 m_fit_map;
     BodyCollider           m_body;
     bool                   m_checks_shown;
+    bool                   m_avatar_shown;
+    bool                   m_mesh_shown;
+    QSet<quint32>          m_hidden_pieces;
     QColor                 m_thread_color;
     QHash<QByteArray, FabricImage> m_images;
 
@@ -242,6 +262,7 @@ private:
     QColor                 clothColor(const Row& row) const;
     void                   showStitches(const Row& row) const;
     void                   showMesh(const Row& row) const;
+    void                   showEdges(const Row& row) const;
     QVector<QColor>        vertexColors(const Row& row) const;
 };
 

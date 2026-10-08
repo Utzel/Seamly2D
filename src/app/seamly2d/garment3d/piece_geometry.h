@@ -54,6 +54,8 @@ public:
     void               setMesh(const GarmentMesh& mesh, const QVector<QVector3D>& positions = QVector<QVector3D>(),
                                const QVector<QColor>& colors = QVector<QColor>(), qreal grain_angle = 90.0,
                                qreal thickness = 0.0);
+    void               setEdges(const GarmentMesh& mesh, const QVector<QVector3D>& positions = QVector<QVector3D>(),
+                                qreal thickness = 0.0);
     void               setOutline(const GarmentMesh& mesh,
                                   const QVector<QVector3D>& positions = QVector<QVector3D>(), qreal thickness = 0.0);
 

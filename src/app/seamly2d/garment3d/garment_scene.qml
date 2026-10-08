@@ -126,10 +126,19 @@ Rectangle {
         camera.position = Qt.vector3d(0, 0, radius / Math.sin(half_view) * 1.05)
     }
 
+    // Looks at all pieces from a direction: turned up or down by the pitch and around by the yaw, in degrees.
+    function viewFrom(pitch, yaw) {
+        root.frameAll()
+        orbit_origin.eulerRotation = Qt.vector3d(pitch, yaw, 0)
+    }
+
     Connections {
         target: root.sceneModel
         function onFramingRequested() {
             root.frameAll()
+        }
+        function onViewRequested(pitch, yaw) {
+            root.viewFrom(pitch, yaw)
         }
     }
 
@@ -216,7 +225,7 @@ Rectangle {
         Model {
             readonly property bool isAvatar: true
 
-            visible: root.sceneModel.hasAvatar
+            visible: root.sceneModel.hasAvatar && (root.sceneModel.avatarShown || root.sceneModel.arranging)
             opacity: root.seamEditor.sewing ? 0.25 : 1.0
             pickable: root.sceneModel.arranging || root.stitchEditor.stitching
             geometry: root.sceneModel.avatarGeometry
@@ -303,10 +312,13 @@ Rectangle {
                     required property color pieceThreadColor
                     required property TextureData pieceTexture
                     required property size pieceTextureSize
+                    required property Geometry pieceEdges
+                    required property bool pieceShown
                     required property bool selected
                     required property bool placed
 
                     position: placed ? root.sceneModel.boardOffset.times(-1) : Qt.vector3d(0, 0, index * 0.05)
+                    visible: pieceShown
 
                     // With a fit map shown, the vertex colors take the place of the piece's own; with an image of
                     // its fabric, the image does.
@@ -377,6 +389,19 @@ Rectangle {
                         materials: PrincipledMaterial {
                             lighting: PrincipledMaterial.NoLighting
                             baseColor: root.highlightColor
+                        }
+                    }
+
+                    // The triangles the cloth is made of, on both its faces, when asked for.
+                    Model {
+                        visible: root.sceneModel.meshShown
+                        geometry: piece_node.pieceEdges
+                        castsShadows: false
+                        pickable: false
+
+                        materials: PrincipledMaterial {
+                            lighting: PrincipledMaterial.NoLighting
+                            baseColor: piece_node.pieceColor.hslLightness > 0.5 ? "#99303030" : "#99f0f0f0"
                         }
                     }
 
