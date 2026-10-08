@@ -227,6 +227,47 @@ struct VGarmentAvatar
     bool  operator==(const VGarmentAvatar& other) const;
 };
 
+/// The cloth of a piece as the 3D View last draped it, or of its mirrored copy, for a piece cut twice: where each
+/// vertex of the piece's mesh lies in the flat piece, x and y, and where it hung, x, y and z, all in cm.
+struct VDrapedCloth
+{
+    quint32        piece_id {NULL_ID};
+    bool           copy {false};
+    QVector<float> rest {};
+    QVector<float> positions {};
+
+    bool           operator==(const VDrapedCloth& other) const;
+};
+
+/// A pin holding the draped cloth of a piece, or of its mirrored copy: at a point in the flat piece, x and y, held at
+/// a point around the avatar, at x, y and z, all in cm.
+struct VClothPin
+{
+    quint32 piece_id {NULL_ID};
+    bool    copy {false};
+    qreal   x {0};
+    qreal   y {0};
+    qreal   at_x {0};
+    qreal   at_y {0};
+    qreal   at_z {0};
+
+    bool    operator==(const VClothPin& other) const;
+};
+
+/// The garment as the 3D View last draped it, so the pattern opens with it draped: on the avatar known by a
+/// fingerprint of what it was fitted to, with the pieces meshed in triangles of an edge length in cm, and the pins
+/// holding the cloth.
+struct VGarmentDrape
+{
+    QString               avatar {};
+    qreal                 edge_length {0};
+    QVector<VDrapedCloth> cloths {};
+    QVector<VClothPin>    pins {};
+
+    bool                  isNull() const;
+    bool                  operator==(const VGarmentDrape& other) const;
+};
+
 struct GroupAttributes
 {
    QString  name;
@@ -268,6 +309,9 @@ public:
 
     VGarmentAvatar                 getAvatar() const;
     void                           setAvatar(const VGarmentAvatar& avatar);
+
+    VGarmentDrape                  getDrape() const;
+    void                           setDrape(const VGarmentDrape& drape);
     bool                           isVariableUsed(const QStringList &variable_names) const;
 
     virtual void                   CreateEmptyFile()=0;
@@ -457,6 +501,9 @@ public:
     static const QString TagTopstitches;
     static const QString TagTopstitch;
     static const QString TagAvatar;
+    static const QString TagDrape;
+    static const QString TagCloth;
+    static const QString TagClothPin;
     static const QString TagDraftBlock;
     static const QString TagGroups;
     static const QString TagGroup;
@@ -563,6 +610,12 @@ public:
     static const QString AttrDistance;
     static const QString AttrLean;
     static const QString AttrSwing;
+    static const QString AttrAvatar;
+    static const QString AttrEdgeLength;
+    static const QString AttrCopy;
+    static const QString AttrAtX;
+    static const QString AttrAtY;
+    static const QString AttrAtZ;
 
     static const QString AttrAll;
 

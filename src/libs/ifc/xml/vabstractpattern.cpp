@@ -73,6 +73,7 @@
 #include "../vtools/tools/vabstracttool.h"
 #include "../vtools/tools/vdatatool.h"
 
+#include <QDataStream>
 #include <QDomNode>
 #include <QDomNodeList>
 #include <QLatin1String>
@@ -108,6 +109,9 @@ const QString VAbstractPattern::TagTexture              = QStringLiteral("textur
 const QString VAbstractPattern::TagTopstitches          = QStringLiteral("topstitches");
 const QString VAbstractPattern::TagTopstitch            = QStringLiteral("topstitch");
 const QString VAbstractPattern::TagAvatar               = QStringLiteral("avatar");
+const QString VAbstractPattern::TagDrape                = QStringLiteral("drape");
+const QString VAbstractPattern::TagCloth                = QStringLiteral("cloth");
+const QString VAbstractPattern::TagClothPin             = QStringLiteral("clothPin");
 const QString VAbstractPattern::TagDraftBlock           = QStringLiteral("draftBlock");
 const QString VAbstractPattern::TagGroups               = QStringLiteral("groups");
 const QString VAbstractPattern::TagGroup                = QStringLiteral("group");
@@ -214,6 +218,12 @@ const QString VAbstractPattern::AttrArrangementPoint    = QStringLiteral("point"
 const QString VAbstractPattern::AttrDistance            = QStringLiteral("distance");
 const QString VAbstractPattern::AttrLean                = QStringLiteral("lean");
 const QString VAbstractPattern::AttrSwing               = QStringLiteral("swing");
+const QString VAbstractPattern::AttrAvatar              = QStringLiteral("avatar");
+const QString VAbstractPattern::AttrEdgeLength          = QStringLiteral("edgeLength");
+const QString VAbstractPattern::AttrCopy                = QStringLiteral("copy");
+const QString VAbstractPattern::AttrAtX                 = QStringLiteral("atX");
+const QString VAbstractPattern::AttrAtY                 = QStringLiteral("atY");
+const QString VAbstractPattern::AttrAtZ                 = QStringLiteral("atZ");
 
 const QString VAbstractPattern::AttrAll                 = QStringLiteral("all");
 
@@ -330,6 +340,47 @@ VFabricTexture readFabricTexture(const QDomElement& parent)
         texture.width = VDomDocument::GetParametrDouble(element, VAbstractPattern::AttrWidth, QStringLiteral("10"));
     }
     return texture;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief A draped cloth's vertices as the pattern keeps them: for each, five little-endian 32-bit floats, x and y in
+/// the flat piece, then x, y and z as draped.
+QByteArray clothBytes(const VDrapedCloth& cloth)
+{
+    QByteArray bytes;
+    QDataStream stream(&bytes, QIODevice::WriteOnly);
+    stream.setByteOrder(QDataStream::LittleEndian);
+    stream.setFloatingPointPrecision(QDataStream::SinglePrecision);
+    const int count = qMin(cloth.rest.size() / 2, cloth.positions.size() / 3);
+    for (int i = 0; i < count; ++i)
+    {
+        stream << cloth.rest.at(2 * i) << cloth.rest.at(2 * i + 1) << cloth.positions.at(3 * i)
+               << cloth.positions.at(3 * i + 1) << cloth.positions.at(3 * i + 2);
+    }
+    return bytes;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Reads a draped cloth's vertices as clothBytes() keeps them; a vertex cut short is left out.
+void readClothBytes(const QByteArray& bytes, VDrapedCloth& cloth)
+{
+    QDataStream stream(bytes);
+    stream.setByteOrder(QDataStream::LittleEndian);
+    stream.setFloatingPointPrecision(QDataStream::SinglePrecision);
+    float values[5];
+    while (!stream.atEnd())
+    {
+        for (float& value : values)
+        {
+            stream >> value;
+        }
+        if (stream.status() != QDataStream::Ok)
+        {
+            break;
+        }
+        cloth.rest << values[0] << values[1];
+        cloth.positions << values[2] << values[3] << values[4];
+    }
 }
 }
 
@@ -2351,6 +2402,33 @@ bool VGarmentAvatar::operator==(const VGarmentAvatar& other) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+bool VDrapedCloth::operator==(const VDrapedCloth& other) const
+{
+    return piece_id == other.piece_id && copy == other.copy && rest == other.rest && positions == other.positions;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool VClothPin::operator==(const VClothPin& other) const
+{
+    return piece_id == other.piece_id && copy == other.copy && qFuzzyCompare(1.0 + x, 1.0 + other.x)
+           && qFuzzyCompare(1.0 + y, 1.0 + other.y) && qFuzzyCompare(1.0 + at_x, 1.0 + other.at_x)
+           && qFuzzyCompare(1.0 + at_y, 1.0 + other.at_y) && qFuzzyCompare(1.0 + at_z, 1.0 + other.at_z);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool VGarmentDrape::isNull() const
+{
+    return cloths.isEmpty() && pins.isEmpty();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool VGarmentDrape::operator==(const VGarmentDrape& other) const
+{
+    return avatar == other.avatar && qFuzzyCompare(1.0 + edge_length, 1.0 + other.edge_length)
+           && cloths == other.cloths && pins == other.pins;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief The seams sewing the pieces together, in the order they were made.
 ///
 /// A seam can name a piece or point that is gone, after the piece was deleted or its path edited. Such seams are
@@ -2730,11 +2808,116 @@ void VAbstractPattern::setAvatar(const VGarmentAvatar& avatar)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief The garment as the 3D View last draped it; null if it wasn't draped, or was put back as arranged.
+VGarmentDrape VAbstractPattern::getDrape() const
+{
+    VGarmentDrape drape;
+    const QDomElement drape_element = documentElement().firstChildElement(TagDrape);
+    if (!drape_element.isNull())
+    {
+        drape.avatar = GetParametrEmptyString(drape_element, AttrAvatar);
+        drape.edge_length = GetParametrDouble(drape_element, AttrEdgeLength, QStringLiteral("0"));
+    }
+
+    QDomElement element = drape_element.firstChildElement(TagCloth);
+    while (!element.isNull())
+    {
+        VDrapedCloth cloth;
+        cloth.piece_id = GetParametrUInt(element, AttrPiece, NULL_ID_STR);
+        cloth.copy = getParameterBool(element, AttrCopy, falseStr);
+        readClothBytes(QByteArray::fromBase64(element.text().toLatin1()), cloth);
+        drape.cloths.append(cloth);
+
+        element = element.nextSiblingElement(TagCloth);
+    }
+
+    element = drape_element.firstChildElement(TagClothPin);
+    while (!element.isNull())
+    {
+        VClothPin pin;
+        pin.piece_id = GetParametrUInt(element, AttrPiece, NULL_ID_STR);
+        pin.copy = getParameterBool(element, AttrCopy, falseStr);
+        pin.x = GetParametrDouble(element, AttrX, QStringLiteral("0"));
+        pin.y = GetParametrDouble(element, AttrY, QStringLiteral("0"));
+        pin.at_x = GetParametrDouble(element, AttrAtX, QStringLiteral("0"));
+        pin.at_y = GetParametrDouble(element, AttrAtY, QStringLiteral("0"));
+        pin.at_z = GetParametrDouble(element, AttrAtZ, QStringLiteral("0"));
+        drape.pins.append(pin);
+
+        element = element.nextSiblingElement(TagClothPin);
+    }
+    return drape;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Replaces the drape; a null one takes it out.
+///
+/// How the cloth hangs isn't an edit to undo, so this goes past the undo stack; but the pattern counts as changed, to
+/// be saved with it.
+void VAbstractPattern::setDrape(const VGarmentDrape& drape)
+{
+    QDomElement pattern = documentElement();
+    QDomElement element = pattern.firstChildElement(TagDrape);
+
+    if (drape.isNull())
+    {
+        if (!element.isNull())
+        {
+            pattern.removeChild(element);
+        }
+    }
+    else
+    {
+        if (element.isNull())
+        {
+            element = createGarmentElement(TagDrape);
+        }
+        else
+        {
+            RemoveAllChildren(element);
+        }
+
+        SetAttribute(element, AttrAvatar, drape.avatar);
+        SetAttribute(element, AttrEdgeLength, drape.edge_length);
+        for (const VDrapedCloth& cloth : drape.cloths)
+        {
+            QDomElement tag = createElement(TagCloth);
+            SetAttribute(tag, AttrPiece, cloth.piece_id);
+            if (cloth.copy)
+            {
+                SetAttribute(tag, AttrCopy, cloth.copy);
+            }
+            tag.appendChild(createTextNode(QString::fromLatin1(clothBytes(cloth).toBase64())));
+            element.appendChild(tag);
+        }
+        for (const VClothPin& pin : drape.pins)
+        {
+            QDomElement tag = createElement(TagClothPin);
+            SetAttribute(tag, AttrPiece, pin.piece_id);
+            if (pin.copy)
+            {
+                SetAttribute(tag, AttrCopy, pin.copy);
+            }
+            SetAttribute(tag, AttrX, pin.x);
+            SetAttribute(tag, AttrY, pin.y);
+            SetAttribute(tag, AttrAtX, pin.at_x);
+            SetAttribute(tag, AttrAtY, pin.at_y);
+            SetAttribute(tag, AttrAtZ, pin.at_z);
+            element.appendChild(tag);
+        }
+    }
+
+    modified = true;
+    emit patternChanged(false);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Adds an empty element for the 3D garment's data where the schema wants it: the seams, the arrangements, the fabrics,
-// the topstitching, then the avatar, all before the draft blocks, which are added at the end.
+// the topstitching, the avatar, then the drape, all before the draft blocks, which are added at the end.
 QDomElement VAbstractPattern::createGarmentElement(const QString& tag)
 {
-    const QStringList order = {TagSeams, TagArrangements, TagFabrics, TagTopstitches, TagAvatar, TagDraftBlock};
+    const QStringList order = {TagSeams, TagArrangements, TagFabrics, TagTopstitches, TagAvatar, TagDrape,
+                               TagDraftBlock};
     QDomElement pattern = documentElement();
 
     QDomElement before;

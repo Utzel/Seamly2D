@@ -49,6 +49,8 @@ private slots:
     void undoRestoresTopstitches() const;
     void avatarIsReadBack() const;
     void undoRestoresAvatar() const;
+    void drapeIsReadBack() const;
+    void drapeChangesThePatternWithoutUndo() const;
 
 private:
     Q_DISABLE_COPY(TST_PatternSeams)

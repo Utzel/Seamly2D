@@ -151,6 +151,30 @@ VGarmentAvatar avatar(bool male, int size, qreal height, qreal bust, qreal waist
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// A drape of a piece and the mirrored copy of another, cut twice, with a pin in each.
+VGarmentDrape drape()
+{
+    VGarmentDrape made;
+    made.avatar = QStringLiteral("5d41402abc4b2a76");
+    made.edge_length = 2;
+
+    VDrapedCloth piece;
+    piece.piece_id = 10;
+    piece.rest = {0.0f, 0.0f, 2.0f, 0.0f, 0.0f, 2.5f};
+    piece.positions = {-10.5f, 120.25f, 12.0f, -8.5f, 120.0f, 12.125f, -10.5f, 117.75f, 12.0625f};
+    made.cloths.append(piece);
+    VDrapedCloth copy;
+    copy.piece_id = 20;
+    copy.copy = true;
+    copy.rest = {-1.0f, 3.0f, -3.0f, 3.0f, -1.0f, 5.0f, -3.0f, 5.0f};
+    copy.positions = {14.0f, 98.5f, -3.0f, 16.0f, 98.5f, -2.0f, 14.0f, 96.5f, -3.0f, 16.0f, 96.5f, -2.0f};
+    made.cloths.append(copy);
+
+    made.pins = {{10, false, 1.5, 0.5, -9.75, 119.5, 13.25}, {20, true, -2, 4, 15, 97.5, -1.5}};
+    return made;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 QStringList childTags(const QDomElement& element)
 {
     QStringList tags;
@@ -324,11 +348,12 @@ void TST_PatternSeams::arrangementsAreReadBack() const
 
 //---------------------------------------------------------------------------------------------------------------------
 // Whichever is made first, the seams come before the arrangements, those before the fabrics, those before the
-// topstitching, that before the avatar, and all before the draft blocks. Pieces can be arranged on every part of the
-// body.
+// topstitching, that before the avatar, that before the drape, and all before the draft blocks. Pieces can be arranged
+// on every part of the body.
 void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
 {
     SeamsPattern pattern;
+    pattern.setDrape(drape());
     pattern.setAvatar(avatar(true, 52, 180.5, 104, 92, 108));
     VTopstitches topstitches;
     topstitches.all = true;
@@ -360,7 +385,7 @@ void TST_PatternSeams::garmentDataKeepsSchemaOrder() const
              QStringList({QStringLiteral("version"), QStringLiteral("unit"), QStringLiteral("measurements"),
                           QStringLiteral("finalMeasurements"), QStringLiteral("seams"), QStringLiteral("arrangements"),
                           QStringLiteral("fabrics"), QStringLiteral("topstitches"), QStringLiteral("avatar"),
-                          QStringLiteral("draftBlock"), QStringLiteral("draftBlock")}));
+                          QStringLiteral("drape"), QStringLiteral("draftBlock"), QStringLiteral("draftBlock")}));
 
     QTemporaryDir folder;
     QVERIFY(folder.isValid());
@@ -558,4 +583,47 @@ void TST_PatternSeams::undoRestoresAvatar() const
     stack.undo();
     QVERIFY(pattern.getAvatar().isNull());
     QCOMPARE(changes.count(), 2);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The drape keeps every vertex of its cloth as it was, in the flat and draped, which piece or copy it is, and its pins;
+// a drape put back as arranged takes it out again.
+void TST_PatternSeams::drapeIsReadBack() const
+{
+    SeamsPattern pattern;
+    QVERIFY(pattern.getDrape().isNull());
+
+    const VGarmentDrape draped = drape();
+    pattern.setDrape(draped);
+    QCOMPARE(pattern.getDrape(), draped);
+    QCOMPARE(pattern.getDrape().cloths.at(1).positions.size(), 12);
+
+    // Draped again, the drape replaces the one before.
+    VGarmentDrape again = draped;
+    again.cloths.removeLast();
+    again.cloths[0].positions[4] = 121.5f;
+    again.pins.removeFirst();
+    again.edge_length = 1;
+    pattern.setDrape(again);
+    QCOMPARE(pattern.getDrape(), again);
+    QCOMPARE(pattern.documentElement().elementsByTagName(QStringLiteral("drape")).size(), 1);
+    QCOMPARE(pattern.documentElement().elementsByTagName(QStringLiteral("cloth")).size(), 1);
+
+    pattern.setDrape(VGarmentDrape());
+    QVERIFY(pattern.documentElement().firstChildElement(QStringLiteral("drape")).isNull());
+    QVERIFY(pattern.getDrape().isNull());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// How the cloth hangs isn't an edit to undo, but the pattern has changed and wants saving.
+void TST_PatternSeams::drapeChangesThePatternWithoutUndo() const
+{
+    SeamsPattern pattern;
+    QVERIFY(!pattern.IsModified());
+    QSignalSpy changes(&pattern, &VAbstractPattern::patternChanged);
+
+    pattern.setDrape(drape());
+    QVERIFY(pattern.IsModified());
+    QCOMPARE(changes.count(), 1);
+    QCOMPARE(changes.at(0).at(0).toBool(), false);
 }

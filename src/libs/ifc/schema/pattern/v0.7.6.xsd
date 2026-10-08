@@ -247,6 +247,35 @@
             <xs:attribute name="hip" type="xs:double" use="required"/>
           </xs:complexType>
         </xs:element>
+        <xs:element name="drape" minOccurs="0" maxOccurs="1">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="cloth" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:simpleContent>
+                    <xs:extension base="xs:base64Binary">
+                      <xs:attribute name="piece" type="xs:unsignedInt" use="required"/>
+                      <xs:attribute name="copy" type="xs:boolean"/>
+                    </xs:extension>
+                  </xs:simpleContent>
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="clothPin" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="piece" type="xs:unsignedInt" use="required"/>
+                  <xs:attribute name="copy" type="xs:boolean"/>
+                  <xs:attribute name="x" type="xs:double" use="required"/>
+                  <xs:attribute name="y" type="xs:double" use="required"/>
+                  <xs:attribute name="atX" type="xs:double" use="required"/>
+                  <xs:attribute name="atY" type="xs:double" use="required"/>
+                  <xs:attribute name="atZ" type="xs:double" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="avatar" type="xs:string"/>
+            <xs:attribute name="edgeLength" type="xs:double"/>
+          </xs:complexType>
+        </xs:element>
         <xs:element name="draftBlock" minOccurs="1" maxOccurs="unbounded">
           <xs:complexType>
             <xs:sequence>
