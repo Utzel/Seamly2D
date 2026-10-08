@@ -839,6 +839,68 @@ void TST_ClothSolver::elasticGathersTheCloth() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+void TST_ClothSolver::shrinkageResizesTheCloth_data() const
+{
+    QTest::addColumn<qreal>("weft");
+    QTest::addColumn<qreal>("warp");
+    QTest::addColumn<bool>("on_device");
+    for (const bool on_device : {false, true})
+    {
+        const QString device = on_device ? QStringLiteral(", graphics card") : QString();
+        QTest::newRow(qPrintable(QStringLiteral("shrunk across the grain") + device)) << 0.8 << 1.0 << on_device;
+        QTest::newRow(qPrintable(QStringLiteral("stretched out along the grain") + device)) << 1.0 << 1.2 << on_device;
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A 20 cm square of a fabric that shrinks comes to that share of its size across the grain, the weft, and along it,
+// the warp: its grain runs up the piece.
+void TST_ClothSolver::shrinkageResizesTheCloth() const
+{
+    QFETCH(qreal, weft);
+    QFETCH(qreal, warp);
+    QFETCH(bool, on_device);
+    ClothSettings settings;
+    settings.floor = false;
+    settings.gravity = QVector3D();
+    ClothSolver solver(settings);
+    const GarmentMesh square = PieceMesher().meshOutline(rectangle(0, 0, 20, 20, 1));
+    Fabric fabric;
+    fabric.shrinkage_weft = weft;
+    fabric.shrinkage_warp = warp;
+    solver.addMesh(square, standing(square), fabric, 90.0);
+    ComputeDevice device;
+    if (on_device && !solver.useDevice(device.open()))
+    {
+        QSKIP("No graphics card here can compute");
+    }
+    for (int i = 0; i < 300; ++i)
+    {
+        solver.step(frame);
+    }
+    QCOMPARE(solver.isOnDevice(), on_device);
+    solver.useDevice(nullptr);
+
+    const QVector<QVector3D> positions = solver.positions();
+    auto at = [&square, &positions](const QPointF& rest)
+    {
+        int nearest = 0;
+        for (int i = 0; i < square.vertexCount(); ++i)
+        {
+            nearest = QLineF(square.rest_positions.at(i), rest).length()
+                              < QLineF(square.rest_positions.at(nearest), rest).length() ? i : nearest;
+        }
+        return positions.at(nearest);
+    };
+    const float across = (at(QPointF(20, 10)) - at(QPointF(0, 10))).length();
+    const float along = (at(QPointF(10, 20)) - at(QPointF(10, 0))).length();
+    QVERIFY2(qAbs(across - 20.0f * static_cast<float>(weft)) < 0.5f
+                 && qAbs(along - 20.0f * static_cast<float>(warp)) < 0.5f,
+             qUtf8Printable(QStringLiteral("the square is %1 cm across the grain and %2 cm along it").arg(across)
+                                .arg(along)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void TST_ClothSolver::seamsCloseDespiteSelfContact_data() const
 {
     onProcessorAndDevice();

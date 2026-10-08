@@ -53,6 +53,8 @@ private slots:
     void piecesGatherIntoOneSeam() const;
     void elasticGathersTheCloth_data() const;
     void elasticGathersTheCloth() const;
+    void shrinkageResizesTheCloth_data() const;
+    void shrinkageResizesTheCloth() const;
     void seamsCloseDespiteSelfContact_data() const;
     void seamsCloseDespiteSelfContact() const;
     void biasGivesMoreThanGrain() const;

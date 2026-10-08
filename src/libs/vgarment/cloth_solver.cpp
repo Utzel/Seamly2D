@@ -121,6 +121,9 @@ const double hardest_pull = M_PI / 4.0;
 const double elastic_width = 1.0;
 const double shortest_elastic = 0.1;
 
+// Cloth shrinks to no less than this share of its drafted size.
+const double least_shrinkage = 0.1;
+
 //---------------------------------------------------------------------------------------------------------------------
 struct Vec3
 {
@@ -735,16 +738,20 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
     }
 
     // The fabric's own directions in the flat piece, whose y axis points down: the grain, or warp, and across it the
-    // weft. Each triangle's corners in them make its deformation gradient.
+    // weft. Each triangle's corners in them make its deformation gradient, the cloth shrunk in each as the fabric
+    // shrinks; its weight is the drafted piece's.
     const double grain = qDegreesToRadians(grain_angle);
     const QPointF warp_direction(qCos(grain), -qSin(grain));
     const QPointF weft_direction(-warp_direction.y(), warp_direction.x());
-    auto in_fabric = [&mesh, &warp_direction, &weft_direction](quint32 vertex)
+    const double weft_shrinkage = qMax(fabric.shrinkage_weft, least_shrinkage);
+    const double warp_shrinkage = qMax(fabric.shrinkage_warp, least_shrinkage);
+    auto in_fabric = [&mesh, &warp_direction, &weft_direction, weft_shrinkage, warp_shrinkage](quint32 vertex)
     {
         const QPointF& point = mesh.rest_positions.at(static_cast<int>(vertex));
-        return QPointF(QPointF::dotProduct(point, weft_direction), QPointF::dotProduct(point, warp_direction));
+        return QPointF(QPointF::dotProduct(point, weft_direction) * weft_shrinkage,
+                       QPointF::dotProduct(point, warp_direction) * warp_shrinkage);
     };
-    const double density = fabric.weight * per_square_metre;
+    const double density = fabric.weight * per_square_metre / (weft_shrinkage * warp_shrinkage);
     Fabric stretch = fabric;
     stretch.warp_stiffness = qMin(fabric.warp_stiffness, stiffest_stretch);
     stretch.weft_stiffness = qMin(fabric.weft_stiffness, stiffest_stretch);
