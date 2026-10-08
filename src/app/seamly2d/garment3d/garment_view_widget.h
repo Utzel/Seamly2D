@@ -127,6 +127,8 @@ private slots:
     void               rotatePieceClockwise();
     void               rotatePieceCounterclockwise();
     void               turnPieceOver();
+    void               chooseLayer(QAction* action);
+    void               updateLayers();
     void               takePieceOff();
     void               showPieceMenu(const QPointF& at);
     void               grabGizmo(int part);
@@ -288,6 +290,8 @@ private:
     QAction*                   m_superimpose_over_action;
     QAction*                   m_superimpose_under_action;
     QAction*                   m_superimpose_side_action;
+    QMenu*                     m_layer_menu;
+    QActionGroup*              m_piece_layers;
     QMenu*                     m_piece_menu;
     QAction*                   m_simulate_action;
     QAction*                   m_reset_action;
@@ -347,6 +351,7 @@ private:
     void               saveArrangements(const QString& text, const QVector<VPieceArrangement>& arrangements);
     void               saveTopstitches(const VTopstitches& topstitches, const QString& text);
     void               saveFolds(const QVector<VFold>& folds, const QString& text);
+    int                layerOf(quint32 piece) const;
     VFabricTexture     ownFabricImage() const;
     void               saveFabricImage(const VFabricTexture& texture, const QString& text);
     QVector<QVector<QPointF>> stitchedPaths(const VPiece& piece) const;

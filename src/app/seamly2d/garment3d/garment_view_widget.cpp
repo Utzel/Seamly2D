@@ -95,6 +95,7 @@
 #include "../vtools/undocommands/save_avatar.h"
 #include "../vtools/undocommands/save_fabrics.h"
 #include "../vtools/undocommands/save_folds.h"
+#include "../vtools/undocommands/save_layers.h"
 #include "../vtools/undocommands/save_seams.h"
 #include "../vtools/undocommands/save_topstitches.h"
 #include "avatar_dialog.h"
@@ -208,6 +209,10 @@ const qreal fold_angles[] = {360.0, 270.0, 90.0, 0.0};
 // The seam types the Sew menu offers, by the angle they hold the pieces at, as VSeam says: none, flat, turned and
 // right sides together.
 const qreal seam_angles[] = {-1.0, 180.0, 360.0, 0.0};
+
+// The menus offer the layers from 0, next to the body, to this one; a garment of a shell, its lining and pockets, worn
+// over another, rarely needs more.
+const int highest_layer = 5;
 
 // Folds within this many degrees of the cloth onto itself start out folded; the part folded over lies this many cm off
 // the rest, on the side it folds to.
@@ -377,6 +382,8 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_superimpose_over_action(nullptr)
     , m_superimpose_under_action(nullptr)
     , m_superimpose_side_action(nullptr)
+    , m_layer_menu(nullptr)
+    , m_piece_layers(nullptr)
     , m_piece_menu(nullptr)
     , m_simulate_action(nullptr)
     , m_reset_action(nullptr)
@@ -448,6 +455,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     connect(m_seam_editor, &SeamEditor::sewingChanged, this, &GarmentViewWidget::updateActions);
     connect(m_seam_editor, &SeamEditor::selectedSeamChanged, this, &GarmentViewWidget::updateActions);
     connect(m_doc, &VAbstractPattern::arrangementsChanged, this, &GarmentViewWidget::updateArrangements);
+    connect(m_doc, &VAbstractPattern::layersChanged, this, &GarmentViewWidget::updateLayers);
     connect(m_doc, &VAbstractPattern::fabricsChanged, this, &GarmentViewWidget::updateFabrics);
     connect(m_doc, &VAbstractPattern::topstitchesChanged, this, &GarmentViewWidget::updateTopstitches);
     connect(m_doc, &VAbstractPattern::avatarChanged, this, &GarmentViewWidget::updateChosenAvatar);
@@ -1807,6 +1815,58 @@ void GarmentViewWidget::turnPieceOver()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// A layer was chosen for the selected piece, as CLO's: it is worn over the pieces of lower layers where it lies on them.
+void GarmentViewWidget::chooseLayer(QAction* action)
+{
+    const quint32 piece = m_scene_model->selectedPiece();
+    const int layer = action->data().toInt();
+    if (piece != 0 && layer != layerOf(piece))
+    {
+        const QVector<VPieceLayer> before = m_doc->getLayers();
+        QVector<VPieceLayer> after = before;
+        auto worn = std::find_if(after.begin(), after.end(), [piece](const VPieceLayer& kept)
+        {
+            return kept.piece_id == piece;
+        });
+        if (worn != after.end())
+        {
+            worn->layer = layer;
+        }
+        else
+        {
+            after.append({piece, layer});
+        }
+        qApp->getUndoStack()->push(new SaveLayers(tr("change piece layer"), before, after, m_doc));
+    }
+    updateActions();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The pattern's layers changed, by choosing one here or by undo and redo. A drape going on goes on with them.
+void GarmentViewWidget::updateLayers()
+{
+    if (m_runner->isRunning())
+    {
+        startSimulation();
+    }
+    updateActions();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The layer a pattern piece is worn in: 0, next to the body, unless the pattern says otherwise.
+int GarmentViewWidget::layerOf(quint32 piece) const
+{
+    for (const VPieceLayer& layer : m_doc->getLayers())
+    {
+        if (layer.piece_id == piece)
+        {
+            return layer.layer;
+        }
+    }
+    return 0;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // A piece on the avatar was right-clicked, and with that picked, at a point of the view: what can be done with it.
 void GarmentViewWidget::showPieceMenu(const QPointF& at)
 {
@@ -2211,8 +2271,8 @@ void GarmentViewWidget::setSimulating(bool simulating)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Puts the pieces from the arrangement into a solver, the seams between them as stitches and the avatar as what
-// they drape over, and sets it going. Pieces already draped go on from where they are.
+// Puts the pieces from the arrangement into a solver, each in its layer, the seams between them as stitches and the
+// avatar as what they drape over, and sets it going. Pieces already draped go on from where they are.
 void GarmentViewWidget::startSimulation()
 {
     m_runner->stop();
@@ -2223,6 +2283,11 @@ void GarmentViewWidget::startSimulation()
     QHash<quint32, GarmentMesh> meshes;
     GarmentSymmetry symmetry;
     const VGarmentFabrics fabrics = m_doc->getFabrics();
+    QHash<quint32, int> layers;
+    for (const VPieceLayer& layer : m_doc->getLayers())
+    {
+        layers.insert(layer.piece_id, layer.layer);
+    }
     for (const GarmentPiece& garment_piece : m_garment_pieces)
     {
         const QVector<QVector3D> positions = piecePositions(garment_piece.id, garment_piece.mesh);
@@ -2231,11 +2296,15 @@ void GarmentViewWidget::startSimulation()
             DrapePiece drape_piece;
             drape_piece.id = garment_piece.id;
             const quint32 piece = patternPiece(garment_piece.id);
+            ClothLayer layer;
+            layer.number = layers.value(piece, 0);
+            layer.turned_over = m_arrangements.value(piece).turned_over;
             drape_piece.offset = static_cast<int>(solver->addMesh(garment_piece.mesh, positions,
                                                                   Fabric::preset(fabrics.of(piece)),
                                                                   garment_piece.grain_angle,
                                                                   m_fold_editor->clothFolds(piece, garment_piece.mesh,
-                                                                                            fold_strength)));
+                                                                                            fold_strength),
+                                                                  layer));
             drape_piece.count = garment_piece.mesh.vertexCount();
             m_drape_pieces.append(drape_piece);
             offsets.insert(garment_piece.id, static_cast<quint32>(drape_piece.offset));
@@ -2429,6 +2498,13 @@ void GarmentViewWidget::updateActions()
     m_superimpose_over_action->setEnabled(sewn_to_placed);
     m_superimpose_under_action->setEnabled(sewn_to_placed);
     m_superimpose_side_action->setEnabled(sewn_to_placed);
+    const quint32 selected_piece = m_scene_model->selectedPiece();
+    const int selected_layer = layerOf(selected_piece);
+    m_layer_menu->menuAction()->setEnabled(selected_piece != 0);
+    for (QAction* layer : m_piece_layers->actions())
+    {
+        layer->setChecked(selected_piece != 0 && layer->data().toInt() == selected_layer);
+    }
 
     const bool has_avatar = m_scene_model->hasAvatar();
     m_avatar_action->setEnabled(!measuredAvatar().hasMeasurements());
@@ -3621,11 +3697,32 @@ void GarmentViewWidget::createToolBar()
         superimposePiece(Superimpose::Side);
     });
 
+    // As CLO's layers: the layer the selected piece is worn in, over the pieces of lower layers where it lies on them.
+    m_layer_menu = new QMenu(tr("Layer"), this);
+    m_layer_menu->setToolTipsVisible(true);
+    m_layer_menu->menuAction()->setToolTip(tr("Wear the selected piece over the pieces of lower layers where it lies "
+                                              "on them, as a pocket on a front or a shell over its lining"));
+    m_piece_layers = new QActionGroup(this);
+    for (int layer = 0; layer <= highest_layer; ++layer)
+    {
+        QAction* action = m_layer_menu->addAction(layer == 0 ? tr("0, Next to the Body") : QString::number(layer));
+        action->setData(layer);
+        action->setCheckable(true);
+        action->setToolTip(layer == 0 ? tr("Wear the selected piece under the pieces of higher layers where it lies on "
+                                           "them, as pieces are unless told otherwise")
+                                      : tr("Wear the selected piece over the pieces of layers 0 to %1 where it lies on "
+                                           "them, and under those of higher layers").arg(layer - 1));
+        m_piece_layers->addAction(action);
+    }
+    connect(m_piece_layers, &QActionGroup::triggered, this, &GarmentViewWidget::chooseLayer);
+
     QMenu* arrange_menu = new QMenu(this);
     arrange_menu->setToolTipsVisible(true);
     arrange_menu->addActions({m_rotate_clockwise_action, m_rotate_counterclockwise_action, m_turn_over_action});
     arrange_menu->addSeparator();
     arrange_menu->addActions({m_superimpose_over_action, m_superimpose_under_action, m_superimpose_side_action});
+    arrange_menu->addSeparator();
+    arrange_menu->addMenu(m_layer_menu);
     arrange_menu->addSeparator();
     arrange_menu->addAction(m_take_off_action);
     m_arrange_action->setMenu(arrange_menu);
