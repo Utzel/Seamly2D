@@ -127,7 +127,9 @@ bool sameArrangement(const PieceArrangement& one, const PieceArrangement& other)
 {
     return one.part == other.part && qFuzzyCompare(1.0 + one.angle, 1.0 + other.angle)
            && qFuzzyCompare(1.0 + one.height, 1.0 + other.height)
-           && qFuzzyCompare(1.0 + one.rotation, 1.0 + other.rotation) && one.turned_over == other.turned_over;
+           && qFuzzyCompare(1.0 + one.rotation, 1.0 + other.rotation) && one.turned_over == other.turned_over
+           && qFuzzyCompare(1.0 + one.distance, 1.0 + other.distance) && qFuzzyCompare(1.0 + one.lean, 1.0 + other.lean)
+           && qFuzzyCompare(1.0 + one.swing, 1.0 + other.swing);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -143,6 +145,23 @@ const int rebuild_delay_ms = 150;
 // A preview of where a piece would go stands this many cm further out than a piece put there, so it shows in front of
 // the piece when that is there already.
 const qreal preview_out = 1.0;
+
+// A piece moved in towards the body by its gizmo stops this many cm in from where pieces start out, still clear of the
+// skin; leaning and swinging go at most this many degrees either way.
+const qreal nearest_distance = -1.5;
+const qreal steepest_turn = 90.0;
+
+// Turned by its gizmo, a piece snaps to the nearest multiple of this many degrees when it comes this close to it.
+const qreal snap_angle = 45.0;
+const qreal snap_reach = 3.0;
+
+//---------------------------------------------------------------------------------------------------------------------
+// The angle, snapped to a multiple of snap_angle when it is that close to one.
+qreal snappedAngle(qreal degrees)
+{
+    const qreal nearest = qRound(degrees / snap_angle) * snap_angle;
+    return qAbs(degrees - nearest) <= snap_reach ? nearest : degrees;
+}
 
 // Fitted measurements this far off, in cm, are mentioned in the avatar's note.
 const qreal note_tolerance = 1.0;
@@ -361,6 +380,11 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     connect(m_scene_model, &GarmentSceneModel::previewLeft, this, &GarmentViewWidget::clearArrangementPreview);
     connect(m_scene_model, &GarmentSceneModel::selectedPieceChanged, m_scene_model, &GarmentSceneModel::clearPreview);
     connect(m_scene_model, &GarmentSceneModel::pieceMenuRequested, this, &GarmentViewWidget::showPieceMenu);
+    connect(m_scene_model, &GarmentSceneModel::gizmoGrabRequested, this, &GarmentViewWidget::grabGizmo);
+    connect(m_scene_model, &GarmentSceneModel::gizmoDragRequested, this, &GarmentViewWidget::dragGizmo);
+    connect(m_scene_model, &GarmentSceneModel::gizmoDropRequested, this, &GarmentViewWidget::dropGizmo);
+    connect(m_scene_model, &GarmentSceneModel::gizmoHovered, this, &GarmentViewWidget::hoverGizmo);
+    connect(m_scene_model, &GarmentSceneModel::selectedPieceChanged, this, &GarmentViewWidget::updateGizmo);
     connect(m_scene_model, &GarmentSceneModel::grabRequested, this, &GarmentViewWidget::grabPiece);
     connect(m_scene_model, &GarmentSceneModel::dragRequested, this, &GarmentViewWidget::dragPiece);
     connect(m_scene_model, &GarmentSceneModel::dropRequested, this, &GarmentViewWidget::dropPiece);
@@ -661,6 +685,7 @@ void GarmentViewWidget::rebuildScene()
     showSeamsOnAvatar();
 
     updateAvatar();
+    updateGizmo();
 
     if (simulating || carried)
     {
@@ -944,6 +969,9 @@ void GarmentViewWidget::readArrangements()
         arrangement.rotation = stored.rotation;
         arrangement.turned_over = stored.turned_over;
         arrangement.point = stored.point;
+        arrangement.distance = stored.distance;
+        arrangement.lean = stored.lean;
+        arrangement.swing = stored.swing;
         arrangements.insert(stored.piece_id, m_wrap.isNull() ? arrangement : m_wrap->resolved(arrangement));
     }
 
@@ -1197,6 +1225,7 @@ void GarmentViewWidget::setArranging(bool arranging)
     {
         m_scene_model->clearPreview();
     }
+    updateGizmo();
     updateActions();
 }
 
@@ -1332,13 +1361,18 @@ void GarmentViewWidget::showPieceMenu(const QPointF& at)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// A place for a piece, the way round the piece is on the avatar, if it is.
+// A place for a piece, the way round the piece is on the avatar, if it is: turned, leaning and swinging as it is, as
+// far out from the body.
 PieceArrangement GarmentViewWidget::sameWayRound(quint32 piece, PieceArrangement wanted) const
 {
     if (m_arrangements.contains(piece))
     {
-        wanted.rotation = m_arrangements.value(piece).rotation;
-        wanted.turned_over = m_arrangements.value(piece).turned_over;
+        const PieceArrangement& now = m_arrangements.value(piece);
+        wanted.rotation = now.rotation;
+        wanted.turned_over = now.turned_over;
+        wanted.distance = now.distance;
+        wanted.lean = now.lean;
+        wanted.swing = now.swing;
     }
     return wanted;
 }
@@ -1400,25 +1434,36 @@ QString GarmentViewWidget::pointTitle(const ArrangementPoint& point) const
 void GarmentViewWidget::grabPiece(quint32 id, const QVector3D& point)
 {
     const quint32 piece = patternPiece(id);
-    if (m_wrap.isNull() || !m_arrangements.contains(piece))
+    if (beginDrag(piece))
     {
-        return;
+        m_drag.mirrored = PieceOutline::isMirrorId(id) != m_turned_pairs.contains(piece);
+        m_drag.grabbed = m_wrap->arrangementOn(m_drag.start.part, m_drag.mirrored ? m_wrap->mirrored(point) : point);
     }
-    m_simulate_action->setChecked(false);
+}
 
-    m_drag = PieceDrag();
-    m_drag.piece = piece;
-    m_drag.mirrored = PieceOutline::isMirrorId(id) != m_turned_pairs.contains(piece);
-    m_drag.start = m_arrangements.value(piece);
-    m_drag.current = m_drag.start;
-    m_drag.grabbed = m_wrap->arrangementOn(m_drag.start.part, m_drag.mirrored ? m_wrap->mirrored(point) : point);
-    for (const quint32 copy : {piece, PieceOutline::mirrorId(piece)})
+//---------------------------------------------------------------------------------------------------------------------
+// Takes hold of a piece on the avatar, to move it: a drape going on stops, and the piece's drape is kept, back if the
+// move is called off. Says whether the piece is on the avatar.
+bool GarmentViewWidget::beginDrag(quint32 piece)
+{
+    const bool placed = !m_wrap.isNull() && m_arrangements.contains(piece);
+    if (placed)
     {
-        if (m_draped.contains(copy))
+        m_simulate_action->setChecked(false);
+
+        m_drag = PieceDrag();
+        m_drag.piece = piece;
+        m_drag.start = m_arrangements.value(piece);
+        m_drag.current = m_drag.start;
+        for (const quint32 copy : {piece, PieceOutline::mirrorId(piece)})
         {
-            m_drag.draped.insert(copy, m_draped.value(copy));
+            if (m_draped.contains(copy))
+            {
+                m_drag.draped.insert(copy, m_draped.value(copy));
+            }
         }
     }
+    return placed;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1437,25 +1482,186 @@ void GarmentViewWidget::dragPiece(const QVector3D& point)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// The held piece was let go: where it was dragged to is stored as one step, or, if it didn't move, it stays as it was.
+// The held piece was let go.
 void GarmentViewWidget::dropPiece()
+{
+    finishDrag(tr("move piece"));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Where the held piece was moved or turned to is stored as one step, or, if it didn't move, it stays as it was.
+void GarmentViewWidget::finishDrag(const QString& text)
 {
     if (m_drag.piece != 0)
     {
-        const bool moved = !qFuzzyCompare(1.0 + m_drag.current.angle, 1.0 + m_drag.start.angle)
-                           || !qFuzzyCompare(1.0 + m_drag.current.height, 1.0 + m_drag.start.height);
-        if (moved)
+        if (!sameArrangement(m_drag.current, m_drag.start))
         {
             const quint32 piece = m_drag.piece;
             const PieceArrangement current = m_drag.current;
             m_drag = PieceDrag();
-            storeArrangement(piece, current, tr("move piece"));
+            storeArrangement(piece, current, text);
         }
         else
         {
             callOffDrag();
         }
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A part of the gizmo of the selected piece was pressed on: until it is let go, the piece moves along that arrow or
+// turns around that ring with the mouse. A drape going on stops.
+void GarmentViewWidget::grabGizmo(int part)
+{
+    const quint32 piece = m_scene_model->selectedPiece();
+    PieceFrame frame;
+    QVector3D origin;
+    if (gizmoFrame(piece, &frame, &origin) && beginDrag(piece))
+    {
+        m_drag.gizmo = part;
+        m_drag.frame = frame;
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The mouse moved on with a part of the gizmo held, by an amount in cm along its arrow or degrees around its ring: the
+// piece moves around its part of the body, up or down it, or out from it, or rotates, leans or swings, that much from
+// where it was. Moved around or up or down, it leaves its arrangement point.
+void GarmentViewWidget::dragGizmo(qreal amount)
+{
+    if (m_drag.piece == 0 || m_drag.gizmo < 0 || m_wrap.isNull())
+    {
+        return;
+    }
+
+    PieceArrangement current = m_drag.start;
+    const PieceFrame& frame = m_drag.frame;
+    const float along = static_cast<float>(amount);
+    switch (m_drag.gizmo)
+    {
+        case GarmentSceneModel::MoveAcross:
+            current.angle = m_wrap->arrangementOn(current.part, frame.middle + frame.across * along).angle;
+            current.point.clear();
+            break;
+        case GarmentSceneModel::MoveUp:
+            current.height = m_wrap->arrangementOn(current.part, frame.middle + frame.up * along).height;
+            current.point.clear();
+            break;
+        case GarmentSceneModel::MoveOut:
+            current.distance = qMax(m_drag.start.distance + amount, nearest_distance);
+            break;
+        case GarmentSceneModel::Rotate:
+            current.rotation = std::fmod(snappedAngle(m_drag.start.rotation + amount) + 720.0, 360.0);
+            break;
+        case GarmentSceneModel::Lean:
+            current.lean = qBound(-steepest_turn, snappedAngle(m_drag.start.lean + amount), steepest_turn);
+            break;
+        case GarmentSceneModel::Swing:
+        default:
+            current.swing = qBound(-steepest_turn, snappedAngle(m_drag.start.swing + amount), steepest_turn);
+            break;
+    }
+    m_drag.current = current;
+    showArrangement(m_drag.piece, current);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The gizmo was let go.
+void GarmentViewWidget::dropGizmo()
+{
+    const int part = m_drag.gizmo;
+    finishDrag(part == GarmentSceneModel::Rotate ? tr("rotate piece")
+               : part == GarmentSceneModel::Lean ? tr("lean piece")
+               : part == GarmentSceneModel::Swing ? tr("swing piece")
+                                                  : tr("move piece"));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The mouse came over a part of the gizmo, or left it: what dragging it does.
+void GarmentViewWidget::hoverGizmo(int part)
+{
+    QString hint;
+    switch (part)
+    {
+        case GarmentSceneModel::MoveAcross:
+            hint = tr("Drag to move the piece around the body, or around the leg or the arm it is on.");
+            break;
+        case GarmentSceneModel::MoveUp:
+            hint = tr("Drag to move the piece up or down.");
+            break;
+        case GarmentSceneModel::MoveOut:
+            hint = tr("Drag to move the piece further out from the body, or closer to it.");
+            break;
+        case GarmentSceneModel::Rotate:
+            hint = tr("Drag to rotate the piece.");
+            break;
+        case GarmentSceneModel::Lean:
+            hint = tr("Drag to lean the piece, its top out or in.");
+            break;
+        case GarmentSceneModel::Swing:
+            hint = tr("Drag to swing the piece, one side out.");
+            break;
+        default:
+            break;
+    }
+    if (hint.isEmpty())
+    {
+        updateHint();
+    }
+    else
+    {
+        m_scene_model->clearPreview();
+        m_scene_model->setHint(hint);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// While arranging, the selected piece on the avatar has its gizmo; otherwise there is none.
+void GarmentViewWidget::updateGizmo()
+{
+    QVariantMap gizmo;
+    PieceFrame frame;
+    QVector3D origin;
+    if (m_scene_model->isArranging() && gizmoFrame(m_scene_model->selectedPiece(), &frame, &origin))
+    {
+        gizmo.insert(QStringLiteral("origin"), origin);
+        gizmo.insert(QStringLiteral("across"), frame.across);
+        gizmo.insert(QStringLiteral("up"), frame.up);
+        gizmo.insert(QStringLiteral("out"), frame.out);
+    }
+    m_scene_model->setGizmo(gizmo);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Where a piece's gizmo goes, if the piece is on the avatar: facing as the piece does at its middle where its
+// arrangement puts it, of a pair turned to its seams the copy, and on the piece as it is shown, draped or not, at the
+// point of it nearest that middle.
+bool GarmentViewWidget::gizmoFrame(quint32 piece, PieceFrame* frame, QVector3D* origin) const
+{
+    const bool placed = !m_wrap.isNull() && m_arrangements.contains(piece) && m_scene_model->isPlaced(piece);
+    if (placed)
+    {
+        const bool turned = m_turned_pairs.contains(piece);
+        const CachedMesh cached = m_mesh_cache.value(piece);
+        const GarmentMesh& mesh = turned ? cached.mirror_mesh : cached.garment_mesh;
+        *frame = m_wrap->frameOf(mesh, m_arrangements.value(piece));
+
+        const QVector<QVector3D> shown = piecePositions(turned ? PieceOutline::mirrorId(piece) : piece, mesh);
+        const QPointF middle = mesh.bounds().center();
+        int nearest = -1;
+        qreal nearest_distance_to_middle = std::numeric_limits<qreal>::infinity();
+        for (int i = 0; i < mesh.rest_positions.size(); ++i)
+        {
+            const qreal apart = QLineF(mesh.rest_positions.at(i), middle).length();
+            if (apart < nearest_distance_to_middle)
+            {
+                nearest = i;
+                nearest_distance_to_middle = apart;
+            }
+        }
+        *origin = nearest >= 0 && nearest < shown.size() ? shown.at(nearest) : frame->middle;
+    }
+    return placed;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1500,6 +1706,7 @@ void GarmentViewWidget::showPlaced(quint32 piece)
         }
     }
     showSeamsOnAvatar();
+    updateGizmo();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1514,6 +1721,9 @@ void GarmentViewWidget::storeArrangement(quint32 piece, const PieceArrangement& 
     arrangement.rotation = wanted.rotation;
     arrangement.turned_over = wanted.turned_over;
     arrangement.point = wanted.point;
+    arrangement.distance = wanted.distance;
+    arrangement.lean = wanted.lean;
+    arrangement.swing = wanted.swing;
 
     QVector<VPieceArrangement> arrangements = m_doc->getArrangements();
     auto existing = std::find_if(arrangements.begin(), arrangements.end(), [piece](const VPieceArrangement& other)
@@ -1645,6 +1855,10 @@ void GarmentViewWidget::drapeFrame(int generation, const QVector<QVector3D>& pos
             }
         }
         showSeamsOnAvatar();
+        if (m_scene_model->isArranging())
+        {
+            updateGizmo();
+        }
         m_runner->frameShown();
         m_reset_action->setEnabled(true);
     }
@@ -2513,8 +2727,11 @@ void GarmentViewWidget::updateHint()
         hint = m_scene_model->selectedPiece() == 0
                ? tr("Click a piece, then a point or any spot on the avatar where it goes, or drag a placed piece "
                     "around. Esc stops arranging.")
-               : tr("Click a point or any spot on the avatar to put the piece there, or drag a placed piece around; "
-                    "right-click a placed piece to rotate it or turn it over.");
+               : m_scene_model->isPlaced(m_scene_model->selectedPiece())
+                 ? tr("Click a point or any spot on the avatar to put the piece there. Drag its arrows to move it, its "
+                      "rings to rotate, lean or swing it; right-click it to turn it over.")
+                 : tr("Click a point or any spot on the avatar to put the piece there, or drag a placed piece "
+                      "around.");
     }
     m_scene_model->setHint(hint);
 }

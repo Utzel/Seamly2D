@@ -62,6 +62,32 @@ Rectangle {
         }
     }
 
+    // While arranging, the picked piece on the avatar has a gizmo at its middle, as CLO's: arrows to move it around its
+    // part of the body (red), up or down it (green) and out from it (blue), and rings to rotate it (blue, around the
+    // outward arrow), lean it (red) and swing it (green). Its parts are numbered as GarmentSceneModel::GizmoPart.
+    readonly property bool gizmoShown: root.sceneModel.arranging && root.sceneModel.gizmo.origin !== undefined
+                                       && !root.capturing
+    // In pixels: 70 long arrows, shorter in a small view, so the gizmo doesn't cover the whole garment there.
+    readonly property real gizmoArrow: Math.max(36, Math.min(70, 0.2 * Math.min(root.width, root.height)))
+    readonly property real gizmoRing: root.gizmoArrow * 0.65
+    readonly property real gizmoGap: 12    // the middle is left to an arrangement point there
+    readonly property real pointRadius: 6  // an arrangement point under the mouse this close takes it, not the gizmo
+    readonly property real ringFacing: 0.3 // a ring seen more edge-on than this shows as a line, so it is left out
+    readonly property var gizmoColors: ["#e0453a", "#3db24a", "#2f7fe0", "#2f7fe0", "#e0453a", "#3db24a"]
+
+    // The part of the gizmo under the mouse, or held, -1 for none.
+    property int gizmoUnderMouse: -1
+
+    // Set while a part of the gizmo is held, which holds the camera still; what the gizmo was like when taken hold of.
+    property bool draggingGizmo: false
+    property var gizmoHeld: null
+
+    onGizmoShownChanged: {
+        if (!root.gizmoShown) {
+            root.gizmoUnderMouse = -1
+        }
+    }
+
     // Where the ray through a point of the view meets the board of pieces, in the board's coordinates, or undefined
     // if it misses the board.
     function boardPoint(x, y) {
@@ -149,12 +175,13 @@ Rectangle {
         return point.normal.dotProduct(camera.scenePosition.minus(point.position)) > 0
     }
 
-    // The arrangement point shown within snapDistance pixels of a point of the view, the nearest; -1 for none.
-    function arrangementPointNear(x, y) {
+    // The arrangement point shown within reach of a point of the view, snapDistance pixels unless said otherwise, the
+    // nearest; -1 for none.
+    function arrangementPointNear(x, y, reach) {
         let found = -1
         if (root.pointsShown) {
             const points = root.sceneModel.arrangementPoints
-            let nearest = root.snapDistance
+            let nearest = reach === undefined ? root.snapDistance : reach
             for (let i = 0; i < points.length; ++i) {
                 const at = view.mapFrom3DScene(points[i].position)
                 const apart = Math.hypot(at.x - x, at.y - y)
@@ -179,6 +206,128 @@ Rectangle {
         } else {
             root.sceneModel.leaveAvatar()
         }
+    }
+
+    // Where the gizmo's arrows and rings are in the view: its middle, the tips of its arrows, and points around its
+    // rings, and which rings show. Each ring turns its first direction towards its second: rotating up towards across,
+    // clockwise as seen from outside; leaning up towards out; swinging across towards out. Its way is 1 if that turns
+    // the view's angles up.
+    function gizmoShape() {
+        const gizmo = root.sceneModel.gizmo
+        const center = view.mapFrom3DScene(gizmo.origin)
+        const towards_eye = camera.scenePosition.minus(gizmo.origin).normalized()
+        const distance = camera.scenePosition.minus(gizmo.origin).length()
+        const per_pixel = 2 * distance * Math.tan(camera.fieldOfView * Math.PI / 360) / Math.max(view.height, 1)
+        const tips = [gizmo.across, gizmo.up, gizmo.out].map(
+            (axis) => view.mapFrom3DScene(gizmo.origin.plus(axis.times(root.gizmoArrow * per_pixel))))
+        const rings = []
+        const ways = []
+        const shown = []
+        for (const turn of [[gizmo.up, gizmo.across], [gizmo.up, gizmo.out], [gizmo.across, gizmo.out]]) {
+            shown.push(Math.abs(turn[0].crossProduct(turn[1]).dotProduct(towards_eye)) >= root.ringFacing)
+            const points = []
+            const radius = root.gizmoRing * per_pixel
+            for (let i = 0; i <= 48; ++i) {
+                const t = 2 * Math.PI * i / 48
+                points.push(view.mapFrom3DScene(gizmo.origin.plus(turn[0].times(Math.cos(t) * radius))
+                                                .plus(turn[1].times(Math.sin(t) * radius))))
+            }
+            const first = points[0]
+            const second = points[12]
+            const across = (first.x - center.x) * (second.y - center.y) - (first.y - center.y) * (second.x - center.x)
+            rings.push(points)
+            ways.push(across < 0 ? -1 : 1)
+        }
+        return { center: center, tips: tips, rings: rings, ways: ways, shown: shown, perPixel: per_pixel }
+    }
+
+    // Where an arrow of the gizmo starts, clear of its middle.
+    function gizmoTail(shape, part) {
+        const tip = shape.tips[part]
+        const length = Math.hypot(tip.x - shape.center.x, tip.y - shape.center.y)
+        const share = length > root.gizmoGap ? root.gizmoGap / length : 1
+        return Qt.point(shape.center.x + (tip.x - shape.center.x) * share,
+                        shape.center.y + (tip.y - shape.center.y) * share)
+    }
+
+    // How far a point of the view is from a line between two others, in pixels.
+    function distanceToSegment(x, y, from, to) {
+        const dx = to.x - from.x
+        const dy = to.y - from.y
+        const length_squared = dx * dx + dy * dy
+        const along = length_squared > 0 ? ((x - from.x) * dx + (y - from.y) * dy) / length_squared : 0
+        const t = Math.max(0, Math.min(1, along))
+        return Math.hypot(x - from.x - t * dx, y - from.y - t * dy)
+    }
+
+    // The part of the gizmo within pickDistance pixels of a point of the view, an arrow before a ring, the nearest; -1
+    // for none, and where an arrangement point is right under the mouse.
+    function gizmoPartAt(x, y) {
+        let found = -1
+        if (root.gizmoShown && root.arrangementPointNear(x, y, root.pointRadius) < 0) {
+            const shape = root.gizmoShape()
+            let nearest = root.pickDistance
+            for (let part = 0; part < 3; ++part) {
+                const tip = shape.tips[part]
+                const shown = Math.hypot(tip.x - shape.center.x, tip.y - shape.center.y) > root.gizmoGap
+                const apart = root.distanceToSegment(x, y, root.gizmoTail(shape, part), tip)
+                if (shown && apart <= nearest) {
+                    nearest = apart
+                    found = part
+                }
+            }
+            const on_arrow = found >= 0
+            for (let ring = 0; ring < 3 && !on_arrow; ++ring) {
+                const points = shape.rings[ring]
+                for (let i = 0; i + 1 < points.length && shape.shown[ring]; ++i) {
+                    const apart = root.distanceToSegment(x, y, points[i], points[i + 1])
+                    if (apart <= nearest) {
+                        nearest = apart
+                        found = 3 + ring
+                    }
+                }
+            }
+        }
+        return found
+    }
+
+    // Takes hold of a part of the gizmo at a point of the view; says whether it did.
+    function grabGizmo(part, x, y) {
+        const shape = root.gizmoShape()
+        root.gizmoHeld = { part: part, shape: shape, x: x, y: y,
+                           angle: Math.atan2(y - shape.center.y, x - shape.center.x) * 180 / Math.PI, turned: 0 }
+        root.gizmoUnderMouse = part
+        return root.sceneModel.grabGizmo(part)
+    }
+
+    // The mouse moved on with a part of the gizmo held: how far along its arrow, in cm, or around its ring, in
+    // degrees, as the gizmo was when taken hold of.
+    function dragGizmo(x, y) {
+        const held = root.gizmoHeld
+        const shape = held.shape
+        let amount = 0
+        if (held.part < 3) {
+            const tip = shape.tips[held.part]
+            const dx = tip.x - shape.center.x
+            const dy = tip.y - shape.center.y
+            const length_squared = dx * dx + dy * dy
+            if (length_squared > 1) {
+                amount = ((x - held.x) * dx + (y - held.y) * dy) / length_squared * root.gizmoArrow * shape.perPixel
+            }
+        } else {
+            const angle = Math.atan2(y - shape.center.y, x - shape.center.x) * 180 / Math.PI
+            let step = angle - held.angle
+            while (step > 180) {
+                step -= 360
+            }
+            while (step <= -180) {
+                step += 360
+            }
+            held.turned += step
+            held.angle = angle
+            amount = held.turned * shape.ways[held.part - 3]
+        }
+        root.sceneModel.dragGizmo(amount)
     }
 
     // The point along the ray through a point of the view as far from the eye as where the mouse took hold.
@@ -650,14 +799,100 @@ Rectangle {
         }
     }
 
+    // The gizmo, drawn over the scene so the cloth never hides it; the part under the mouse, or held, in yellow and
+    // thicker.
+    Canvas {
+        id: gizmo_canvas
+        anchors.fill: parent
+        visible: root.gizmoShown
+
+        onPaint: {
+            const context = getContext("2d")
+            context.reset()
+            if (!root.gizmoShown) {
+                return
+            }
+            const shape = root.gizmoShape()
+            context.lineCap = "round"
+            context.lineJoin = "round"
+            const stroke = (part, draw) => {
+                const held = root.gizmoUnderMouse === part
+                for (const pass of [0, 1]) {
+                    context.beginPath()
+                    draw()
+                    context.lineWidth = (held ? 4 : 2) + (pass === 0 ? 2 : 0)
+                    context.strokeStyle = pass === 0 ? "#80000000" : held ? "#ffd400" : root.gizmoColors[part]
+                    context.stroke()
+                }
+            }
+            for (let ring = 0; ring < 3; ++ring) {
+                if (!shape.shown[ring]) {
+                    continue
+                }
+                stroke(3 + ring, () => {
+                    const points = shape.rings[ring]
+                    context.moveTo(points[0].x, points[0].y)
+                    for (let i = 1; i < points.length; ++i) {
+                        context.lineTo(points[i].x, points[i].y)
+                    }
+                })
+            }
+            for (let part = 0; part < 3; ++part) {
+                const tail = root.gizmoTail(shape, part)
+                const tip = shape.tips[part]
+                const length = Math.hypot(tip.x - tail.x, tip.y - tail.y)
+                if (length < 1) {
+                    continue
+                }
+                const ux = (tip.x - tail.x) / length
+                const uy = (tip.y - tail.y) / length
+                stroke(part, () => {
+                    context.moveTo(tail.x, tail.y)
+                    context.lineTo(tip.x, tip.y)
+                    context.moveTo(tip.x - ux * 10 - uy * 5, tip.y - uy * 10 + ux * 5)
+                    context.lineTo(tip.x, tip.y)
+                    context.lineTo(tip.x - ux * 10 + uy * 5, tip.y - uy * 10 - ux * 5)
+                })
+            }
+        }
+
+        Connections {
+            target: camera
+            function onScenePositionChanged() {
+                gizmo_canvas.requestPaint()
+            }
+            function onSceneRotationChanged() {
+                gizmo_canvas.requestPaint()
+            }
+        }
+        Connections {
+            target: root.sceneModel
+            function onGizmoChanged() {
+                gizmo_canvas.requestPaint()
+            }
+        }
+        Connections {
+            target: root
+            function onGizmoUnderMouseChanged() {
+                gizmo_canvas.requestPaint()
+            }
+            function onGizmoShownChanged() {
+                gizmo_canvas.requestPaint()
+            }
+        }
+        onWidthChanged: gizmo_canvas.requestPaint()
+        onHeightChanged: gizmo_canvas.requestPaint()
+    }
+
     OrbitCameraController {
         anchors.fill: parent
         origin: orbit_origin
         camera: camera
-        mouseEnabled: !root.draggingPiece && !root.pulling
+        mouseEnabled: !root.draggingPiece && !root.pulling && !root.draggingGizmo
 
-        // While arranging, a placed piece pressed on follows the mouse around the avatar until it is let go; pressed on
-        // where an arrangement point shows over it, it stays, as the point takes the click.
+        // While arranging, a part of the picked piece's gizmo pressed on moves or turns the piece with the mouse until
+        // it is let go; a placed piece pressed on elsewhere follows the mouse around the avatar, unless an arrangement
+        // point shows over it there, which takes the click.
         PointHandler {
             id: piece_handler
             enabled: root.sceneModel.arranging
@@ -668,6 +903,11 @@ Rectangle {
                 if (piece_handler.active) {
                     const x = piece_handler.point.position.x
                     const y = piece_handler.point.position.y
+                    const part = root.gizmoPartAt(x, y)
+                    if (part >= 0) {
+                        root.draggingGizmo = root.grabGizmo(part, x, y)
+                        return
+                    }
                     const results = view.pickAll(x, y)
                     const piece = results.length > 0 ? results[0].objectHit : null
                     if (piece && piece.pieceId !== undefined && root.arrangementPointNear(x, y) < 0) {
@@ -681,13 +921,19 @@ Rectangle {
                         root.dragDistance = held.minus(view.mapTo3DScene(Qt.vector3d(x, y, 0))).length()
                         root.draggingPiece = root.sceneModel.grabPiece(piece.pieceId, held.x, held.y, held.z)
                     }
+                } else if (root.draggingGizmo) {
+                    root.draggingGizmo = false
+                    root.gizmoUnderMouse = -1
+                    root.sceneModel.dropGizmo()
                 } else if (root.draggingPiece) {
                     root.draggingPiece = false
                     root.sceneModel.dropPiece()
                 }
             }
             onPointChanged: {
-                if (root.draggingPiece && piece_handler.active) {
+                if (root.draggingGizmo && piece_handler.active) {
+                    root.dragGizmo(piece_handler.point.position.x, piece_handler.point.position.y)
+                } else if (root.draggingPiece && piece_handler.active) {
                     const at = root.dragPoint(piece_handler.point.position.x, piece_handler.point.position.y)
                     root.sceneModel.dragTo(at.x, at.y, at.z)
                 }
@@ -768,6 +1014,9 @@ Rectangle {
                     return
                 }
                 if (root.sceneModel.arranging) {
+                    if (root.gizmoPartAt(x, y) >= 0) {
+                        return
+                    }
                     const point = root.arrangementPointNear(x, y)
                     if (point >= 0) {
                         root.sceneModel.placeAtPoint(point)
@@ -816,14 +1065,25 @@ Rectangle {
         HoverHandler {
             id: hover_handler
             cursorShape: root.seamEditor.sewing || root.stitchEditor.stitching ? Qt.CrossCursor
-                         : root.pointUnderMouse >= 0 ? Qt.PointingHandCursor
-                                                     : Qt.ArrowCursor
+                         : root.pointUnderMouse >= 0 || root.gizmoUnderMouse >= 0 ? Qt.PointingHandCursor
+                                                                                  : Qt.ArrowCursor
 
             onPointChanged: {
                 const x = hover_handler.point.position.x
                 const y = hover_handler.point.position.y
                 if (root.sceneModel.arranging) {
-                    root.previewArrangement(x, y)
+                    if (!root.draggingGizmo) {
+                        const part = root.gizmoPartAt(x, y)
+                        if (part !== root.gizmoUnderMouse) {
+                            root.gizmoUnderMouse = part
+                            root.sceneModel.hoverGizmo(part)
+                        }
+                        if (part >= 0) {
+                            root.pointUnderMouse = -1
+                            return
+                        }
+                        root.previewArrangement(x, y)
+                    }
                     return
                 }
                 if (root.stitchEditor.stitching) {

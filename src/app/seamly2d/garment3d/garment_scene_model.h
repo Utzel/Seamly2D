@@ -35,6 +35,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
+#include <QVariantMap>
 #include <QVector3D>
 #include <QVector>
 
@@ -79,6 +80,7 @@ class GarmentSceneModel : public QAbstractListModel
     Q_PROPERTY(QVariantList arrangementPoints READ arrangementPoints NOTIFY arrangementPointsChanged)
     Q_PROPERTY(QObject* previewGeometry READ previewGeometry NOTIFY previewChanged)
     Q_PROPERTY(bool previewShown READ isPreviewShown NOTIFY previewChanged)
+    Q_PROPERTY(QVariantMap gizmo READ gizmo NOTIFY gizmoChanged)
     Q_PROPERTY(qreal checkRepeat READ checkRepeat CONSTANT)
 
 public:
@@ -90,6 +92,18 @@ public:
         Strain,
         Ease,
         Pressure
+    };
+
+    /// The parts of the gizmo of a piece on the avatar, as CLO's: arrows to move it around its part of the body, up or
+    /// down it and out from it, and rings to rotate it, lean it and swing it.
+    enum GizmoPart
+    {
+        MoveAcross,
+        MoveUp,
+        MoveOut,
+        Rotate,
+        Lean,
+        Swing
     };
 
     enum Roles
@@ -193,6 +207,8 @@ public:
     bool                   isPreviewShown() const;
     void                   setPreview(const GarmentMesh& mesh, const QVector<QVector3D>& positions);
     void                   clearPreview();
+    QVariantMap            gizmo() const;
+    void                   setGizmo(const QVariantMap& gizmo);
 
     Q_INVOKABLE void       pickPiece(int id);
     Q_INVOKABLE void       placeAt(qreal x, qreal y, qreal z);
@@ -201,6 +217,10 @@ public:
     Q_INVOKABLE void       previewAtPoint(int index);
     Q_INVOKABLE void       leaveAvatar();
     Q_INVOKABLE void       showPieceMenu(int id, qreal x, qreal y);
+    Q_INVOKABLE bool       grabGizmo(int part);
+    Q_INVOKABLE void       dragGizmo(qreal amount);
+    Q_INVOKABLE void       dropGizmo();
+    Q_INVOKABLE void       hoverGizmo(int part);
     Q_INVOKABLE bool       grabPiece(int id, qreal x, qreal y, qreal z);
     Q_INVOKABLE void       dragTo(qreal x, qreal y, qreal z);
     Q_INVOKABLE void       dropPiece();
@@ -230,6 +250,7 @@ signals:
     void                   pinsChanged();
     void                   arrangementPointsChanged();
     void                   previewChanged();
+    void                   gizmoChanged();
     void                   pullRequested(quint32 id, const QVector3D& point);
     void                   pinPullRequested(int index);
     void                   pullMoved(const QVector3D& point);
@@ -241,6 +262,10 @@ signals:
     void                   previewRequested(int index, const QVector3D& point);
     void                   previewLeft();
     void                   pieceMenuRequested(const QPointF& at);
+    void                   gizmoGrabRequested(int part);
+    void                   gizmoDragRequested(qreal amount);
+    void                   gizmoDropRequested();
+    void                   gizmoHovered(int part);
     void                   grabRequested(quint32 id, const QVector3D& point);
     void                   dragRequested(const QVector3D& point);
     void                   dropRequested();
@@ -302,6 +327,7 @@ private:
     QVariantList           m_arrangement_points;
     PieceGeometry*         m_preview;
     bool                   m_preview_shown;
+    QVariantMap            m_gizmo;
     QColor                 m_thread_color;
     QHash<QByteArray, FabricImage> m_images;
 

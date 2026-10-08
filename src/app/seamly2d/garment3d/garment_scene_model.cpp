@@ -204,6 +204,7 @@ GarmentSceneModel::GarmentSceneModel(QObject* parent)
     , m_arrangement_points()
     , m_preview(nullptr)
     , m_preview_shown(false)
+    , m_gizmo()
     , m_thread_color()
     , m_images()
 {}
@@ -965,6 +966,59 @@ void GarmentSceneModel::clearPreview()
         m_preview_shown = false;
         emit previewChanged();
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The gizmo of the selected piece while arranging, for QML: where it is, "origin", and which ways it moves the
+/// piece, "across", "up" and "out", in scene coordinates; empty when there is none.
+QVariantMap GarmentSceneModel::gizmo() const
+{
+    return m_gizmo;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void GarmentSceneModel::setGizmo(const QVariantMap& gizmo)
+{
+    if (gizmo != m_gizmo)
+    {
+        m_gizmo = gizmo;
+        emit gizmoChanged();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML when a part of the gizmo is pressed on, a GizmoPart. Says whether the piece was taken hold
+/// of; it moves or turns as the mouse does from then on, until let go.
+bool GarmentSceneModel::grabGizmo(int part)
+{
+    const bool grabbed = m_arranging && !m_gizmo.isEmpty() && part >= MoveAcross && part <= Swing;
+    if (grabbed)
+    {
+        emit gizmoGrabRequested(part);
+    }
+    return grabbed;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML as the mouse moves on with a part of the gizmo held: how far the piece goes from where it
+/// was taken hold of, in cm along an arrow or degrees around a ring.
+void GarmentSceneModel::dragGizmo(qreal amount)
+{
+    emit gizmoDragRequested(amount);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML when the gizmo is let go.
+void GarmentSceneModel::dropGizmo()
+{
+    emit gizmoDropRequested();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Called from QML when the mouse comes over a part of the gizmo, or leaves it, -1.
+void GarmentSceneModel::hoverGizmo(int part)
+{
+    emit gizmoHovered(part);
 }
 
 //---------------------------------------------------------------------------------------------------------------------

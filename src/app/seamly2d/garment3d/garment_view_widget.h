@@ -126,6 +126,11 @@ private slots:
     void               turnPieceOver();
     void               takePieceOff();
     void               showPieceMenu(const QPointF& at);
+    void               grabGizmo(int part);
+    void               dragGizmo(qreal amount);
+    void               dropGizmo();
+    void               hoverGizmo(int part);
+    void               updateGizmo();
     void               grabPiece(quint32 id, const QVector3D& point);
     void               dragPiece(const QVector3D& point);
     void               dropPiece();
@@ -206,7 +211,7 @@ private:
         QVector<QVector3D> positions;
     };
 
-    // A placed piece being dragged around the part of the body it is on.
+    // A placed piece being dragged around the part of the body it is on, or moved or turned by its gizmo.
     struct PieceDrag
     {
         quint32          piece = 0;         ///< the pattern piece; 0 while none is dragged
@@ -215,6 +220,8 @@ private:
         PieceArrangement start;             ///< where the piece was arranged then
         PieceArrangement current;
         QHash<quint32, QVector<QVector3D>> draped;  ///< the drape of the piece and its copy, back if called off
+        int              gizmo = -1;        ///< the part of the gizmo held, a GarmentSceneModel::GizmoPart; -1 for none
+        PieceFrame       frame;             ///< which way the piece faced when its gizmo was taken hold of
     };
 
     // Where a piece's vertices are among all the vertices of the drape being simulated.
@@ -327,6 +334,9 @@ private:
     QString            pointTitle(const ArrangementPoint& point) const;
     void               showArrangement(quint32 piece, const PieceArrangement& arrangement);
     void               callOffDrag();
+    bool               beginDrag(quint32 piece);
+    void               finishDrag(const QString& text);
+    bool               gizmoFrame(quint32 piece, PieceFrame* frame, QVector3D* origin) const;
     void               showPlaced(quint32 piece);
     void               readArrangements();
     qreal              grainAngle(const VPiece& piece) const;
