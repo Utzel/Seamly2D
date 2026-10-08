@@ -25,6 +25,7 @@
 #include "seam_editor.h"
 
 #include <QLineF>
+#include <QVariantMap>
 
 #include <algorithm>
 #include <limits>
@@ -42,6 +43,9 @@ const qreal start_mark_length = 3.0;
 const qreal start_mark_share = 0.3;
 const qreal start_mark_width = 2.0;
 const int start_mark_samples = 6;
+
+// Sides of a seam that differ by less than this, in cm, are as long as each other.
+const qreal same_length = 0.05;
 
 // Seams get these colors in turn, so neighbouring seams can be told apart.
 const char* const seam_colors[] = {"#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#42d4f4", "#f032e6",
@@ -162,6 +166,10 @@ SeamEditor::SeamEditor(QObject* parent)
     , m_seams()
     , m_shown_seams()
     , m_highlight_color(Qt::black)
+    , m_unit(Unit::Cm)
+    , m_lengths_shown(false)
+    , m_board_labels()
+    , m_garment_labels()
     , m_sewing(false)
     , m_selected_seam(-1)
     , m_garment_shown(true)
@@ -296,14 +304,63 @@ QString SeamEditor::hint() const
         text = m_started.isValid()
                ? tr("Now click the edge to sew it to, near the end that meets the start. Esc starts over.")
                : tr("Click the edge to sew, near the end where the seam starts. Esc stops sewing.");
+        if (m_started.isValid() && m_hovered.isValid() && !m_hovered.sameSegment(m_started))
+        {
+            text = lengthsHint(edgeStretch(m_started), edgeStretch(m_hovered)) + QLatin1Char(' ') + text;
+        }
     }
     else if (m_selected_seam >= 0)
     {
         text = tr("Lines that cross mean the seam is twisted: flip it. Delete removes the seam.");
+        for (const ShownSeam& seam : m_shown_seams)
+        {
+            if (seam.index == m_selected_seam)
+            {
+                text = lengthsHint(seam.first, seam.second) + QLatin1Char(' ') + text;
+            }
+        }
     }
     return text;
 }
 
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The unit lengths are given in, the pattern's.
+void SeamEditor::setUnit(Unit unit)
+{
+    if (unit != m_unit)
+    {
+        m_unit = unit;
+        updateSeamGeometry();
+        updateGarmentGeometry();
+        emit hintChanged();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Whether each seam is labelled with how much its sides differ in length.
+bool SeamEditor::isLengthsShown() const
+{
+    return m_lengths_shown;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void SeamEditor::setLengthsShown(bool shown)
+{
+    if (shown != m_lengths_shown)
+    {
+        m_lengths_shown = shown;
+        emit lengthsShownChanged();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief A label for each seam, and for the twin of a seam made up on both sides of the body, at the middle of its
+/// first side where it shows: its position, in the board's coordinates on the board, else in the scene's, whether it
+/// is on the board, how much the sides differ in length, as text, and the seam's color.
+QVariantList SeamEditor::lengthLabels() const
+{
+    return m_board_labels + m_garment_labels;
+}
 //---------------------------------------------------------------------------------------------------------------------
 /// @brief Steps back, as Esc does: drops the seam started, else stops sewing, else drops the selection. Returns
 /// whether there was anything to step back from.
@@ -713,6 +770,10 @@ void SeamEditor::hoverEdge(const Edge& edge)
     {
         m_hovered = edge;
         updatePreview();
+        if (m_started.isValid())
+        {
+            emit hintChanged();
+        }
     }
 }
 
@@ -781,6 +842,23 @@ void SeamEditor::updateSeamGeometry()
     }
     m_seam_bands->setBands(bands);
     m_seam_lines->setLines(lines);
+
+    // Labelled on the first side on the board, else on the second.
+    m_board_labels.clear();
+    for (const ShownSeam& seam : m_shown_seams)
+    {
+        const VSeam& stored = m_seams.at(seam.index);
+        const SeamStretch* side = isOnBoard(stored.first.piece_id)    ? &seam.first
+                                  : isOnBoard(stored.second.piece_id) ? &seam.second
+                                                                      : nullptr;
+        if (side != nullptr)
+        {
+            const QPointF middle = flip(side->pointAt(side->length() / 2.0));
+            m_board_labels.append(lengthLabel(seam, QVector3D(static_cast<float>(middle.x()),
+                                                              static_cast<float>(middle.y()), 0.0f), true));
+        }
+    }
+    emit lengthLabelsChanged();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -790,6 +868,7 @@ void SeamEditor::updateGarmentGeometry()
 {
     QVector<SeamGeometry::Tube> tubes;
     QVector<SeamGeometry::Segment> segments;
+    QVariantList labels;
     for (const ShownSeam& seam : m_shown_seams)
     {
         const QColor color = seamColor(seam.index);
@@ -817,10 +896,17 @@ void SeamEditor::updateGarmentGeometry()
                     segments.append({first.pointAt(match.first), second.pointAt(match.second), color});
                 }
             }
+            const PlacedStretch& labelled = first.isEmpty() ? second : first;
+            if (!labelled.isEmpty())
+            {
+                labels.append(lengthLabel(seam, labelled.pointAt(labelled.stretch.length() / 2.0), false));
+            }
         }
     }
     m_garment_seams->setTubes(tubes);
     m_garment_lines->setSegments(segments);
+    m_garment_labels = labels;
+    emit lengthLabelsChanged();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -928,6 +1014,37 @@ void SeamEditor::setStarted(const Edge& edge)
     {
         emit hintChanged();
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A length given in cm, in the pattern's unit, with the unit.
+QString SeamEditor::length(qreal cm) const
+{
+    return QStringLiteral("%1 %2").arg(UnitConvertor(cm, Unit::Cm, m_unit), 0, 'f', m_unit == Unit::Mm ? 0 : 1)
+        .arg(UnitsToStr(m_unit, true));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// How long the sides of a seam are, and by how much they differ.
+QString SeamEditor::lengthsHint(const SeamStretch& first, const SeamStretch& second) const
+{
+    const qreal difference = qAbs(second.length() - first.length());
+    return difference < same_length
+           ? tr("Sews %1 to %2, the same length.").arg(length(first.length()), length(second.length()))
+           : tr("Sews %1 to %2, %3 apart.").arg(length(first.length()), length(second.length()), length(difference));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The label of a seam at a place, for the scene's QML.
+QVariantMap SeamEditor::lengthLabel(const ShownSeam& seam, const QVector3D& position, bool on_board) const
+{
+    const qreal difference = qAbs(seam.second.length() - seam.first.length());
+    QVariantMap label;
+    label.insert(QStringLiteral("position"), position);
+    label.insert(QStringLiteral("onBoard"), on_board);
+    label.insert(QStringLiteral("text"), difference < same_length ? QStringLiteral("=") : length(difference));
+    label.insert(QStringLiteral("color"), seamColor(seam.index));
+    return label;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

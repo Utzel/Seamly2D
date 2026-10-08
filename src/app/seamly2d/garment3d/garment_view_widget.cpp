@@ -607,6 +607,7 @@ void GarmentViewWidget::rebuildScene()
 
     m_scene_model->setPieces(scene_pieces);
     m_seam_editor->setSeams(m_doc->getSeams());
+    m_seam_editor->setUnit(qApp->patternUnit());
     m_seam_editor->setPieces(shown_pieces);
     showSeamsOnAvatar();
 
@@ -2084,6 +2085,11 @@ void GarmentViewWidget::createToolBar()
     avatar_seams->setToolTip(tr("Show the seams on the pieces on the avatar, each in its color, with lines between the "
                                 "places that meet while the pieces hang apart"));
     connect(avatar_seams, &QAction::toggled, m_seam_editor, &SeamEditor::setGarmentSeamsShown);
+    QAction* seam_lengths = sew_menu->addAction(tr("Seam Lengths"));
+    seam_lengths->setCheckable(true);
+    seam_lengths->setToolTip(tr("Label each seam with how much longer one of its sides is than the other, which "
+                                "has to be eased in; = where they are as long as each other"));
+    connect(seam_lengths, &QAction::toggled, m_seam_editor, &SeamEditor::setLengthsShown);
     m_sew_action->setMenu(sew_menu);
     if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_sew_action)))
     {

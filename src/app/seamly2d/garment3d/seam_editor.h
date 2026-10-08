@@ -30,10 +30,12 @@
 #include <QObject>
 #include <QPointF>
 #include <QString>
+#include <QVariantList>
 #include <QVector3D>
 #include <QVector>
 
 #include "../ifc/xml/vabstractpattern.h"
+#include "../vmisc/def.h"
 #include "../vgarment/garment_symmetry.h"
 #include "../vgarment/seam_stretch.h"
 #include "seam_geometry.h"
@@ -52,6 +54,9 @@
 /// A piece cut twice has a mirror image; sewing one of its segments to itself sews it to the mirror image, as a centre
 /// back seam.
 ///
+/// Both sides of a seam should be as long as each other, or the longer eased in on purpose: the hints say how long they
+/// are, and the seams can be labelled with how much they differ, in the pattern's unit.
+///
 /// The editor only proposes seams (seamSewn); they are made through the undo stack and come back with setSeams().
 class SeamEditor : public QObject
 {
@@ -60,6 +65,8 @@ class SeamEditor : public QObject
     Q_PROPERTY(int selectedSeam READ selectedSeam NOTIFY selectedSeamChanged)
     Q_PROPERTY(QString hint READ hint NOTIFY hintChanged)
     Q_PROPERTY(bool garmentSeamsShown READ isGarmentSeamsShown NOTIFY garmentSeamsShownChanged)
+    Q_PROPERTY(bool lengthsShown READ isLengthsShown NOTIFY lengthsShownChanged)
+    Q_PROPERTY(QVariantList lengthLabels READ lengthLabels NOTIFY lengthLabelsChanged)
     Q_PROPERTY(QObject* seamBands READ seamBands CONSTANT)
     Q_PROPERTY(QObject* seamLines READ seamLines CONSTANT)
     Q_PROPERTY(QObject* previewBands READ previewBands CONSTANT)
@@ -76,6 +83,7 @@ public:
     void                 setPositions(const QHash<quint32, QVector<QVector3D>>& positions);
     void                 setSeams(const QVector<VSeam>& seams);
     void                 setHighlightColor(const QColor& color);
+    void                 setUnit(Unit unit);
 
     bool                 isSewing() const;
     void                 setSewing(bool sewing);
@@ -86,6 +94,9 @@ public:
 
     bool                 isGarmentSeamsShown() const;
     void                 setGarmentSeamsShown(bool shown);
+    bool                 isLengthsShown() const;
+    void                 setLengthsShown(bool shown);
+    QVariantList         lengthLabels() const;
 
     QObject*             seamBands() const;
     QObject*             seamLines() const;
@@ -107,6 +118,8 @@ signals:
     void                 selectedSeamChanged();
     void                 hintChanged();
     void                 garmentSeamsShownChanged();
+    void                 lengthsShownChanged();
+    void                 lengthLabelsChanged();
     void                 seamSewn(const VSeam& seam);
 
 private:
@@ -151,6 +164,10 @@ private:
     QVector<VSeam>       m_seams;
     QVector<ShownSeam>   m_shown_seams;
     QColor               m_highlight_color;
+    Unit                 m_unit;
+    bool                 m_lengths_shown;
+    QVariantList         m_board_labels;
+    QVariantList         m_garment_labels;
     bool                 m_sewing;
     int                  m_selected_seam;
     bool                 m_garment_shown;
@@ -185,6 +202,9 @@ private:
     void                 updateGarmentGeometry();
     void                 updatePreview();
     void                 setStarted(const Edge& edge);
+    QString              length(qreal cm) const;
+    QString              lengthsHint(const SeamStretch& first, const SeamStretch& second) const;
+    QVariantMap          lengthLabel(const ShownSeam& seam, const QVector3D& position, bool on_board) const;
 
     static QColor        seamColor(int index);
 };

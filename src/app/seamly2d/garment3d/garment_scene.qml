@@ -436,6 +436,40 @@ Rectangle {
         }
     }
 
+    // How much longer one side of each seam is than the other, at the seam, in the seam's color, when asked for.
+    Repeater {
+        model: root.seamEditor.lengthsShown ? root.seamEditor.lengthLabels : []
+
+        Rectangle {
+            required property var modelData
+
+            // Where the seam is in the view; worked out again whenever the camera or the view moves.
+            readonly property vector3d onView: {
+                camera.scenePosition
+                camera.sceneRotation
+                view.width
+                view.height
+                return view.mapFrom3DScene(modelData.onBoard ? modelData.position.plus(root.sceneModel.boardOffset)
+                                                             : modelData.position)
+            }
+
+            x: onView.x - width / 2
+            y: onView.y - height / 2
+            width: length_text.implicitWidth + 8
+            height: length_text.implicitHeight + 2
+            radius: 3
+            color: modelData.color
+
+            Text {
+                id: length_text
+                anchors.centerIn: parent
+                text: parent.modelData.text
+                color: parent.modelData.color.hslLightness > 0.55 ? "black" : "white"
+                font.pointSize: 8
+            }
+        }
+    }
+
     OrbitCameraController {
         anchors.fill: parent
         origin: orbit_origin
