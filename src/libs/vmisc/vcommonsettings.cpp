@@ -79,6 +79,7 @@ const QString settingPathsMultisizeMeasurements          = QStringLiteral("paths
 const QString settingPathsTemplates                      = QStringLiteral("paths/templates");
 const QString settingPathsBodyScans                      = QStringLiteral("paths/bodyscans");
 const QString settingPathsLabelTemplate                  = QStringLiteral("paths/labels");
+const QString settingPathsFabrics                        = QStringLiteral("paths/fabrics");
 const QString settingBackupPath                          = QStringLiteral("paths/backups");
 
 const QString settingConfigurationCompanyName            = QStringLiteral("graphicsview/companyName");
@@ -547,6 +548,26 @@ QString VCommonSettings::getImageFilePath() const
 void VCommonSettings::setImageFilePath(const QString &text)
 {
     setValue(settingImagesPath, text);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The folder of the 3D View's fabric library unless the preferences name another.
+QString VCommonSettings::getDefaultFabricPath()
+{
+    return QDir::homePath() + QLatin1String("/seamly2d/") + tr("fabrics");
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The folder of the 3D View's fabric library, whose fabric files any pattern can take its fabrics from.
+QString VCommonSettings::getFabricPath() const
+{
+    return value(settingPathsFabrics, getDefaultFabricPath()).toString();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void VCommonSettings::setFabricPath(const QString& value)
+{
+    setValue(settingPathsFabrics, value);
 }
 
 //---------------------------------------------------------------------------------------------------------------------

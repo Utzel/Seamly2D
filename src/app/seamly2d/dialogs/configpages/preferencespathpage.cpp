@@ -101,6 +101,7 @@ void PreferencesPathPage::Apply()
     settings->SetPathLabelTemplate(ui->pathTable->item(5, 1)->text());
     settings->setImageFilePath(ui->pathTable->item(6, 1)->text());
     settings->setBackupFilePath(ui->pathTable->item(7, 1)->text());
+    settings->setFabricPath(ui->pathTable->item(8, 1)->text());
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -137,6 +138,9 @@ void PreferencesPathPage::defaultPath()
             break;
         case 7: // backups
             path = VSettings::getDefaultBackupFilePath();
+            break;
+        case 8: // fabrics
+            path = VCommonSettings::getDefaultFabricPath();
             break;
         default:
             break;
@@ -181,6 +185,9 @@ void PreferencesPathPage::editPath()
         case 7: // backups
                 path = qApp->Seamly2DSettings()->getBackupFilePath();
                 break;
+        case 8: // fabrics
+            path = qApp->Seamly2DSettings()->getFabricPath();
+            break;
         default:
             break;
     }
@@ -218,7 +225,7 @@ void PreferencesPathPage::editPath()
 //---------------------------------------------------------------------------------------------------------------------
 void PreferencesPathPage::initializeTable()
 {
-    ui->pathTable->setRowCount(8);
+    ui->pathTable->setRowCount(9);
     ui->pathTable->setColumnCount(2);
 
     const VSettings *settings = qApp->Seamly2DSettings();
@@ -293,6 +300,15 @@ void PreferencesPathPage::initializeTable()
         item = new QTableWidgetItem(settings->getBackupFilePath());
         item->setToolTip(settings->getBackupFilePath());
         ui->pathTable->setItem(7, 1, item);
+    }
+
+    {
+        QTableWidgetItem* item = new QTableWidgetItem(tr("My Fabrics"));
+        item->setIcon(QIcon(QStringLiteral(":/garment3d/icons/32x32/fabric_image.png")));
+        ui->pathTable->setItem(8, 0, item);
+        item = new QTableWidgetItem(settings->getFabricPath());
+        item->setToolTip(settings->getFabricPath());
+        ui->pathTable->setItem(8, 1, item);
     }
 
     ui->pathTable->verticalHeader()->setDefaultSectionSize(20);

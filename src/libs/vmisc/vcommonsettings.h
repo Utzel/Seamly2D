@@ -106,6 +106,10 @@ public:
     QString              getImageFilePath() const;
     void                 setImageFilePath(const QString &value);
 
+    static QString       getDefaultFabricPath();
+    QString              getFabricPath() const;
+    void                 setFabricPath(const QString& value);
+
     static QString       getDefaultBackupFilePath();
     QString              getBackupFilePath() const;
     void                 setBackupFilePath(const QString &value);

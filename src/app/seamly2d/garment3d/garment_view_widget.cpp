@@ -30,6 +30,7 @@
 #include <QColor>
 #include <QColorDialog>
 #include <QComboBox>
+#include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -110,6 +111,7 @@
 #include "flow_layout.h"
 #include "elastic_editor.h"
 #include "fabric_dialog.h"
+#include "fabric_library.h"
 #include "fold_editor.h"
 #include "garment_scene_model.h"
 #include "piece_geometry.h"
@@ -204,10 +206,14 @@ const qreal widest_image_width = 500.0;
 // Images of fabrics are kept in the pattern at most this many pixels across and along; larger ones are scaled down.
 const int kept_image_limit = 2048;
 
-// The items of the fabric box that are no fabrics have this role: making a new one, or editing the one shown.
+// The items of the fabric box that are no fabrics have this role: making a new one, editing the one shown, adding it
+// to the fabric library, or opening the library's folder. The library's fabrics have their files in another one.
 const int fabric_command_role = Qt::UserRole + 1;
+const int fabric_file_role = Qt::UserRole + 2;
 const int new_fabric = 1;
 const int edit_fabric = 2;
+const int add_to_library = 3;
+const int open_library = 4;
 
 // A fabric shrinks to no less than this share of its drafted size, and stretches out to no more than this one.
 const qreal least_shrinkage = 0.5;
@@ -462,6 +468,8 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_snapshot_action(nullptr)
     , m_fabric_box(nullptr)
     , m_custom_fabrics_listed()
+    , m_fabric_library(new FabricLibrary(this))
+    , m_library_fabrics_listed()
     , m_image_action(nullptr)
     , m_image_width_action(nullptr)
     , m_remove_image_action(nullptr)
@@ -521,6 +529,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     connect(m_doc, &VAbstractPattern::arrangementsChanged, this, &GarmentViewWidget::updateArrangements);
     connect(m_doc, &VAbstractPattern::layersChanged, this, &GarmentViewWidget::updateLayers);
     connect(m_doc, &VAbstractPattern::fabricsChanged, this, &GarmentViewWidget::updateFabrics);
+    connect(m_fabric_library, &FabricLibrary::changed, this, &GarmentViewWidget::updateActions);
     connect(m_doc, &VAbstractPattern::topstitchesChanged, this, &GarmentViewWidget::updateTopstitches);
     connect(m_doc, &VAbstractPattern::avatarChanged, this, &GarmentViewWidget::updateChosenAvatar);
     connect(m_stitch_editor, &StitchEditor::topstitchesEdited, this, &GarmentViewWidget::saveTopstitches);
@@ -2653,7 +2662,8 @@ void GarmentViewWidget::updateActions()
     }
     updateHint();
 
-    // The fabric shown is the selected piece's, or the garment's; only one of the pattern's own can be edited.
+    // The fabric shown is the selected piece's, or the garment's; only one of the pattern's own can be edited or
+    // added to the fabric library.
     const VGarmentFabrics fabrics = m_doc->getFabrics();
     updateFabricBox(fabrics);
     const quint32 selected = m_scene_model->selectedPiece();
@@ -2662,9 +2672,12 @@ void GarmentViewWidget::updateActions()
     m_fabric_box->setCurrentIndex(qMax(index, 0));
     if (auto* items = qobject_cast<QStandardItemModel*>(m_fabric_box->model()))
     {
-        if (QStandardItem* edit = items->item(m_fabric_box->findData(edit_fabric, fabric_command_role)))
+        for (const int command : {edit_fabric, add_to_library})
         {
-            edit->setEnabled(!fabrics.customFabric(fabric).name.isEmpty());
+            if (QStandardItem* item = items->item(m_fabric_box->findData(command, fabric_command_role)))
+            {
+                item->setEnabled(!fabrics.customFabric(fabric).name.isEmpty());
+            }
         }
     }
 
@@ -2683,14 +2696,33 @@ void GarmentViewWidget::updateFabrics()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// A fabric was picked: for the selected piece, or for the whole garment when no piece is selected; or a new fabric of
-// the pattern's own asked for, or the one shown to be edited.
+// A fabric was picked: for the selected piece, or for the whole garment when no piece is selected, one of the fabric
+// library's taken into the pattern first; or a new fabric of the pattern's own asked for, the one shown to be edited
+// or added to the library, or the library's folder to be opened.
 void GarmentViewWidget::chooseFabric(int index)
 {
+    const QString library_file = m_fabric_box->itemData(index, fabric_file_role).toString();
     const int command = m_fabric_box->itemData(index, fabric_command_role).toInt();
-    if (command != 0)
+    if (!library_file.isEmpty() || command != 0)
     {
-        editFabric(command == new_fabric);
+        switch (command)
+        {
+            case new_fabric:
+                editFabric(true);
+                break;
+            case edit_fabric:
+                editFabric(false);
+                break;
+            case add_to_library:
+                addFabricToLibrary();
+                break;
+            case open_library:
+                openFabricLibrary();
+                break;
+            default:
+                takeLibraryFabric(library_file);
+                break;
+        }
         updateActions();  // the box shows the fabric again
         return;
     }
@@ -2719,19 +2751,11 @@ void GarmentViewWidget::editFabric(bool make_new)
         return;
     }
 
-    QStringList taken;
+    const QStringList taken = takenFabricNames(before, make_new ? QString() : kept.name);
     QVector<FabricDialog::Start> starts;
     for (const Fabric& fabric : Fabric::presets())
     {
-        taken << fabric.name << fabricTitle(fabric.name);
         starts.append({fabricTitle(fabric.name), customFabric(fabric, QString())});
-    }
-    for (const VCustomFabric& fabric : before.custom)
-    {
-        if (fabric.name != kept.name || make_new)
-        {
-            taken << fabric.name;
-        }
     }
     VCustomFabric start = kept;
     if (make_new)
@@ -2797,6 +2821,102 @@ void GarmentViewWidget::editFabric(bool make_new)
     {
         qApp->getUndoStack()->push(new SaveFabrics(text, before, after, m_doc));
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A fabric of the library was picked: it becomes one of the pattern's own, which the selected piece, or the whole
+// garment when no piece is selected, is then cut from, as one step to undo. Named as one of the 3D View's fabrics, or,
+// but for its case, as one of the pattern's own, it gets a number.
+void GarmentViewWidget::takeLibraryFabric(const QString& path)
+{
+    VCustomFabric fabric;
+    for (const FabricLibrary::Entry& entry : m_fabric_library->entries())
+    {
+        fabric = entry.path == path ? entry.fabric : fabric;
+    }
+    if (fabric.name.isEmpty())
+    {
+        return;
+    }
+
+    const VGarmentFabrics before = m_doc->getFabrics();
+    const QStringList taken = takenFabricNames(before, QString());
+    const QString name = fabric.name;
+    for (int number = 2; taken.contains(fabric.name, Qt::CaseInsensitive); ++number)
+    {
+        fabric.name = QStringLiteral("%1 %2").arg(name).arg(number);
+    }
+    VGarmentFabrics after = before;
+    after.custom.append(fabric);
+    after = cutFrom(after, fabric.name);
+    qApp->getUndoStack()->push(new SaveFabrics(tr("take fabric from library"), before, after, m_doc));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The pattern's own fabric shown goes into the fabric library, for other patterns to take: over the library's fabric
+// of its name, if asked to when that one differs.
+void GarmentViewWidget::addFabricToLibrary()
+{
+    const VGarmentFabrics fabrics = m_doc->getFabrics();
+    const quint32 selected = m_scene_model->selectedPiece();
+    const VCustomFabric fabric = fabrics.customFabric(selected != 0 ? fabrics.of(selected) : fabrics.garment);
+    if (fabric.name.isEmpty())
+    {
+        return;
+    }
+
+    const FabricLibrary::Entry kept = m_fabric_library->entry(fabric.name);
+    if (!kept.path.isEmpty())
+    {
+        if (kept.fabric == fabric)
+        {
+            return;
+        }
+        const QMessageBox::StandardButton answer =
+            QMessageBox::question(this, tr("Fabric Library"),
+                                  tr("The fabric library already has a fabric called %1. Replace it with this one?")
+                                      .arg(kept.fabric.name));
+        if (answer != QMessageBox::Yes)
+        {
+            return;
+        }
+    }
+
+    QString error;
+    if (!m_fabric_library->add(fabric, &error))
+    {
+        QMessageBox::warning(this, tr("Fabric Library"),
+                             tr("The fabric couldn't be added to the fabric library. %1").arg(error));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The library's folder is opened, to take fabric files out of it, or to put in ones others made; it is made if it
+// isn't there yet.
+void GarmentViewWidget::openFabricLibrary()
+{
+    QDir().mkpath(m_fabric_library->folder());
+    QDesktopServices::openUrl(QUrl::fromLocalFile(m_fabric_library->folder()));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The names a fabric of the pattern's own can't be given: the 3D View's fabrics', as patterns store them and as they
+// are shown, and those of the pattern's own but the one given.
+QStringList GarmentViewWidget::takenFabricNames(const VGarmentFabrics& fabrics, const QString& except) const
+{
+    QStringList taken;
+    for (const Fabric& fabric : Fabric::presets())
+    {
+        taken << fabric.name << fabricTitle(fabric.name);
+    }
+    for (const VCustomFabric& fabric : fabrics.custom)
+    {
+        if (fabric.name != except)
+        {
+            taken << fabric.name;
+        }
+    }
+    return taken;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -3775,44 +3895,85 @@ QString GarmentViewWidget::fabricTitle(const QString& fabric) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// The fabric box lists the 3D View's fabrics, the pattern's own, and making a new one and editing the one shown. It is
-// filled again only when the pattern's own change.
+// The fabric box lists the 3D View's fabrics, the pattern's own, and the fabric library's but those the pattern has,
+// each under a heading; then making a new one, editing the one shown, adding it to the library and opening the
+// library's folder. It is filled again only when the pattern's own or the library's change.
 void GarmentViewWidget::updateFabricBox(const VGarmentFabrics& fabrics)
 {
+    m_fabric_library->update();
     QStringList custom;
     for (const VCustomFabric& fabric : fabrics.custom)
     {
         custom.append(fabric.name);
     }
-    if (m_fabric_box->count() > 0 && custom == m_custom_fabrics_listed)
+    QVector<FabricLibrary::Entry> library;
+    QStringList library_listed;
+    for (const FabricLibrary::Entry& entry : m_fabric_library->entries())
+    {
+        if (!custom.contains(entry.fabric.name, Qt::CaseInsensitive))
+        {
+            library.append(entry);
+            library_listed << entry.path << entry.fabric.name;
+        }
+    }
+    if (m_fabric_box->count() > 0 && custom == m_custom_fabrics_listed && library_listed == m_library_fabrics_listed)
     {
         return;
     }
     m_custom_fabrics_listed = custom;
+    m_library_fabrics_listed = library_listed;
 
     const QSignalBlocker blocker(m_fabric_box);
     m_fabric_box->clear();
+    auto* items = qobject_cast<QStandardItemModel*>(m_fabric_box->model());
+    auto add_heading = [this, items](const QString& heading)
+    {
+        m_fabric_box->insertSeparator(m_fabric_box->count());
+        m_fabric_box->addItem(heading);
+        if (QStandardItem* item = items != nullptr ? items->item(m_fabric_box->count() - 1) : nullptr)
+        {
+            item->setFlags(Qt::NoItemFlags);
+        }
+    };
+    auto add_command = [this](const QString& text, int command, const QString& tip)
+    {
+        m_fabric_box->addItem(text);
+        m_fabric_box->setItemData(m_fabric_box->count() - 1, command, fabric_command_role);
+        m_fabric_box->setItemData(m_fabric_box->count() - 1, tip, Qt::ToolTipRole);
+    };
+
     for (const Fabric& fabric : Fabric::presets())
     {
         m_fabric_box->addItem(fabricTitle(fabric.name), fabric.name);
     }
     if (!custom.isEmpty())
     {
-        m_fabric_box->insertSeparator(m_fabric_box->count());
+        add_heading(tr("This Pattern"));
         for (const QString& name : custom)
         {
             m_fabric_box->addItem(name, name);
         }
     }
+    if (!library.isEmpty())
+    {
+        add_heading(tr("Fabric Library"));
+        for (const FabricLibrary::Entry& entry : library)
+        {
+            m_fabric_box->addItem(entry.fabric.name);
+            m_fabric_box->setItemData(m_fabric_box->count() - 1, entry.path, fabric_file_role);
+            m_fabric_box->setItemData(m_fabric_box->count() - 1, QDir::toNativeSeparators(entry.path),
+                                      Qt::ToolTipRole);
+        }
+    }
     m_fabric_box->insertSeparator(m_fabric_box->count());
-    m_fabric_box->addItem(tr("New Fabric..."));
-    m_fabric_box->setItemData(m_fabric_box->count() - 1, new_fabric, fabric_command_role);
-    m_fabric_box->setItemData(m_fabric_box->count() - 1, tr("A fabric of the pattern's own, starting from the one "
-                                                            "shown, as fabric tests describe it"), Qt::ToolTipRole);
-    m_fabric_box->addItem(tr("Edit Fabric..."));
-    m_fabric_box->setItemData(m_fabric_box->count() - 1, edit_fabric, fabric_command_role);
-    m_fabric_box->setItemData(m_fabric_box->count() - 1, tr("Change or delete the fabric of the pattern's own shown"),
-                              Qt::ToolTipRole);
+    add_command(tr("New Fabric..."), new_fabric,
+                tr("A fabric of the pattern's own, starting from the one shown, as fabric tests describe it"));
+    add_command(tr("Edit Fabric..."), edit_fabric, tr("Change or delete the fabric of the pattern's own shown"));
+    add_command(tr("Add Fabric to Library"), add_to_library,
+                tr("Keep the fabric of the pattern's own shown in the fabric library, for other patterns to take"));
+    add_command(tr("Open Fabric Library"), open_library,
+                tr("Open the fabric library's folder, set in the preferences: its fabric files can be shared, or "
+                   "taken out"));
 }
 
 //---------------------------------------------------------------------------------------------------------------------
