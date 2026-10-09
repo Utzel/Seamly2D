@@ -49,6 +49,8 @@ private slots:
     void piecesPassThroughEachOtherButNotThemselves() const;
     void layersKeepTheirOrder_data() const;
     void layersKeepTheirOrder() const;
+    void turnedBackLayersKeepTheirOrder_data() const;
+    void turnedBackLayersKeepTheirOrder() const;
     void piecesGatherIntoOneSeam_data() const;
     void piecesGatherIntoOneSeam() const;
     void elasticGathersTheCloth_data() const;

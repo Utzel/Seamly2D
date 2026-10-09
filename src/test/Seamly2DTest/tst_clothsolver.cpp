@@ -720,6 +720,92 @@ void TST_ClothSolver::layersKeepTheirOrder() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+void TST_ClothSolver::turnedBackLayersKeepTheirOrder_data() const
+{
+    onProcessorAndDevice();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A patch of the outer layer held flat over a sheet, its end turned back under it wrong sides together, as a hem is
+// turned up: the turned end starts out under the sheet too where they overlap, and goes through it to lie between the
+// sheet and the rest of the patch. Turned back, its right side faces the sheet, but it is still of the outer layer.
+void TST_ClothSolver::turnedBackLayersKeepTheirOrder() const
+{
+    QFETCH(bool, on_device);
+    ClothSettings settings;
+    settings.floor = false;
+    settings.gravity = QVector3D();
+    ClothSolver solver(settings);
+
+    const PieceMesher mesher;
+    const GarmentMesh sheet = mesher.meshOutline(rectangle(0, -2, 20, 14, 1));
+    PieceOutline patch_outline = rectangle(-5, 0, 50, 10, 11);
+    OutlineLine fold_line;
+    fold_line.id = 19;
+    fold_line.points = {QPointF(30, 0), QPointF(30, 10)};
+    patch_outline.setLines({fold_line});
+    const GarmentMesh patch = mesher.meshOutline(patch_outline);
+    QCOMPARE(patch.lines.size(), 1);
+
+    const float patch_height = 1.0f;
+    QVector<QVector3D> turned_under;
+    for (const QPointF& point : patch.rest_positions)
+    {
+        const bool beyond = point.x() > 30;
+        turned_under.append(QVector3D(static_cast<float>(beyond ? 60 - point.x() : point.x()),
+                                      beyond ? -0.4f : patch_height, static_cast<float>(point.y())));
+    }
+    ClothFold fold;
+    fold.vertices = patch.lines.first().vertices;
+    fold.angle = 360;
+    ClothLayer patch_wears;
+    patch_wears.number = 1;
+    solver.addMesh(sheet, lyingFlat(sheet, 0));
+    const int patch_offset = static_cast<int>(solver.addMesh(patch, turned_under, Fabric(), 90.0, {fold},
+                                                             patch_wears));
+    for (int i = 0; i < patch_offset; ++i)
+    {
+        solver.setPinned(static_cast<quint32>(i), true);
+    }
+    for (int i = 0; i < patch.vertexCount(); ++i)
+    {
+        if (patch.rest_positions.at(i).x() < 25)
+        {
+            solver.setPinned(static_cast<quint32>(patch_offset + i), true);
+        }
+    }
+    ComputeDevice device;
+    if (on_device && !solver.useDevice(device.open()))
+    {
+        QSKIP("No graphics card here can compute");
+    }
+    for (int i = 0; i < 200; ++i)
+    {
+        solver.step(frame);
+    }
+    QCOMPARE(solver.isOnDevice(), on_device);
+    solver.useDevice(nullptr);
+
+    // The turned end where it lies over the sheet, clear of the sheet's edge.
+    const QVector<QVector3D> positions = solver.positions();
+    float lowest = std::numeric_limits<float>::max();
+    float highest = -std::numeric_limits<float>::max();
+    for (int i = 0; i < patch.vertexCount(); ++i)
+    {
+        const qreal x = patch.rest_positions.at(i).x();
+        if (x > 41 && x < 44)
+        {
+            lowest = qMin(lowest, positions.at(patch_offset + i).y());
+            highest = qMax(highest, positions.at(patch_offset + i).y());
+        }
+    }
+    const float thickness = static_cast<float>(settings.thickness);
+    QVERIFY2(lowest > 0.5f * thickness && highest < patch_height,
+             qUtf8Printable(QStringLiteral("the turned end is from %1 to %2 cm high, the sheet at 0, the patch at %3")
+                                .arg(lowest).arg(highest).arg(patch_height)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void TST_ClothSolver::piecesGatherIntoOneSeam_data() const
 {
     onProcessorAndDevice();

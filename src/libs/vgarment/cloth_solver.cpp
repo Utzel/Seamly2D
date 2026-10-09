@@ -110,6 +110,12 @@ const double self_bound_share = 0.45;
 // cosine of the angle: 60 degrees. A sleeve's outside faces the body's beside it, and their layers don't count there.
 const double same_way = 0.5;
 
+// Of a piece folded back onto itself, the part facing as the piece does is the one turning its outside away from the
+// body beside the folds clearly more than the others, by at least this much on average as a cosine; the body is
+// looked for up to this far from the cloth, in cm.
+const double clear_facing = 0.5;
+const float facing_reach = 20.0f;
+
 // A fold onto itself, right side in or wrong side in, is held this many radians short of flat: right onto itself, the
 // two ways it can fold there come to the same angle, and the cloth wouldn't know which way to go.
 const double fold_short_of_flat = 5.0 * M_PI / 180.0;
@@ -927,6 +933,112 @@ quint32 ClothSolver::addMesh(const GarmentMesh& mesh, const QVector<QVector3D>& 
             hinge.stiffness = rigidity_across(a, b) / areas;
             m_hinges.append(hinge);
         }
+    }
+
+    // The piece's regions: its triangles joined but across folds that turn the cloth back onto itself, beyond which it
+    // faces the other way once folded; which way each region faces against the first; and the triangles beside those
+    // folds, which show how the piece was arranged.
+    const int face_count = static_cast<int>(mesh.indices.size() / 3);
+    QVector<int> joined(face_count);
+    std::iota(joined.begin(), joined.end(), 0);
+    auto root_of = [&joined](int face)
+    {
+        while (joined.at(face) != face)
+        {
+            joined[face] = joined.at(joined.at(face));
+            face = joined.at(face);
+        }
+        return face;
+    };
+    QHash<quint64, QVector<int>> faces_at;
+    for (int f = 0; f < face_count; ++f)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            faces_at[edgeKey(mesh.indices.at(3 * f + k), mesh.indices.at(3 * f + (k + 1) % 3))].append(f);
+        }
+    }
+    QVector<QPair<int, int>> turning;
+    for (const quint64 edge : edges)
+    {
+        const QVector<int> beside = faces_at.value(edge);
+        if (beside.size() == 2)
+        {
+            const int fold = fold_of_edge.value(edge, -1);
+            if (fold >= 0 && qAbs(folds.at(fold).angle - 180.0) > 90.0)
+            {
+                turning.append(qMakePair(beside.at(0), beside.at(1)));
+            }
+            else
+            {
+                joined[root_of(beside.at(0))] = root_of(beside.at(1));
+            }
+        }
+    }
+    QVector<int> region_of(face_count, -1);
+    QHash<int, int> region_of_root;
+    for (int f = 0; f < face_count; ++f)
+    {
+        const int root = root_of(f);
+        if (!region_of_root.contains(root))
+        {
+            region_of_root.insert(root, static_cast<int>(region_of_root.size()));
+        }
+        region_of[f] = region_of_root.value(root);
+    }
+    const int region_count = static_cast<int>(region_of_root.size());
+    QVector<QVector<int>> across(region_count);
+    for (const QPair<int, int>& faces : turning)
+    {
+        const int first = region_of.at(faces.first);
+        const int second = region_of.at(faces.second);
+        if (first != second)
+        {
+            across[first].append(second);
+            across[second].append(first);
+        }
+    }
+    QVector<char> turned(region_count, -1);
+    for (int start = 0; start < region_count; ++start)
+    {
+        if (turned.at(start) >= 0)
+        {
+            continue;
+        }
+        turned[start] = 0;
+        QVector<int> waiting = {start};
+        while (!waiting.isEmpty())
+        {
+            const int region = waiting.takeLast();
+            for (const int other : across.at(region))
+            {
+                if (turned.at(other) < 0)
+                {
+                    turned[other] = turned.at(region) == 0 ? 1 : 0;
+                    waiting.append(other);
+                }
+            }
+        }
+    }
+    const int first_region = static_cast<int>(m_region_piece.size());
+    const int first_face = static_cast<int>(m_faces.size() / 3) - face_count;
+    m_piece_regions.append(region_count);
+    for (int r = 0; r < region_count; ++r)
+    {
+        m_region_piece.append(piece);
+        m_region_turned.append(turned.at(r));
+        m_region_area.append(0.0);
+    }
+    for (int f = 0; f < face_count; ++f)
+    {
+        m_face_region.append(first_region + region_of.at(f));
+        m_region_area[first_region + region_of.at(f)] += triangle_area(static_cast<int>(mesh.indices.at(3 * f)),
+                                                                     static_cast<int>(mesh.indices.at(3 * f + 1)),
+                                                                     static_cast<int>(mesh.indices.at(3 * f + 2)));
+    }
+    for (const QPair<int, int>& faces : turning)
+    {
+        m_fold_faces << first_face + faces.first << first_face + faces.second;
     }
 
     m_prepared = false;
@@ -1754,9 +1866,89 @@ void ClothSolver::prepare()
         m_colors[color].append(i);
     }
 
+    findOutsides();
     m_contacts.clear();
     m_self_found_at.clear();
     m_prepared = true;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Which way each triangle's outside faces from it as wound: as its piece's does, but in the regions folds turn back,
+// which face the other way. Of a piece's regions, the one facing as the piece does is the one it was arranged with its
+// outside away from the body, as the triangles beside its folds show, so a hem turned up inside the leg faces the
+// body with its right side; without a body to tell, or where it doesn't, the largest one.
+void ClothSolver::findOutsides()
+{
+    const int face_count = static_cast<int>(m_faces.size() / 3);
+    m_face_outside = QVector<double>(face_count, 1.0);
+
+    // How far each region turns its piece's outside away from the body beside the folds, as a cosine on average.
+    const int region_count = static_cast<int>(m_region_piece.size());
+    QVector<double> facing(region_count, 0.0);
+    QVector<int> looked(region_count, 0);
+    for (int i = 0; i < m_fold_faces.size() && !m_collider.isEmpty(); ++i)
+    {
+        const int face = m_fold_faces.at(i);
+        const int region = m_face_region.at(face);
+        const Vec3 a = load(m_position, m_faces.at(3 * face));
+        const Vec3 b = load(m_position, m_faces.at(3 * face + 1));
+        const Vec3 c = load(m_position, m_faces.at(3 * face + 2));
+        const Vec3 normal = cross(b - a, c - a);
+        const double length = normal.length();
+        const Vec3 middle = (a + b + c) * (1.0 / 3.0);
+        const QVector3D at(static_cast<float>(middle.x), static_cast<float>(middle.y), static_cast<float>(middle.z));
+        BodyContact contact;
+        if (length > tiny && m_collider.closest(at, m_collider.trianglesWithin(at, facing_reach), &contact))
+        {
+            const Vec3 away{contact.normal.x(), contact.normal.y(), contact.normal.z()};
+            facing[region] += normal.dot(away) * m_outside.at(m_region_piece.at(region)) / length;
+            ++looked[region];
+        }
+    }
+
+    // Each piece's region facing as it does.
+    const int piece_count = static_cast<int>(m_outside.size());
+    QVector<int> keeping(piece_count, -1);
+    QVector<int> largest(piece_count, -1);
+    QVector<int> most_facing(piece_count, -1);
+    QVector<double> next_facing(piece_count, -std::numeric_limits<double>::infinity());
+    for (int r = 0; r < region_count; ++r)
+    {
+        const int piece = m_region_piece.at(r);
+        if (largest.at(piece) < 0 || m_region_area.at(r) > m_region_area.at(largest.at(piece)))
+        {
+            largest[piece] = r;
+        }
+        const double mean = looked.at(r) > 0 ? facing.at(r) / looked.at(r) : 0.0;
+        const int best = most_facing.at(piece);
+        if (best < 0 || mean > (looked.at(best) > 0 ? facing.at(best) / looked.at(best) : 0.0))
+        {
+            if (best >= 0)
+            {
+                next_facing[piece] = looked.at(best) > 0 ? facing.at(best) / looked.at(best) : 0.0;
+            }
+            most_facing[piece] = r;
+        }
+        else
+        {
+            next_facing[piece] = qMax(next_facing.at(piece), mean);
+        }
+    }
+    for (int piece = 0; piece < piece_count; ++piece)
+    {
+        const int best = most_facing.at(piece);
+        const double best_mean = best >= 0 && looked.at(best) > 0 ? facing.at(best) / looked.at(best) : 0.0;
+        keeping[piece] = best >= 0 && best_mean - next_facing.at(piece) >= clear_facing ? best : largest.at(piece);
+    }
+
+    for (int face = 0; face < face_count; ++face)
+    {
+        const int region = m_face_region.value(face, -1);
+        const int piece = m_pieces.at(m_faces.at(3 * face));
+        const int kept = keeping.value(piece, -1);
+        const bool other_way = region >= 0 && kept >= 0 && m_region_turned.at(region) != m_region_turned.at(kept);
+        m_face_outside[face] = other_way ? -m_outside.at(piece) : m_outside.at(piece);
+    }
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2111,7 +2303,7 @@ void ClothSolver::findSelfContacts()
         m_self_found_at = m_previous;
     }
 
-    // Which way the cloth faces around each vertex, for pieces in layers to tell their outsides by.
+    // Which way the cloth's outside faces around each vertex, for pieces in layers to tell their sides by.
     m_facing.clear();
     if (inLayers())
     {
@@ -2119,7 +2311,8 @@ void ClothSolver::findSelfContacts()
         for (int t = 0; t + 2 < m_faces.size(); t += 3)
         {
             const Vec3 a = load(m_previous, m_faces.at(t));
-            const Vec3 normal = cross(load(m_previous, m_faces.at(t + 1)) - a, load(m_previous, m_faces.at(t + 2)) - a);
+            const Vec3 normal = cross(load(m_previous, m_faces.at(t + 1)) - a, load(m_previous, m_faces.at(t + 2)) - a)
+                                * m_face_outside.value(t / 3, 1.0);
             for (int k = 0; k < 3; ++k)
             {
                 store(m_facing, m_faces.at(t + k), load(m_facing, m_faces.at(t + k)) + normal);
@@ -2484,15 +2677,30 @@ double ClothSolver::layeredSide(const SelfContact& contact) const
         corners[k] = load(m_previous, contact.vertices[k]);
     }
 
-    // Which way each part faces out: a vertex or an edge as the cloth around it, a triangle as itself.
+    // Which way each part faces out: a vertex or an edge as the cloth around it, a triangle as itself, as its piece
+    // does, or, of a piece folded back onto itself, as the cloth around its corners.
     Vec3 first_out;
     for (int k = 0; k < first_count; ++k)
     {
         first_out += load(m_facing, contact.vertices[k]);
     }
-    first_out = first_out * m_outside.at(first_piece);
-    const Vec3 second_out = (contact.edges ? load(m_facing, contact.vertices[2]) + load(m_facing, contact.vertices[3])
-                                           : contactNormal(corners, false)) * m_outside.at(second_piece);
+    Vec3 second_out;
+    if (contact.edges)
+    {
+        second_out = load(m_facing, contact.vertices[2]) + load(m_facing, contact.vertices[3]);
+    }
+    else
+    {
+        const Vec3 normal = contactNormal(corners, false);
+        double outside = m_outside.at(second_piece);
+        if (m_piece_regions.value(second_piece, 1) > 1)
+        {
+            const Vec3 around = load(m_facing, contact.vertices[1]) + load(m_facing, contact.vertices[2])
+                                + load(m_facing, contact.vertices[3]);
+            outside = normal.dot(around) < 0 ? -1.0 : 1.0;
+        }
+        second_out = normal * outside;
+    }
     const double first_length = first_out.length();
     const double second_length = second_out.length();
     if (first_length < tiny || second_length < tiny

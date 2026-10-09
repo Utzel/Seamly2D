@@ -125,7 +125,9 @@ struct ClothLayer
 ///
 /// Pieces worn in layers that lie on each other facing the same way push to the sides their layers say instead, the
 /// higher layer outside, so a piece that starts out on the wrong side, or was sewn on through the other, goes through
-/// it to its own side; and it is never pushed back by the cloth it lies beside on the wrong side meanwhile.
+/// it to its own side; and it is never pushed back by the cloth it lies beside on the wrong side meanwhile. Beyond a
+/// fold that turns the cloth back onto itself, as a hem turned up, the cloth faces the other way, its inside out, and
+/// keeps to its piece's side of the other layers so.
 ///
 /// Stiff cloth needs more sweeps than a step can afford to settle, and without them it gives way slowly, as if it were
 /// soft. Chebyshev acceleration (Wang, SIGGRAPH Asia 2015), as Chen et al. use it, carries each sweep on further
@@ -261,6 +263,14 @@ private:
     QVector<double>    m_rigidity;     // how stiffly each piece's fabric bends, on average, in g cm²/s²
     QVector<int>       m_layers;       // which layer each piece is worn in
     QVector<double>    m_outside;      // which way each piece's outside faces from its triangles as wound, 1 or -1
+    QVector<int>       m_piece_regions;  // how many regions each piece has, parts joined but across folds that turn
+                                         // the cloth back
+    QVector<int>       m_face_region;    // which region each triangle is in, counting over all pieces
+    QVector<int>       m_region_piece;   // which piece each region is of
+    QVector<char>      m_region_turned;  // whether each region faces the other way than its piece's first one
+    QVector<double>    m_region_area;    // how big each region is in its flat piece, in cm²
+    QVector<int>       m_fold_faces;     // the triangles beside the folds that turn the cloth back
+    QVector<double>    m_face_outside;   // which way each triangle's outside faces from it as wound, 1 or -1
     BodyCollider       m_collider;
 
     bool               m_prepared;
@@ -289,6 +299,7 @@ private:
     std::unique_ptr<WorkerPool>  m_workers;         // the threads the sweeps are shared out among, once needed
 
     void               prepare();
+    void               findOutsides();
     WorkerPool&        workers();
     int                runLength(int count, int shortest) const;
     void               sweep(double time_step);
