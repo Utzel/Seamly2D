@@ -1456,12 +1456,12 @@ bool GarmentViewWidget::isTurnedPair(quint32 piece, const PieceArrangement& arra
 {
     int votes = 0;
     const CachedMesh& own = m_mesh_cache.value(piece);
-    if (!m_wrap.isNull() && arrangement.part != BodyPart::Body && own.symmetry == PieceSymmetry::Pair)
+    if (!m_wrap.isNull() && BodyWrap::isLimb(arrangement.part) && own.symmetry == PieceSymmetry::Pair)
     {
         auto onPart = [this, piece](quint32 partner, bool body)
         {
             return partner != piece && m_arrangements.contains(partner)
-                   && (m_arrangements.value(partner).part == BodyPart::Body) == body
+                   && !BodyWrap::isLimb(m_arrangements.value(partner).part) == body
                    && !m_mesh_cache.value(partner).garment_mesh.isEmpty();
         };
 
@@ -2009,6 +2009,9 @@ QString GarmentViewWidget::pointTitle(const ArrangementPoint& point) const
         case BodyPart::RightArm:
             part = tr("Right arm");
             break;
+        case BodyPart::Neck:
+            part = tr("Neck");
+            break;
         case BodyPart::Body:
         default:
             part = tr("Body");
@@ -2027,7 +2030,8 @@ QString GarmentViewWidget::pointTitle(const ArrangementPoint& point) const
         {QStringLiteral("outside"), tr("outside")},
         {QStringLiteral("inside"), tr("inside")}};
     const QHash<QString, QString> levels = {
-        {QStringLiteral("neck"), tr("at the neck")},
+        {QStringLiteral("base"), tr("at its base")},
+        {QStringLiteral("middle"), tr("in its middle")},
         {QStringLiteral("bust"), tr("at the bust")},
         {QStringLiteral("waist"), tr("at the waist")},
         {QStringLiteral("hip"), tr("at the hip")},
