@@ -6,6 +6,7 @@ SOURCES += \
     $$PWD/avatar_geometry.cpp \
     $$PWD/drape_runner.cpp \
     $$PWD/elastic_editor.cpp \
+    $$PWD/fabric_dialog.cpp \
     $$PWD/flow_layout.cpp \
     $$PWD/fold_editor.cpp \
     $$PWD/garment_scene_model.cpp \
@@ -22,6 +23,7 @@ HEADERS += \
     $$PWD/avatar_geometry.h \
     $$PWD/drape_runner.h \
     $$PWD/elastic_editor.h \
+    $$PWD/fabric_dialog.h \
     $$PWD/flow_layout.h \
     $$PWD/fold_editor.h \
     $$PWD/garment_scene_model.h \

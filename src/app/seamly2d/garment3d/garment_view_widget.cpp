@@ -59,6 +59,8 @@
 #include <QQuickView>
 #include <QQuickWindow>
 #include <QSignalBlocker>
+#include <QStandardItem>
+#include <QStandardItemModel>
 #include <QStringList>
 #include <QTimer>
 #include <QToolBar>
@@ -107,6 +109,7 @@
 #include "drape_runner.h"
 #include "flow_layout.h"
 #include "elastic_editor.h"
+#include "fabric_dialog.h"
 #include "fold_editor.h"
 #include "garment_scene_model.h"
 #include "piece_geometry.h"
@@ -200,6 +203,11 @@ const qreal widest_image_width = 500.0;
 
 // Images of fabrics are kept in the pattern at most this many pixels across and along; larger ones are scaled down.
 const int kept_image_limit = 2048;
+
+// The items of the fabric box that are no fabrics have this role: making a new one, or editing the one shown.
+const int fabric_command_role = Qt::UserRole + 1;
+const int new_fabric = 1;
+const int edit_fabric = 2;
 
 // A fabric shrinks to no less than this share of its drafted size, and stretches out to no more than this one.
 const qreal least_shrinkage = 0.5;
@@ -317,6 +325,43 @@ VFabricTexture readFabricImage(const QString& path)
     }
     return texture;
 }
+
+//---------------------------------------------------------------------------------------------------------------------
+// The fabric of that name: one of the pattern's own, or else one of the 3D View's.
+Fabric namedFabric(const VGarmentFabrics& fabrics, const QString& name)
+{
+    const VCustomFabric custom = fabrics.customFabric(name);
+    if (custom.name.isEmpty())
+    {
+        return Fabric::preset(name);
+    }
+    Fabric fabric;
+    fabric.name = custom.name;
+    fabric.weight = custom.weight;
+    fabric.warp_stiffness = custom.warp;
+    fabric.weft_stiffness = custom.weft;
+    fabric.bias_stiffness = custom.bias;
+    fabric.bending_warp = custom.bending_warp;
+    fabric.bending_weft = custom.bending_weft;
+    fabric.thickness = custom.thickness;
+    return fabric;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A fabric's values, as a fabric of the pattern's own of that name.
+VCustomFabric customFabric(const Fabric& fabric, const QString& name)
+{
+    VCustomFabric custom;
+    custom.name = name;
+    custom.weight = fabric.weight;
+    custom.warp = fabric.warp_stiffness;
+    custom.weft = fabric.weft_stiffness;
+    custom.bias = fabric.bias_stiffness;
+    custom.bending_warp = fabric.bending_warp;
+    custom.bending_weft = fabric.bending_weft;
+    custom.thickness = fabric.thickness;
+    return custom;
+}
 } // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -416,6 +461,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_show_pieces_action(nullptr)
     , m_snapshot_action(nullptr)
     , m_fabric_box(nullptr)
+    , m_custom_fabrics_listed()
     , m_image_action(nullptr)
     , m_image_width_action(nullptr)
     , m_remove_image_action(nullptr)
@@ -732,7 +778,7 @@ void GarmentViewWidget::rebuildScene()
             scene_piece.color = color.isValid() ? color : QColor(Qt::white);
             const qreal grain_angle = grainAngle(piece);
             scene_piece.grain_angle = grain_angle;
-            scene_piece.thickness = Fabric::preset(fabrics.of(id)).thickness / millimetres_per_cm;
+            scene_piece.thickness = namedFabric(fabrics, fabrics.of(id)).thickness / millimetres_per_cm;
             const VFabricTexture texture = fabrics.textureOf(id);
             scene_piece.texture = texture.image;
             scene_piece.texture_width = texture.width;
@@ -2339,7 +2385,7 @@ void GarmentViewWidget::startSimulation()
             DrapePiece drape_piece;
             drape_piece.id = garment_piece.id;
             const quint32 piece = patternPiece(garment_piece.id);
-            Fabric fabric = Fabric::preset(fabrics.of(piece));
+            Fabric fabric = namedFabric(fabrics, fabrics.of(piece));
             const VFabricShrinkage shrinkage = fabrics.shrinkageOf(piece);
             if (!shrinkage.isNull())
             {
@@ -2607,12 +2653,20 @@ void GarmentViewWidget::updateActions()
     }
     updateHint();
 
-    // The fabric shown is the selected piece's, or the garment's.
+    // The fabric shown is the selected piece's, or the garment's; only one of the pattern's own can be edited.
     const VGarmentFabrics fabrics = m_doc->getFabrics();
+    updateFabricBox(fabrics);
     const quint32 selected = m_scene_model->selectedPiece();
     const QString fabric = selected != 0 ? fabrics.of(selected) : fabrics.garment;
     const int index = m_fabric_box->findData(fabric.isEmpty() ? Fabric::defaultName() : fabric);
     m_fabric_box->setCurrentIndex(qMax(index, 0));
+    if (auto* items = qobject_cast<QStandardItemModel*>(m_fabric_box->model()))
+    {
+        if (QStandardItem* edit = items->item(m_fabric_box->findData(edit_fabric, fabric_command_role)))
+        {
+            edit->setEnabled(!fabrics.customFabric(fabric).name.isEmpty());
+        }
+    }
 
     const bool own_image = !ownFabricImage().isNull();
     m_image_width_action->setEnabled(own_image);
@@ -2629,47 +2683,156 @@ void GarmentViewWidget::updateFabrics()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// A fabric was picked: for the selected piece, or for the whole garment when no piece is selected. A piece cut from
-// the garment's fabric doesn't keep a fabric of its own, but keeps an image of its own.
+// A fabric was picked: for the selected piece, or for the whole garment when no piece is selected; or a new fabric of
+// the pattern's own asked for, or the one shown to be edited.
 void GarmentViewWidget::chooseFabric(int index)
 {
-    const QString chosen = m_fabric_box->itemData(index).toString();
-    const VGarmentFabrics before = m_doc->getFabrics();
-    VGarmentFabrics after = before;
-    const quint32 selected = m_scene_model->selectedPiece();
-    if (selected != 0)
+    const int command = m_fabric_box->itemData(index, fabric_command_role).toInt();
+    if (command != 0)
     {
-        const QString garment = after.garment.isEmpty() ? Fabric::defaultName() : after.garment;
-        const QString fabric = chosen != garment ? chosen : QString();
-        auto own = std::find_if(after.pieces.begin(), after.pieces.end(), [selected](const VPieceFabric& piece)
-        {
-            return piece.piece_id == selected;
-        });
-        if (own == after.pieces.end())
-        {
-            if (!fabric.isEmpty())
-            {
-                after.pieces.append({selected, fabric, VFabricTexture()});
-            }
-        }
-        else if (fabric.isEmpty() && own->texture.isNull() && own->shrinkage.isNull())
-        {
-            after.pieces.erase(own);
-        }
-        else
-        {
-            own->fabric = fabric;
-        }
-    }
-    else
-    {
-        after.garment = chosen == Fabric::defaultName() ? QString() : chosen;
+        editFabric(command == new_fabric);
+        updateActions();  // the box shows the fabric again
+        return;
     }
 
+    const VGarmentFabrics before = m_doc->getFabrics();
+    const VGarmentFabrics after = cutFrom(before, m_fabric_box->itemData(index).toString());
     if (!(after == before))
     {
         qApp->getUndoStack()->push(new SaveFabrics(tr("change fabric"), before, after, m_doc));
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A fabric of the pattern's own was asked for, as CLO's fabric properties: a new one, starting from the fabric shown,
+// which the selected piece, or the whole garment when no piece is selected, is then cut from; or the one shown,
+// changed, the pieces cut from it following it to a new name, or deleted, what was cut from it cut from the garment's
+// fabric again, the garment from the default. Each is one step to undo.
+void GarmentViewWidget::editFabric(bool make_new)
+{
+    const VGarmentFabrics before = m_doc->getFabrics();
+    const quint32 selected = m_scene_model->selectedPiece();
+    const QString shown = selected != 0 ? before.of(selected) : before.garment;
+    const VCustomFabric kept = before.customFabric(shown);
+    if (!make_new && kept.name.isEmpty())
+    {
+        return;
+    }
+
+    QStringList taken;
+    QVector<FabricDialog::Start> starts;
+    for (const Fabric& fabric : Fabric::presets())
+    {
+        taken << fabric.name << fabricTitle(fabric.name);
+        starts.append({fabricTitle(fabric.name), customFabric(fabric, QString())});
+    }
+    for (const VCustomFabric& fabric : before.custom)
+    {
+        if (fabric.name != kept.name || make_new)
+        {
+            taken << fabric.name;
+        }
+    }
+    VCustomFabric start = kept;
+    if (make_new)
+    {
+        int number = 1;
+        auto is_taken = [&taken](const QString& name)
+        {
+            return taken.contains(name, Qt::CaseInsensitive);
+        };
+        while (is_taken(tr("Fabric %1").arg(number)))
+        {
+            ++number;
+        }
+        start = customFabric(namedFabric(before, shown.isEmpty() ? Fabric::defaultName() : shown),
+                             tr("Fabric %1").arg(number));
+    }
+
+    FabricDialog dialog(start, starts, taken, !make_new, this);
+    if (dialog.exec() != QDialog::Accepted)
+    {
+        return;
+    }
+
+    VGarmentFabrics after = before;
+    QString text;
+    auto same_name = [&kept](const VCustomFabric& fabric)
+    {
+        return fabric.name == kept.name;
+    };
+    if (make_new)
+    {
+        after.custom.append(dialog.fabric());
+        after = cutFrom(after, dialog.fabric().name);
+        text = tr("new fabric");
+    }
+    else if (dialog.isDeleted())
+    {
+        after.custom.erase(std::remove_if(after.custom.begin(), after.custom.end(), same_name), after.custom.end());
+        after.garment = after.garment == kept.name ? QString() : after.garment;
+        for (VPieceFabric& piece : after.pieces)
+        {
+            piece.fabric = piece.fabric == kept.name ? QString() : piece.fabric;
+        }
+        after.pieces.erase(std::remove_if(after.pieces.begin(), after.pieces.end(), [](const VPieceFabric& piece)
+        {
+            return piece.fabric.isEmpty() && piece.texture.isNull() && piece.shrinkage.isNull();
+        }), after.pieces.end());
+        text = tr("delete fabric");
+    }
+    else
+    {
+        const VCustomFabric changed = dialog.fabric();
+        std::replace_if(after.custom.begin(), after.custom.end(), same_name, changed);
+        after.garment = after.garment == kept.name ? changed.name : after.garment;
+        for (VPieceFabric& piece : after.pieces)
+        {
+            piece.fabric = piece.fabric == kept.name ? changed.name : piece.fabric;
+        }
+        text = tr("edit fabric");
+    }
+
+    if (!(after == before))
+    {
+        qApp->getUndoStack()->push(new SaveFabrics(text, before, after, m_doc));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The fabrics with the selected piece, or the whole garment when no piece is selected, cut from that fabric. A piece
+// cut from the garment's fabric doesn't keep a fabric of its own, but keeps an image of its own and its shrinkage.
+VGarmentFabrics GarmentViewWidget::cutFrom(VGarmentFabrics fabrics, const QString& fabric) const
+{
+    const quint32 selected = m_scene_model->selectedPiece();
+    if (selected == 0)
+    {
+        fabrics.garment = fabric == Fabric::defaultName() ? QString() : fabric;
+        return fabrics;
+    }
+
+    const QString garment = fabrics.garment.isEmpty() ? Fabric::defaultName() : fabrics.garment;
+    const QString own_fabric = fabric != garment ? fabric : QString();
+    auto own = std::find_if(fabrics.pieces.begin(), fabrics.pieces.end(), [selected](const VPieceFabric& piece)
+    {
+        return piece.piece_id == selected;
+    });
+    if (own == fabrics.pieces.end())
+    {
+        if (!own_fabric.isEmpty())
+        {
+            fabrics.pieces.append({selected, own_fabric, VFabricTexture()});
+        }
+    }
+    else if (own_fabric.isEmpty() && own->texture.isNull() && own->shrinkage.isNull())
+    {
+        fabrics.pieces.erase(own);
+    }
+    else
+    {
+        own->fabric = own_fabric;
+    }
+    return fabrics;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -3612,6 +3775,47 @@ QString GarmentViewWidget::fabricTitle(const QString& fabric) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// The fabric box lists the 3D View's fabrics, the pattern's own, and making a new one and editing the one shown. It is
+// filled again only when the pattern's own change.
+void GarmentViewWidget::updateFabricBox(const VGarmentFabrics& fabrics)
+{
+    QStringList custom;
+    for (const VCustomFabric& fabric : fabrics.custom)
+    {
+        custom.append(fabric.name);
+    }
+    if (m_fabric_box->count() > 0 && custom == m_custom_fabrics_listed)
+    {
+        return;
+    }
+    m_custom_fabrics_listed = custom;
+
+    const QSignalBlocker blocker(m_fabric_box);
+    m_fabric_box->clear();
+    for (const Fabric& fabric : Fabric::presets())
+    {
+        m_fabric_box->addItem(fabricTitle(fabric.name), fabric.name);
+    }
+    if (!custom.isEmpty())
+    {
+        m_fabric_box->insertSeparator(m_fabric_box->count());
+        for (const QString& name : custom)
+        {
+            m_fabric_box->addItem(name, name);
+        }
+    }
+    m_fabric_box->insertSeparator(m_fabric_box->count());
+    m_fabric_box->addItem(tr("New Fabric..."));
+    m_fabric_box->setItemData(m_fabric_box->count() - 1, new_fabric, fabric_command_role);
+    m_fabric_box->setItemData(m_fabric_box->count() - 1, tr("A fabric of the pattern's own, starting from the one "
+                                                            "shown, as fabric tests describe it"), Qt::ToolTipRole);
+    m_fabric_box->addItem(tr("Edit Fabric..."));
+    m_fabric_box->setItemData(m_fabric_box->count() - 1, edit_fabric, fabric_command_role);
+    m_fabric_box->setItemData(m_fabric_box->count() - 1, tr("Change or delete the fabric of the pattern's own shown"),
+                              Qt::ToolTipRole);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 QString GarmentViewWidget::stitchStyleTitle(const TopstitchStyle& style) const
 {
     const QHash<QString, QString> titles = {{QStringLiteral("single"), tr("Single")},
@@ -4110,10 +4314,7 @@ void GarmentViewWidget::createToolBar()
     connect(m_checks_action, &QAction::toggled, m_scene_model, &GarmentSceneModel::setChecksShown);
 
     m_fabric_box = new QComboBox(tool_bar);
-    for (const Fabric& fabric : Fabric::presets())
-    {
-        m_fabric_box->addItem(fabricTitle(fabric.name), fabric.name);
-    }
+    updateFabricBox(m_doc->getFabrics());
     m_fabric_box->setToolTip(tr("The fabric the selected piece is cut from, or the whole garment when no piece is "
                                 "selected"));
     tool_bar->addWidget(m_fabric_box);

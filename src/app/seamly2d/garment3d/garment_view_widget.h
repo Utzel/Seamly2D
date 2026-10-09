@@ -30,6 +30,7 @@
 #include <QSet>
 #include <QPointF>
 #include <QScopedPointer>
+#include <QStringList>
 #include <QVector3D>
 #include <QVector>
 #include <QWidget>
@@ -113,6 +114,7 @@ private slots:
     void               updateChosenAvatar();
     void               chooseAvatar();
     void               chooseFabric(int index);
+    void               editFabric(bool make_new);
     void               chooseFabricImage();
     void               changeFabricImageWidth();
     void               removeFabricImage();
@@ -316,6 +318,7 @@ private:
     QAction*                   m_show_pieces_action;
     QAction*                   m_snapshot_action;
     QComboBox*                 m_fabric_box;
+    QStringList                m_custom_fabrics_listed;
     QAction*                   m_image_action;
     QAction*                   m_image_width_action;
     QAction*                   m_remove_image_action;
@@ -386,6 +389,8 @@ private:
     VGarmentDrape      currentDrape() const;
     void               keepDrape();
     QString            fabricTitle(const QString& fabric) const;
+    void               updateFabricBox(const VGarmentFabrics& fabrics);
+    VGarmentFabrics    cutFrom(VGarmentFabrics fabrics, const QString& fabric) const;
     QString            stitchStyleTitle(const TopstitchStyle& style) const;
     QVector<ExportMesh> exportMeshes() const;
     QVector<QVector3D> piecePositions(quint32 id, const GarmentMesh& mesh) const;
