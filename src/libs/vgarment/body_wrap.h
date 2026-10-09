@@ -44,7 +44,8 @@ enum class BodyPart : quint8
     LeftLeg,
     RightLeg,
     LeftArm,
-    RightArm
+    RightArm,
+    Neck
 };
 
 /// @brief Where a piece starts out on the avatar, and which way round.
@@ -52,8 +53,8 @@ struct PieceArrangement
 {
     BodyPart part = BodyPart::Body;
     qreal    angle = 0;            ///< degrees around the part, 0 in front, 90 towards +x (on an arm see LimbLine)
-    qreal    height = 0;           ///< of the piece's middle above the floor, in cm; on an arm, of the arm's middle
-                                   ///< line there
+    qreal    height = 0;           ///< of the piece's middle above the floor, in cm; on an arm or the neck, of its
+                                   ///< middle line there
     qreal    rotation = 0;         ///< degrees the piece is turned clockwise about its middle, as seen from outside
     bool     turned_over = false;  ///< the piece's other side out, as if cut from the cloth turned over
     QString  point;                ///< the arrangement point it was put at, if any; it goes there on any avatar
@@ -94,10 +95,11 @@ struct SewnSides
 struct ArrangementPoint
 {
     QString          name;         ///< as the pattern file keeps it, the part, level and side: "body-waist-front"
-    QString          level;        ///< neck, bust, waist, hip or thigh on the body, thigh, knee or calf on a leg,
-                                   ///< upperArm, elbow or wrist on an arm
+    QString          level;        ///< bust, waist, hip or thigh on the body, thigh, knee or calf on a leg, upperArm,
+                                   ///< elbow or wrist on an arm, base or middle on the neck
     QString          side;         ///< front, frontLeft, left, backLeft, back, backRight, right or frontRight on the
-                                   ///< body, front, outside, back or inside on a leg or an arm
+                                   ///< body, front, outside, back or inside on a leg or an arm, front, left, back or
+                                   ///< right on the neck
     PieceArrangement arrangement;  ///< where a piece put there goes
     QVector3D        position;     ///< on the body, where it shows
     QVector3D        normal;       ///< outwards from the body there
@@ -113,14 +115,17 @@ struct ArrangementPoint
 /// where arm lengths are measured from, so a sleeve's cap starts on top of the arm where the armhole is. Bending
 /// around a cylinder keeps the piece's lengths, so it starts out unstretched,
 /// except where the tube bends or narrows, most of all around the elbow, where it starts out stretched on the outside
-/// of the bend and squeezed on the inside. No piece wraps all the way around, so its sides don't overlap. Seen from
-/// outside, a placed piece looks as it does in the piece scene, its top towards the shoulder on an arm, unless it is
-/// rotated or turned over. It can also be put further out, and lean or swing out as it is, as CLO's gizmo turns it.
+/// of the bend and squeezed on the inside. A piece for the neck, as a collar, is bent around a tube along the neck's
+/// middle line, from the head down through the base of the neck, as thick as the neck is at each height, so it starts
+/// out around the neck rather than out over the shoulders. No piece wraps all the way around, so its sides don't
+/// overlap. Seen from outside, a placed piece looks as it does in the piece scene, its top towards the shoulder on an
+/// arm, unless it is rotated or turned over. It can also be put further out, and lean or swing out as it is, as CLO's
+/// gizmo turns it.
 ///
 /// Pieces can be put anywhere on the avatar, or at its arrangement points: in front, at the sides and behind the body
-/// at the neck, the bust, the waist, the hip and halfway down the thighs, and around each leg and arm where its
-/// middles and joints are. A point is where its level is on this avatar, so a piece put there goes to the same place
-/// on any avatar.
+/// at the bust, the waist, the hip and halfway down the thighs, around the neck at its base and its middle, and around
+/// each leg and arm where its middles and joints are. A point is where its level is on this avatar, so a piece put
+/// there goes to the same place on any avatar.
 class BodyWrap
 {
 public:
@@ -141,11 +146,12 @@ public:
 
     static QString     partName(BodyPart part);
     static BodyPart    partFromName(const QString& name);
+    static bool        isLimb(BodyPart part);
 
 private:
-    // A skin vertex of an arm below the armpit: which it is, where along the arm's middle line it is, and how far from
-    // it.
-    struct ArmSkin
+    // A skin vertex of an arm below the armpit, or of the neck: which it is, where along the part's middle line it is,
+    // and how far from it.
+    struct LineSkin
     {
         int   vertex = 0;
         float along = 0;
@@ -160,7 +166,9 @@ private:
     LimbLine           m_arm_lines[2];      // from the shoulder joint through the elbow and the wrist
     qreal              m_armpits[2];        // how far along its line each arm parts from the body
     qreal              m_shoulder_tips[2];  // how far along its line each arm's shoulder tip is
-    QVector<ArmSkin>   m_arm_skin[2];
+    QVector<LineSkin>  m_arm_skin[2];
+    LimbLine           m_neck_line;         // from the head joint down through the neck joint
+    QVector<LineSkin>  m_neck_skin;
     QVector<qint8>     m_skin_arms;         // for each skin vertex the arm below the armpit it is on, or -1
     QVector<bool>      m_skin_on_arm;       // for each skin vertex whether it is close to an arm's bones
     QVector<ArrangementPoint> m_points;
@@ -176,16 +184,23 @@ private:
     BodyPart           nearestPart(const QVector3D& point) const;
 
     void               findArmSkin(int side, const QVector<QVector<int>>& neighbours);
+    void               findNeckSkin();
     int                armAt(const QVector3D& point) const;
+    bool               onNeck(const QVector3D& point) const;
     qreal              armRadius(int side, qreal from, qreal to) const;
-    QVector<QVector3D> placeOnArm(const QVector<QPointF>& flat, const PieceArrangement& arrangement, qreal out) const;
+    qreal              neckRadius(qreal from, qreal to) const;
+    qreal              lineRadius(BodyPart part, qreal from, qreal to) const;
+    const LimbLine*    lineOf(BodyPart part) const;
+    QVector<QVector3D> placeAlongLine(const QVector<QPointF>& flat, const PieceArrangement& arrangement,
+                                      qreal out) const;
 
     void               findPoints(const BodyModel& model, const QVector<QVector3D>& positions);
     void               addUprightPoints(BodyPart part, const QString& level, qreal height,
                                         const QVector<QPair<QString, qreal>>& sides);
-    void               addArmPoints(int side, const QString& level, qreal along, qreal outside);
-    qreal              armAngle(int side, qreal along, const QVector3D& towards) const;
-    qreal              armReach(int side, qreal along, qreal angle) const;
+    void               addLinePoints(BodyPart part, const QString& level, qreal along,
+                                     const QVector<QPair<QString, qreal>>& sides);
+    qreal              lineAngle(BodyPart part, qreal along, const QVector3D& towards) const;
+    qreal              lineReach(BodyPart part, qreal along, qreal angle) const;
     qreal              radiusAt(BodyPart part, const QVector3D& point) const;
     QVector3D          outAt(BodyPart part, const QVector3D& point) const;
 

@@ -561,10 +561,18 @@ void TST_BodyModel::wrapFindsBodyParts() const
     QVERIFY(wrap.arrangementAt(shoulder + QVector3D(0, 8, 0)).part == BodyPart::Body);
     QVERIFY(wrap.arrangementAt(QVector3D(pelvis.x() + 10, chest.y() + 15, pelvis.z())).part == BodyPart::Body);
 
+    // On the neck pieces go around the neck, but not on the chin above it or the chest below it.
+    const ArrangementPoint neck_front = wrap.points().at(wrap.pointNamed(QStringLiteral("neck-middle-front")));
+    const PieceArrangement collar = wrap.arrangementAt(neck_front.position);
+    QVERIFY(collar.part == BodyPart::Neck);
+    QVERIFY2(qAbs(collar.angle) < 15.0, qUtf8Printable(QString::number(collar.angle)));
+    QVERIFY(wrap.arrangementAt(QVector3D(pelvis.x(), chest.y(), pelvis.z() + 15)).part == BodyPart::Body);
+
     for (const BodyPart part : {BodyPart::Body, BodyPart::LeftLeg, BodyPart::RightLeg, BodyPart::LeftArm,
-                                BodyPart::RightArm})
+                                BodyPart::RightArm, BodyPart::Neck})
     {
         QVERIFY(BodyWrap::partFromName(BodyWrap::partName(part)) == part);
+        QCOMPARE(BodyWrap::isLimb(part), part != BodyPart::Body && part != BodyPart::Neck);
     }
 
     // Mirrored across the body, the left knee lands on the right one.
@@ -775,8 +783,76 @@ void TST_BodyModel::sleevesStartAroundTheArm() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// The arrangement points go around the body at the neck, bust, waist, hip and thighs, and around the legs and the
-// arms, each where a tape around the part would lie, facing out. A piece put at one goes where it is, whichever way
+// A collar put on the neck in front starts out around the neck, as CLO's neck arrangement: close to it all the way
+// round, at most touching the chin, its ends behind the neck. Put around the body at the same height instead, it stands
+// out over the shoulders and the jaw.
+void TST_BodyModel::collarsStartAroundTheNeck() const
+{
+    const BodyModel model;
+    const QVector<QVector3D> positions = model.evaluate(female());
+    const BodyWrap wrap(model, positions);
+    const BodyCollider skin(positions.mid(0, model.skinVertexCount()), model.triangles());
+    const QVector3D neck_middle = (model.joint(positions, QStringLiteral("neck"))
+                                   + model.joint(positions, QStringLiteral("head"))) / 2.0f;
+
+    const qreal length = BodyMeasurer(model).neck(positions) + 6.0;
+    const GarmentMesh collar = PieceMesher().meshPolygon({QPointF(0, 0), QPointF(length, 0), QPointF(length, 6),
+                                                         QPointF(0, 6)});
+    auto vertex = [&collar](const QPointF& rest)
+    {
+        int nearest = 0;
+        for (int i = 0; i < collar.vertexCount(); ++i)
+        {
+            nearest = QLineF(collar.rest_positions.at(i), rest).length()
+                              < QLineF(collar.rest_positions.at(nearest), rest).length() ? i : nearest;
+        }
+        return nearest;
+    };
+    auto mean_off = [&skin](const QVector<QVector3D>& placed, float* deepest)
+    {
+        float total = 0;
+        *deepest = 0;
+        for (const QVector3D& point : placed)
+        {
+            BodyContact contact;
+            if (skin.closest(point, skin.trianglesWithin(point, 40), &contact))
+            {
+                total += contact.distance;
+                *deepest = qMin(*deepest, contact.distance);
+            }
+        }
+        return total / static_cast<float>(placed.size());
+    };
+
+    PieceArrangement put;
+    put.point = QStringLiteral("neck-middle-front");
+    const PieceArrangement on_neck = wrap.resolved(put);
+    QVERIFY(on_neck.part == BodyPart::Neck);
+    const QVector<QVector3D> placed = wrap.place(collar, on_neck);
+    QCOMPARE(placed.size(), collar.vertexCount());
+    float deepest = 0;
+    const float off_neck = mean_off(placed, &deepest);
+    QVERIFY2(deepest > -0.5f, qUtf8Printable(QStringLiteral("a point is %1 cm inside").arg(-deepest)));
+
+    const QVector3D middle = placed.at(vertex(QPointF(length / 2.0, 3)));
+    const QVector3D left_end = placed.at(vertex(QPointF(0, 3)));
+    const QVector3D right_end = placed.at(vertex(QPointF(length, 3)));
+    QVERIFY(middle.z() > neck_middle.z() + 3);
+    QVERIFY(left_end.z() < neck_middle.z() && right_end.z() < neck_middle.z());
+    QVERIFY(left_end.x() * right_end.x() < 0);
+
+    PieceArrangement on_body = on_neck;
+    on_body.part = BodyPart::Body;
+    on_body.point.clear();
+    const float off_body = mean_off(wrap.place(collar, on_body), &deepest);
+    QVERIFY2(off_neck < 4.0f && off_body > off_neck + 1.5f,
+             qUtf8Printable(QStringLiteral("the collar is %1 cm off the skin on average on the neck, %2 cm around "
+                                           "the body").arg(off_neck).arg(off_body)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The arrangement points go around the body at the bust, waist, hip and thighs, around the neck, and around the legs
+// and the arms, each where a tape around the part would lie, facing out. A piece put at one goes where it is, whichever way
 // round the piece is.
 void TST_BodyModel::arrangementPointsSitOnTheBody() const
 {
@@ -785,7 +861,7 @@ void TST_BodyModel::arrangementPointsSitOnTheBody() const
     const BodyWrap wrap(model, positions);
     const BodyCollider skin(positions.mid(0, model.skinVertexCount()), model.triangles());
     const QVector<ArrangementPoint>& points = wrap.points();
-    QCOMPARE(points.size(), 5 * 8 + 2 * 3 * 4 + 2 * 3 * 4);
+    QCOMPARE(points.size(), 4 * 8 + 2 * 4 + 2 * 3 * 4 + 2 * 3 * 4);
 
     QSet<QString> names;
     for (int i = 0; i < points.size(); ++i)
@@ -827,8 +903,12 @@ void TST_BodyModel::arrangementPointsSitOnTheBody() const
     };
 
     // From the neck down, the waist where it is measured.
-    const QStringList body_levels = {QStringLiteral("neck"), QStringLiteral("bust"), QStringLiteral("waist"),
-                                     QStringLiteral("hip"), QStringLiteral("thigh")};
+    QVERIFY(named(QStringLiteral("neck-middle-front")).arrangement.height
+            > named(QStringLiteral("neck-base-front")).arrangement.height);
+    QVERIFY(named(QStringLiteral("neck-base-back")).arrangement.height
+            > named(QStringLiteral("body-bust-back")).arrangement.height);
+    const QStringList body_levels = {QStringLiteral("bust"), QStringLiteral("waist"), QStringLiteral("hip"),
+                                     QStringLiteral("thigh")};
     for (int i = 1; i < body_levels.size(); ++i)
     {
         QVERIFY2(named(QStringLiteral("body-%1-front").arg(body_levels.at(i - 1))).arrangement.height
@@ -860,6 +940,9 @@ void TST_BodyModel::arrangementPointsSitOnTheBody() const
     QVERIFY(named(QStringLiteral("body-hip-back")).normal.z() < -0.99f);
     QVERIFY(named(QStringLiteral("body-waist-left")).normal.x() * left > 0.99f);
     QVERIFY(named(QStringLiteral("body-waist-right")).position.x() * left < pelvis.x() * left - 10);
+    QVERIFY(named(QStringLiteral("neck-middle-front")).normal.z() > 0.9f);
+    QVERIFY(named(QStringLiteral("neck-base-back")).normal.z() < -0.9f);
+    QVERIFY(named(QStringLiteral("neck-middle-left")).normal.x() * left > 0.9f);
     QVERIFY(named(QStringLiteral("leftLeg-knee-outside")).normal.x() * left > 0.99f);
     QVERIFY(named(QStringLiteral("rightLeg-knee-outside")).normal.x() * left < -0.99f);
     QVERIFY(named(QStringLiteral("leftLeg-knee-front")).position.x() * left > pelvis.x() * left);

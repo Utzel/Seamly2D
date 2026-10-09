@@ -56,6 +56,7 @@ private slots:
     void wrapPlacesOnAGivenPart() const;
     void wrappedPiecesStartOutsideTheBody() const;
     void sleevesStartAroundTheArm() const;
+    void collarsStartAroundTheNeck() const;
     void arrangementPointsSitOnTheBody() const;
     void arrangementPointsFollowTheAvatar() const;
     void piecesTurnAndTurnOver() const;

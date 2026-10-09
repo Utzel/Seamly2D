@@ -996,6 +996,7 @@
       <xs:enumeration value="rightLeg"/>
       <xs:enumeration value="leftArm"/>
       <xs:enumeration value="rightArm"/>
+      <xs:enumeration value="neck"/>
     </xs:restriction>
   </xs:simpleType>
   <xs:simpleType name="units">
