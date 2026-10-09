@@ -38,6 +38,7 @@
 #include "fabric.h"
 #include "garment_mesh.h"
 #include "seam_stretch.h"
+#include "worker_pool.h"
 
 /// @brief How the cloth behaves, whatever its fabric. Units are cm, g and s.
 struct ClothSettings
@@ -129,6 +130,9 @@ struct ClothLayer
 /// Stiff cloth needs more sweeps than a step can afford to settle, and without them it gives way slowly, as if it were
 /// soft. Chebyshev acceleration (Wang, SIGGRAPH Asia 2015), as Chen et al. use it, carries each sweep on further
 /// along the way the sweeps before went, which settles it in far fewer.
+///
+/// Each colour's vertices are shared out among threads of the solver's own, which wait for the next colour busily:
+/// a garment's colours are a few hundred vertices each, solved in a few dozen microseconds on all of them.
 ///
 /// The sweeps, most of a step's work, can run on the graphics card, where each colour's vertices move at once, in
 /// single precision; the cloth drapes the same within what that tells apart.
@@ -282,8 +286,11 @@ private:
     std::unique_ptr<ClothCompute> m_compute;        // the graphics card the sweeps run on, if any
     bool                         m_on_device;       // whether the cloth is on it
     ClothCompute::Step           m_device_step;     // where the parts of the packed cloth start
+    std::unique_ptr<WorkerPool>  m_workers;         // the threads the sweeps are shared out among, once needed
 
     void               prepare();
+    WorkerPool&        workers();
+    int                runLength(int count, int shortest) const;
     void               sweep(double time_step);
     bool               sweepOnDevice(double time_step);
     ClothCompute::Cloth packedCloth();

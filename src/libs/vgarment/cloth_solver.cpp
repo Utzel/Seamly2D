@@ -27,7 +27,6 @@
 #include <QHash>
 #include <QLineF>
 #include <QtConcurrent/QtConcurrentMap>
-#include <QThread>
 #include <QtMath>
 
 #include <algorithm>
@@ -60,10 +59,13 @@ const double contact_margin = 2.0;
 // The self contact search shares out the vertices and the edges among threads in runs of this many.
 const int search_run = 256;
 
-// Colours with at least this many vertices are solved on several threads, and self contacts worked out when there are
-// at least this many; for fewer, handing out the work costs more than it saves.
-const int parallel_colour = 1024;
-const int parallel_contacts = 1024;
+// Colours with at least this many vertices are solved on several threads, in runs of at least this many vertices;
+// for fewer, handing out the work costs more than it saves. Self contacts are worked out and the sweeps carried on
+// in runs of at least so many.
+const int parallel_colour = 64;
+const int shortest_vertex_run = 16;
+const int shortest_contact_run = 64;
+const int shortest_carry_run = 256;
 
 // Determinants smaller than this leave a vertex where it is, its forces don't say where to go.
 const double singular = 1e-12;
@@ -654,6 +656,7 @@ ClothSolver::ClothSolver(const ClothSettings& settings)
     , m_compute()
     , m_on_device(false)
     , m_device_step()
+    , m_workers()
 {}
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1310,6 +1313,26 @@ void ClothSolver::step(qreal time_step)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// The threads the sweeps share their work out among, started when first needed.
+WorkerPool& ClothSolver::workers()
+{
+    if (m_workers == nullptr)
+    {
+        m_workers.reset(new WorkerPool());
+    }
+    return *m_workers;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// How long the runs work on so many items is shared out in are: a few for each thread, so threads that finish early
+// can take another, but no shorter than handing them out is worth.
+int ClothSolver::runLength(int count, int shortest) const
+{
+    const int threads = m_workers != nullptr ? m_workers->threadCount() : 1;
+    return qMax(shortest, count / (4 * threads));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // Sweeps over the vertices, colour by colour, each moving to where its forces balance.
 void ClothSolver::sweep(double time_step)
 {
@@ -1330,14 +1353,10 @@ void ClothSolver::sweep(double time_step)
         {
             if (color.size() >= parallel_colour)
             {
-                const int run_count = qMax(1, QThread::idealThreadCount());
-                const int run_length = (static_cast<int>(color.size()) + run_count - 1) / run_count;
-                QVector<int> runs(run_count);
-                std::iota(runs.begin(), runs.end(), 0);
-                QtConcurrent::blockingMap(runs, [this, h, &color, run_length](const int& run)
+                const int size = static_cast<int>(color.size());
+                workers().forRuns(size, runLength(size, shortest_vertex_run), [this, h, &color](int begin, int end)
                 {
-                    const int end = qMin(static_cast<int>(color.size()), (run + 1) * run_length);
-                    for (int i = run * run_length; i < end; ++i)
+                    for (int i = begin; i < end; ++i)
                     {
                         const int vertex = color.at(i);
                         if (!m_pinned.at(vertex))
@@ -1368,21 +1387,26 @@ void ClothSolver::sweep(double time_step)
             weight = iteration == 0 ? 1.0 : 4.0 / (4.0 - radius * (iteration == 1 ? 2.0 : weight));
             if (iteration > 0)
             {
-                for (int i = 0; i < vertexCount(); ++i)
+                m_stopped.detach();
+                workers().forRuns(vertexCount(), runLength(vertexCount(), shortest_carry_run),
+                                  [this, &two_sweeps_ago, infinity, weight](int begin, int end)
                 {
-                    if (!m_pinned.at(i))
+                    for (int i = begin; i < end; ++i)
                     {
-                        const Vec3 earlier = load(two_sweeps_ago, i);
-                        bool stopped = false;
-                        store(m_position, i, withinReach(load(m_previous, i),
-                                                         earlier + (load(m_position, i) - earlier) * weight,
-                                                         bodyReach(i), m_self_bound.value(i, infinity), &stopped));
-                        if (stopped && i < m_stopped.size())
+                        if (!m_pinned.at(i))
                         {
-                            m_stopped[i] = 1;
+                            const Vec3 earlier = load(two_sweeps_ago, i);
+                            bool stopped = false;
+                            store(m_position, i, withinReach(load(m_previous, i),
+                                                             earlier + (load(m_position, i) - earlier) * weight,
+                                                             bodyReach(i), m_self_bound.value(i, infinity), &stopped));
+                            if (stopped && i < m_stopped.size())
+                            {
+                                m_stopped[i] = 1;
+                            }
                         }
                     }
-                }
+                });
             }
             two_sweeps_ago = one_sweep_ago;
             one_sweep_ago = m_position;
@@ -1854,27 +1878,13 @@ void ClothSolver::pushSelfContacts(double time_step)
         }
     };
 
-    if (count >= parallel_contacts)
+    workers().forRuns(count, runLength(count, shortest_contact_run), [&push](int begin, int end)
     {
-        const int run_count = qMax(1, QThread::idealThreadCount());
-        const int run_length = (count + run_count - 1) / run_count;
-        QVector<int> runs(run_count);
-        std::iota(runs.begin(), runs.end(), 0);
-        QtConcurrent::blockingMap(runs, [&push, count, run_length](const int& run)
-        {
-            for (int c = run * run_length; c < qMin(count, (run + 1) * run_length); ++c)
-            {
-                push(c);
-            }
-        });
-    }
-    else
-    {
-        for (int c = 0; c < count; ++c)
+        for (int c = begin; c < end; ++c)
         {
             push(c);
         }
-    }
+    });
 }
 
 //---------------------------------------------------------------------------------------------------------------------
