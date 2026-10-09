@@ -53,6 +53,35 @@ QVector<QVector3D> lyingAt(const GarmentMesh& mesh, float height)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// A floor of body 40 cm square at y = 0, facing up, made of triangles 1 cm across, as the avatar's skin is of small
+// ones.
+BodyCollider fineFloorBody()
+{
+    const int cells = 40;
+    QVector<QVector3D> positions;
+    for (int i = 0; i <= cells; ++i)
+    {
+        for (int j = 0; j <= cells; ++j)
+        {
+            positions.append(QVector3D(static_cast<float>(i - cells / 2), 0.0f, static_cast<float>(j - cells / 2)));
+        }
+    }
+    QVector<quint32> triangles;
+    for (int i = 0; i < cells; ++i)
+    {
+        for (int j = 0; j < cells; ++j)
+        {
+            const quint32 a = static_cast<quint32>(i * (cells + 1) + j);
+            const quint32 b = a + 1;
+            const quint32 c = a + static_cast<quint32>(cells + 2);
+            const quint32 d = a + static_cast<quint32>(cells + 1);
+            triangles << a << b << c << a << c << d;
+        }
+    }
+    return BodyCollider(positions, triangles);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 GarmentMesh square()
 {
     return PieceMesher().meshPolygon({QPointF(0, 0), QPointF(20, 0), QPointF(20, 20), QPointF(0, 20)});
@@ -142,6 +171,70 @@ void TST_GarmentFit::pressureIsThePushBackOverTheCloth() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+// On the body under the middle of a square of cloth pressing on it evenly, the pressure is the cloth's push back over
+// the square, all its vertices' alike, whichever triangles of the body they press on; beside the square, none.
+void TST_GarmentFit::pressureOnTheBodyIsThePushBackOverIt() const
+{
+    const BodyCollider body = fineFloorBody();
+    const GarmentMesh mesh = square();
+    const ClothSettings settings;
+    const qreal depth = 0.01;
+    const QVector<QVector3D> positions = lyingAt(mesh, static_cast<float>(settings.thickness - depth));
+    const QVector<qreal> pressure = GarmentFit::bodyPressure(body, positions);
+    QCOMPARE(pressure.size(), body.positions().size());
+
+    // In the middle, each vertex of the cloth pushes back over its share of the cloth, a third of each triangle it is a
+    // corner of.
+    QVector<qreal> share(mesh.vertexCount(), 0.0);
+    for (int i = 0; i + 2 < mesh.indices.size(); i += 3)
+    {
+        const int corners[3] = {static_cast<int>(mesh.indices.at(i)), static_cast<int>(mesh.indices.at(i + 1)),
+                                static_cast<int>(mesh.indices.at(i + 2))};
+        const qreal third = QVector3D::crossProduct(positions.at(corners[1]) - positions.at(corners[0]),
+                                                    positions.at(corners[2]) - positions.at(corners[0])).length() / 6.0;
+        for (const int corner : corners)
+        {
+            share[corner] += third;
+        }
+    }
+    int pushing = 0;
+    qreal pushed_over = 0;
+    for (int i = 0; i < mesh.vertexCount(); ++i)
+    {
+        if (qAbs(positions.at(i).x()) <= 5.0f && qAbs(positions.at(i).z()) <= 5.0f)
+        {
+            ++pushing;
+            pushed_over += share.at(i);
+        }
+    }
+    const qreal expected = pushing * settings.contact_stiffness * depth / pushed_over * 1.0e-4;
+    qreal middle = 0;
+    int middle_count = 0;
+    for (int i = 0; i < pressure.size(); ++i)
+    {
+        const QVector3D& at = body.positions().at(i);
+        if (qAbs(at.x()) <= 5.0f && qAbs(at.z()) <= 5.0f)
+        {
+            middle += pressure.at(i);
+            ++middle_count;
+        }
+        else if (qAbs(at.x()) >= 15.0f || qAbs(at.z()) >= 15.0f)
+        {
+            QCOMPARE(pressure.at(i), 0.0);
+        }
+    }
+    middle /= qMax(1, middle_count);
+    QVERIFY2(qAbs(middle - expected) / expected < 0.15,
+             qPrintable(QStringLiteral("%1 kPa in the middle against %2").arg(middle).arg(expected)));
+
+    // Off the body, none.
+    for (const qreal kilopascals : GarmentFit::bodyPressure(body, lyingAt(mesh, 1.0f)))
+    {
+        QCOMPARE(kilopascals, 0.0);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void TST_GarmentFit::noBodyNoPressure() const
 {
     const GarmentMesh mesh = square();
@@ -150,6 +243,7 @@ void TST_GarmentFit::noBodyNoPressure() const
         QCOMPARE(kilopascals, 0.0);
     }
     QVERIFY(GarmentFit::pressure(mesh, floorBody(), QVector<QVector3D>()).size() == mesh.vertexCount());
+    QVERIFY(GarmentFit::bodyPressure(BodyCollider(), lyingAt(mesh, 0.0f)).isEmpty());
     for (const qreal ease : GarmentFit::ease(BodyCollider(), lyingAt(mesh, 0.0f)))
     {
         QCOMPARE(ease, GarmentFit::farthestEase());

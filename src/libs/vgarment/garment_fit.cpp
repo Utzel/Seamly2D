@@ -54,6 +54,53 @@ QVector<qreal> withNeighbours(const QVector<qreal>& values, const QVector<QPair<
     }
     return summed;
 }
+
+//---------------------------------------------------------------------------------------------------------------------
+// Each vertex's value with those of the other corners of each triangle it is a corner of added. Between two triangles,
+// a neighbour counts twice; as values and the areas they are over count alike, that weighs them, no more.
+QVector<qreal> aroundTriangles(const QVector<qreal>& values, const QVector<quint32>& triangles)
+{
+    QVector<qreal> summed = values;
+    for (int i = 0; i + 2 < triangles.size(); i += 3)
+    {
+        const int corners[3] = {static_cast<int>(triangles.at(i)), static_cast<int>(triangles.at(i + 1)),
+                                static_cast<int>(triangles.at(i + 2))};
+        for (int k = 0; k < 3; ++k)
+        {
+            summed[corners[k]] += values.at(corners[(k + 1) % 3]) + values.at(corners[(k + 2) % 3]);
+        }
+    }
+    return summed;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// How much each corner of the triangle abc counts at a point on it, as the point is near it.
+void cornerWeights(const QVector3D& point, const QVector3D& a, const QVector3D& b, const QVector3D& c,
+                   qreal weights[3])
+{
+    const QVector3D ab = b - a;
+    const QVector3D ac = c - a;
+    const QVector3D ap = point - a;
+    const qreal ab_ab = QVector3D::dotProduct(ab, ab);
+    const qreal ab_ac = QVector3D::dotProduct(ab, ac);
+    const qreal ac_ac = QVector3D::dotProduct(ac, ac);
+    const qreal ap_ab = QVector3D::dotProduct(ap, ab);
+    const qreal ap_ac = QVector3D::dotProduct(ap, ac);
+    const qreal determinant = ab_ab * ac_ac - ab_ac * ab_ac;
+    if (qAbs(determinant) < 1e-12)
+    {
+        weights[0] = weights[1] = weights[2] = 1.0 / 3.0;
+        return;
+    }
+    weights[1] = qBound(0.0, (ac_ac * ap_ab - ab_ac * ap_ac) / determinant, 1.0);
+    weights[2] = qBound(0.0, (ab_ab * ap_ac - ab_ac * ap_ab) / determinant, 1.0);
+    weights[0] = qMax(0.0, 1.0 - weights[1] - weights[2]);
+    const qreal sum = weights[0] + weights[1] + weights[2];
+    for (int k = 0; k < 3; ++k)
+    {
+        weights[k] /= sum;
+    }
+}
 } // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -145,6 +192,69 @@ QVector<qreal> GarmentFit::pressure(const GarmentMesh& mesh, const BodyCollider&
         area = withNeighbours(area, edges);
     }
     for (int i = 0; i < count; ++i)
+    {
+        pressure[i] = area.at(i) > 0 ? push.at(i) / area.at(i) * kilopascals_per_unit : 0.0;
+    }
+    return pressure;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief How hard the cloth, its vertices at the given positions, presses on the body at each of the body's
+/// vertices, in kPa, as CLO shows pressure on the avatar: the body's push back on each vertex of the cloth closer than
+/// its thickness, shared out among the corners of the body's triangle it presses on as near it is to each, over the
+/// body around each vertex and its neighbours. 0 where no cloth touches, and everywhere without a body.
+QVector<qreal> GarmentFit::bodyPressure(const BodyCollider& body, const QVector<QVector3D>& cloth,
+                                        const ClothSettings& settings)
+{
+    const QVector<QVector3D>& skin = body.positions();
+    const QVector<quint32>& triangles = body.triangles();
+    QVector<qreal> pressure(skin.size(), 0.0);
+    if (body.isEmpty())
+    {
+        return pressure;
+    }
+
+    // The body around each vertex, a third of each triangle it is a corner of.
+    QVector<qreal> area(skin.size(), 0.0);
+    for (int i = 0; i + 2 < triangles.size(); i += 3)
+    {
+        const QVector3D& a = skin.at(static_cast<int>(triangles.at(i)));
+        const qreal third = QVector3D::crossProduct(skin.at(static_cast<int>(triangles.at(i + 1))) - a,
+                                                    skin.at(static_cast<int>(triangles.at(i + 2))) - a).length() / 6.0;
+        for (int k = 0; k < 3; ++k)
+        {
+            area[static_cast<int>(triangles.at(i + k))] += third;
+        }
+    }
+
+    // The push back on each vertex of the cloth touching the body, in dyn, on the corners of the triangle it touches.
+    QVector<qreal> push(skin.size(), 0.0);
+    const float thickness = static_cast<float>(settings.thickness);
+    for (const QVector3D& position : cloth)
+    {
+        BodyContact contact;
+        if (body.closest(position, body.trianglesNear(position, thickness), &contact) && contact.distance < thickness
+            && contact.triangle >= 0)
+        {
+            const qreal force = settings.contact_stiffness * (settings.thickness - contact.distance);
+            const int corners[3] = {static_cast<int>(triangles.at(3 * contact.triangle)),
+                                    static_cast<int>(triangles.at(3 * contact.triangle + 1)),
+                                    static_cast<int>(triangles.at(3 * contact.triangle + 2))};
+            qreal weights[3];
+            cornerWeights(contact.point, skin.at(corners[0]), skin.at(corners[1]), skin.at(corners[2]), weights);
+            for (int k = 0; k < 3; ++k)
+            {
+                push[corners[k]] += force * weights[k];
+            }
+        }
+    }
+
+    for (int ring = 0; ring < pressure_rings; ++ring)
+    {
+        push = aroundTriangles(push, triangles);
+        area = aroundTriangles(area, triangles);
+    }
+    for (int i = 0; i < pressure.size(); ++i)
     {
         pressure[i] = area.at(i) > 0 ? push.at(i) / area.at(i) * kilopascals_per_unit : 0.0;
     }

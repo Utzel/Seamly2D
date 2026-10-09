@@ -38,7 +38,9 @@
 ///
 /// The cloth rests on the body its thickness off the skin, so ease is measured from there: 0 where the cloth touches.
 /// The pressure is what the drape simulation's body contact pushes back with, the cloth's thickness in, over the cloth
-/// around each vertex and two rings of its neighbours, as a pressure sensor takes it over its pad, in kPa.
+/// around each vertex and two rings of its neighbours, as a pressure sensor takes it over its pad, in kPa. On the body,
+/// as CLO's pressure map shows it on the avatar, the same push is over the body around each of its vertices and two
+/// rings of its neighbours.
 class GarmentFit
 {
 public:
@@ -49,6 +51,8 @@ public:
     static QVector<qreal> pressure(const GarmentMesh& mesh, const BodyCollider& body,
                                    const QVector<QVector3D>& positions,
                                    const ClothSettings& settings = ClothSettings());
+    static QVector<qreal> bodyPressure(const BodyCollider& body, const QVector<QVector3D>& cloth,
+                                       const ClothSettings& settings = ClothSettings());
 };
 
 #endif // GARMENT_FIT_H

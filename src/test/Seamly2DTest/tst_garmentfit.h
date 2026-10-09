@@ -36,6 +36,7 @@ public:
 private slots:
     void easeIsTheGapOffTheBody() const;
     void pressureIsThePushBackOverTheCloth() const;
+    void pressureOnTheBodyIsThePushBackOverIt() const;
     void noBodyNoPressure() const;
 
 private:
