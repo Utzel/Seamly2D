@@ -41,10 +41,10 @@ const qreal time_step = 1.0 / steps_per_second;
 // Frames go out at most this often, in ms.
 const qint64 frame_interval_ms = 30;
 
-// The cloth has come to rest once hardly any vertex has moved faster than this, in cm/s, on average over a second,
-// and not before a second has passed. On average, as the eye sees it: from step to step, the solver's sweeps leave
-// vertices a tiny bit to either side of where they settle, and cloth caught on a sharp part of the body twitches back
-// and forth.
+// The cloth has come to rest once hardly any vertex has moved faster than this, in cm/s, on average over the last
+// second, and not before a second has passed. On average, as the eye sees it: from step to step, the solver's sweeps
+// leave vertices a tiny bit to either side of where they settle, and cloth caught on a sharp part of the body twitches
+// back and forth. It is looked at whenever the stitches are checked, so the cloth rests as soon as it may.
 const float resting_speed = 1.0f;
 const int resting_window = steps_per_second;
 const int earliest_rest = steps_per_second;
@@ -53,7 +53,7 @@ const int earliest_rest = steps_per_second;
 // can keep twitching where they are.
 const int restless_share = 200;
 
-// The stitches are checked every so many steps.
+// The stitches, and whether the cloth rests, are checked every so many steps.
 const int check_steps = steps_per_second / 6;
 
 // Pieces are sewn together first, without gravity, until no stitch is open wider than this, in cm, or for at most ten
@@ -196,7 +196,7 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation, Comput
     bool waiting = false;  // at rest, until the cloth is held somewhere else or pulled
     int holds_seen = m_holds_changes;
     bool was_pulling = m_pulling;
-    QVector<QVector3D> window_start = solver->positions();
+    QVector<QVector<QVector3D>> last_second = {solver->positions()};  // where the cloth was at each check
 
     const QVector3D gravity = solver->settings().gravity;
     const qreal friction = solver->settings().friction;
@@ -271,7 +271,7 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation, Comput
         {
             resting = false;
             moving_steps = 0;
-            window_start = solver->positions();
+            last_second = {solver->positions()};
         }
         was_pulling = pulling;
         holds_seen = changes;
@@ -291,17 +291,24 @@ void DrapeRunner::run(QSharedPointer<ClothSolver> solver, int generation, Comput
             solver->setSeamFolds(true);
         }
 
-        if (moving_steps % resting_window == 0)
+        if (moving_steps % check_steps == 0)
         {
             const QVector<QVector3D> positions = solver->positions();
-            const float furthest = static_cast<float>(resting_speed * time_step * resting_window);
-            int moving = 0;
-            for (int i = 0; i < positions.size() && i < window_start.size(); ++i)
+            last_second.append(positions);
+            if (last_second.size() > resting_window / check_steps + 1)
             {
-                moving += (positions.at(i) - window_start.at(i)).length() >= furthest ? 1 : 0;
+                last_second.removeFirst();
             }
-            window_start = positions;
-            resting = moving <= positions.size() / restless_share;
+            if (last_second.size() == resting_window / check_steps + 1)
+            {
+                const float furthest = static_cast<float>(resting_speed * time_step * resting_window);
+                int moving = 0;
+                for (int i = 0; i < positions.size() && i < last_second.first().size(); ++i)
+                {
+                    moving += (positions.at(i) - last_second.first().at(i)).length() >= furthest ? 1 : 0;
+                }
+                resting = moving <= positions.size() / restless_share;
+            }
         }
 
         const bool at_rest = !sewing && falling_steps >= earliest_rest && moving_steps >= earliest_rest && resting
