@@ -32,7 +32,7 @@ layout(std140, binding = 0) uniform Step
     int   self_starts;
     int   self_roles;
     int   self_contacts;
-    int   self_contact_count;
+    int   self_capacity;
 } this_step;
 
 layout(std140, binding = 1) uniform Sweep

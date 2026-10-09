@@ -68,6 +68,7 @@ private slots:
     void seamsHoldTheirAngle_data() const;
     void seamsHoldTheirAngle() const;
     void deviceSweepsAsProcessor() const;
+    void deviceFindsAllTheClothNearItself() const;
 
 private:
     Q_DISABLE_COPY(TST_ClothSolver)

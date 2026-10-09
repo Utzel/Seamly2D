@@ -1,0 +1,969 @@
+// Seamly2D: finds the parts of the cloth that may touch each other during a step of the cloth solver on the graphics
+// card, as ClothSolver::findSelfContactsAround() does on the processor, and starts them for the step, as
+// ClothSolver::startSelfContact() does; see there for what is near and how far the vertices may move.
+//
+// The vertices, faces and edges come in clusters of 32 that lie together in their flat piece, as the solver sorted
+// them, so they lie together on the body too. Each member reaches out from where it started the step by half the gap
+// the cloth keeps and as far as it is heading, and each cluster as far as its members do. The clusters whose reaches
+// overlap are paired up first; then each member looks through the members of the clusters its own is paired with. A
+// member's contacts are counted, summed up into where each member's start, then listed there, so they come out in the
+// same order every time. Each phase does one thing, as its mode says. Baked into cloth_search.comp.qsb by
+// scripts/shaders/bake_shaders.py.
+#version 450
+
+const int lanes = 32;
+layout(local_size_x = 32) in;
+
+// What holds for the whole step, and where the parts of the packed buffers start, as in cloth_sweep.comp.
+layout(std140, binding = 0) uniform Step
+{
+    float time_step;
+    float damping;
+    float stitch_stiffness;
+    float contact_stiffness;
+    float self_contact_stiffness;
+    float friction;
+    float thickness;
+    float floor_height;
+    int   has_floor;
+    int   has_body;
+    float contact_margin;
+    float max_move;
+    float friction_rest;
+    int   vertex_count;
+    int   vertex_terms;
+    int   membrane_corners;
+    int   hinge_corners;
+    int   stitch_corners;
+    int   hinges;
+    int   stitches;
+    int   body;
+    int   self_starts;           // in contacts: where each vertex's self contacts start, and one more for the end
+    int   self_roles;            // in contacts
+    int   self_contacts;         // in contacts: eight for each self contact
+    int   self_capacity;         // how many self contacts there is room for
+    int   seam_folds;
+    int   self_count;            // in contacts: how many self contacts were found
+} this_step;
+
+// What this phase does, as its mode says, and on what.
+layout(std140, binding = 1) uniform Phase
+{
+    int   mode;
+    int   first;
+    int   count;
+    int   value;
+} this_phase;
+
+// Where the search's own parts of the buffers start, and what the solver's search goes by.
+layout(std140, binding = 4) uniform Search
+{
+    int   vertex_clusters;
+    int   face_clusters;
+    int   edge_clusters;
+    int   cluster_members;       // in topology: 32 for each cluster, the vertices', the faces', then the edges'; -1
+                                 // where a cluster has fewer
+    int   faces;                 // in topology: three corners for each face
+    int   edges;                 // in topology: two ends for each edge
+    int   vertex_pieces;         // in topology: which piece each vertex is of
+    int   pieces;                // in topology: four for each piece, its layer, how many regions it has, which way its
+                                 // outside faces, 1 or -1, and 0
+    int   stitched;              // in topology: where each vertex's list of the vertices it is stitched to starts, one
+                                 // more for the end, then the lists, sorted
+    int   seam_neighbours;       // in topology: likewise of the vertices next to each across a seam
+    int   rest;                  // in terms: where each vertex is in its flat piece
+    int   boxes;                 // in boxes: the reach of each cluster member, low and high corner
+    int   cluster_boxes;         // in boxes: the reach of each cluster
+    int   pairs;                 // in search: which face clusters each vertex cluster may touch, a bit each, then
+                                 // which edge clusters each edge cluster does
+    int   face_words;            // to a vertex cluster's row of bits
+    int   edge_words;            // to an edge cluster's row of bits
+    int   found;                 // in search: how many contacts each vertex and edge of the clusters found, in turn
+                                 // where they start, and one more for the end
+    int   block_sums;            // in search
+    int   cursors;               // in search: how many of its roles each vertex has been given
+    int   bounds;                // in search: how far each vertex may move in the step, as the bits of a float
+    int   pass_through;          // whether pieces pass through each other
+    int   in_layers;             // whether pieces are worn in more than one layer
+    float self_margin;
+    float reach_limit;
+    float rest_neighbours;
+    float lying_on;
+    float bound_share;
+    float same_way;
+} this_search;
+
+// x, y, z and whether the vertex is pinned: where it starts the sweeps.
+layout(std430, binding = 2) buffer Positions { vec4 positions[]; };
+
+// Two for each vertex: where it started the step and how far the cloth near it lets it move, then where it would go
+// by itself and its mass.
+layout(std430, binding = 3) buffer Motion { vec4 motion[]; };
+
+// Where the vertices start the sweeps, for cloth_accelerate.comp to carry them on from.
+layout(std430, binding = 5) buffer Snapshot { vec4 snapshot[]; };
+
+layout(std430, binding = 6) readonly buffer Topology { int topology[]; };
+layout(std430, binding = 7) readonly buffer Terms { vec4 terms[]; };
+
+// The body triangle each vertex may touch, how many self contacts there are, then where each vertex's start, the
+// roles (contact << 2 | role) and the contacts (four corners, whether of two edges, side, whether live); see
+// cloth_sweep.comp.
+layout(std430, binding = 8) buffer Contacts { int contacts[]; };
+
+// Which way the cloth's outside faces around each vertex, for pieces in layers, then the reaches.
+layout(std430, binding = 10) buffer Boxes { vec4 boxes[]; };
+
+layout(std430, binding = 11) buffer Found { int search[]; };
+
+const int set_search = 0;        // sets count numbers of search from first on to value
+const int set_contacts = 1;      // likewise of contacts
+const int reach_out = 2;         // works out each cluster member's reach and each cluster's
+const int pair_up = 3;           // pairs up the clusters whose reaches overlap
+const int count_found = 4;       // counts each member's contacts
+const int list_found = 5;        // lists them where they start
+const int sum_blocks = 6;        // sums count numbers from first on, in search, or in contacts with value 1, by block
+const int sum_sums = 7;          // sums the blocks' sums up to where each block starts, and the whole at the end
+const int add_up = 8;            // turns the numbers into where each one's items start
+const int count_roles = 9;       // counts each vertex's contacts where it starts in contacts
+const int list_roles = 10;       // lists them
+const int sort_roles = 11;       // sorts each vertex's list, so they come out the same every time
+const int start_contacts = 12;   // starts each contact for the step: its side, whether it is live, how far its
+                                 // vertices may move
+const int bound_moves = 13;      // keeps each vertex's first guess within how far it may move, and starts the
+                                 // sweeps from there
+
+// A block of numbers summed by one workgroup: lanes times numbers for each lane.
+const int per_lane = 32;
+const int block = lanes * per_lane;
+
+const float tiny = 1e-9;
+const float clear_angle = 0.2;
+const float unbounded = 3.0e38;
+
+// The search reaches this much further, in cm, than the solver's does, so what single precision rounds off doesn't
+// lose it a part the solver finds.
+const float slack = 1e-3;
+
+shared vec3 lane_low[lanes];
+shared vec3 lane_high[lanes];
+shared int lane_sums[lanes];
+
+//---------------------------------------------------------------------------------------------------------------------
+float share(float part, float whole)
+{
+    return abs(whole) > tiny ? part / whole : 0.0;
+}
+
+// Where the point of triangle abc closest to p is, as the weights of a, b and c (Ericson, 5.1.5).
+vec3 closestOnTriangle(vec3 p, vec3 a, vec3 b, vec3 c)
+{
+    const vec3 ab = b - a;
+    const vec3 ac = c - a;
+    const float d1 = dot(ab, p - a);
+    const float d2 = dot(ac, p - a);
+    const float d3 = dot(ab, p - b);
+    const float d4 = dot(ac, p - b);
+    const float d5 = dot(ab, p - c);
+    const float d6 = dot(ac, p - c);
+    const float va = d3 * d6 - d5 * d4;
+    const float vb = d5 * d2 - d1 * d6;
+    const float vc = d1 * d4 - d3 * d2;
+    if (d1 <= 0.0 && d2 <= 0.0)
+    {
+        return vec3(1.0, 0.0, 0.0);
+    }
+    if (d3 >= 0.0 && d4 <= d3)
+    {
+        return vec3(0.0, 1.0, 0.0);
+    }
+    if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0)
+    {
+        const float v = share(d1, d1 - d3);
+        return vec3(1.0 - v, v, 0.0);
+    }
+    if (d6 >= 0.0 && d5 <= d6)
+    {
+        return vec3(0.0, 0.0, 1.0);
+    }
+    if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0)
+    {
+        const float w = share(d2, d2 - d6);
+        return vec3(1.0 - w, 0.0, w);
+    }
+    if (va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0)
+    {
+        const float w = share(d4 - d3, (d4 - d3) + (d5 - d6));
+        return vec3(0.0, 1.0 - w, w);
+    }
+    const float whole = va + vb + vc;
+    const float v = share(vb, whole);
+    const float w = share(vc, whole);
+    return vec3(1.0 - v - w, v, w);
+}
+
+// How far along the segments p1-q1 and p2-q2 their closest points are, from 0 to 1 (Ericson, 5.1.9).
+vec2 closestOnSegments(vec3 p1, vec3 q1, vec3 p2, vec3 q2)
+{
+    const vec3 d1 = q1 - p1;
+    const vec3 d2 = q2 - p2;
+    const vec3 r = p1 - p2;
+    const float a = dot(d1, d1);
+    const float e = dot(d2, d2);
+    const float f = dot(d2, r);
+    float s = 0.0;
+    float t = 0.0;
+    if (a <= tiny && e > tiny)
+    {
+        t = clamp(f / e, 0.0, 1.0);
+    }
+    else if (a > tiny)
+    {
+        const float c = dot(d1, r);
+        if (e <= tiny)
+        {
+            s = clamp(-c / a, 0.0, 1.0);
+        }
+        else
+        {
+            const float b = dot(d1, d2);
+            const float apart = a * e - b * b;
+            s = apart > tiny ? clamp((b * f - c * e) / apart, 0.0, 1.0) : 0.0;
+            t = (b * s + f) / e;
+            if (t < 0.0)
+            {
+                t = 0.0;
+                s = clamp(-c / a, 0.0, 1.0);
+            }
+            else if (t > 1.0)
+            {
+                t = 1.0;
+                s = clamp((b - c) / a, 0.0, 1.0);
+            }
+        }
+    }
+    return vec2(s, t);
+}
+
+// The gap between the closest points of two parts of cloth, from the second to the first: a vertex and a triangle,
+// or two edges.
+vec3 contactGap(vec3 corners[4], bool edges)
+{
+    vec4 weights;
+    if (edges)
+    {
+        const vec2 along = closestOnSegments(corners[0], corners[1], corners[2], corners[3]);
+        weights = vec4(1.0 - along.x, along.x, along.y - 1.0, -along.y);
+    }
+    else
+    {
+        weights = vec4(1.0, -closestOnTriangle(corners[0], corners[1], corners[2], corners[3]));
+    }
+    return corners[0] * weights.x + corners[1] * weights.y + corners[2] * weights.z + corners[3] * weights.w;
+}
+
+vec3 contactNormal(vec3 corners[4], bool edges)
+{
+    return edges ? cross(corners[1] - corners[0], corners[3] - corners[2])
+                 : cross(corners[2] - corners[1], corners[3] - corners[1]);
+}
+
+bool clearNormal(vec3 corners[4], bool edges, vec3 normal)
+{
+    const vec3 a = edges ? corners[1] - corners[0] : corners[2] - corners[1];
+    const vec3 b = edges ? corners[3] - corners[2] : corners[3] - corners[1];
+    return length(normal) >= clear_angle * length(a) * length(b) && length(normal) > tiny;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Where a vertex started the step.
+vec3 startOf(int vertex)
+{
+    return motion[2 * vertex].xyz;
+}
+
+// How far a vertex heads in the step, as far as the search looks.
+float headingOf(int vertex)
+{
+    return min(length(motion[2 * vertex + 1].xyz - motion[2 * vertex].xyz), this_search.reach_limit);
+}
+
+int pieceOf(int vertex)
+{
+    return topology[this_search.vertex_pieces + vertex];
+}
+
+int layerOf(int piece)
+{
+    return topology[this_search.pieces + 4 * piece];
+}
+
+// Whether a sorted list of vertices in topology, one of a vertex's from where lists start, has the other one.
+bool listed(int lists, int vertex, int other)
+{
+    int low = topology[lists + vertex];
+    int high = topology[lists + vertex + 1];
+    while (low < high)
+    {
+        const int middle = (low + high) / 2;
+        const int at = topology[middle];
+        if (at == other)
+        {
+            return true;
+        }
+        if (at < other)
+        {
+            low = middle + 1;
+        }
+        else
+        {
+            high = middle;
+        }
+    }
+    return false;
+}
+
+// Whether two vertices are neighbours: in the same flat piece, or across a seam.
+bool closeAtRest(int a, int b, bool same_piece)
+{
+    if (same_piece)
+    {
+        const vec2 apart = terms[this_search.rest + a].xy - terms[this_search.rest + b].xy;
+        if (dot(apart, apart) < this_search.rest_neighbours * this_search.rest_neighbours)
+        {
+            return true;
+        }
+    }
+    return listed(this_search.seam_neighbours, a, b);
+}
+
+// Whether parts of two pieces are left out while pieces pass through each other: they are of the same layer.
+bool passingThrough(int a, int b)
+{
+    if (this_search.pass_through == 0)
+    {
+        return false;
+    }
+    const int first_piece = pieceOf(a);
+    const int second_piece = pieceOf(b);
+    return first_piece != second_piece && layerOf(first_piece) == layerOf(second_piece);
+}
+
+// Whether a vertex and a face may touch in the step, as ClothSolver::findSelfContactsAround() has it.
+bool vertexMayTouch(int vertex, ivec3 corners)
+{
+    if (passingThrough(vertex, corners.x) || corners.x == vertex || corners.y == vertex || corners.z == vertex)
+    {
+        return false;
+    }
+    const bool same_piece = pieceOf(vertex) == pieceOf(corners.x);
+    for (int k = 0; k < 3; ++k)
+    {
+        if (listed(this_search.stitched, vertex, corners[k]) || closeAtRest(vertex, corners[k], same_piece))
+        {
+            return false;
+        }
+    }
+    vec3 at[4] = vec3[4](startOf(vertex), startOf(corners.x), startOf(corners.y), startOf(corners.z));
+    const float furthest = this_step.thickness + this_search.self_margin + headingOf(vertex)
+                           + max(headingOf(corners.x), max(headingOf(corners.y), headingOf(corners.z)));
+    return length(contactGap(at, false)) <= furthest + slack;
+}
+
+// Whether two edges may touch in the step, likewise.
+bool edgesMayTouch(ivec2 first, ivec2 second)
+{
+    if (passingThrough(first.x, second.x))
+    {
+        return false;
+    }
+    const bool same_piece = pieceOf(first.x) == pieceOf(second.x);
+    for (int j = 0; j < 2; ++j)
+    {
+        for (int k = 0; k < 2; ++k)
+        {
+            if (first[j] == second[k] || listed(this_search.stitched, first[j], second[k])
+                || closeAtRest(first[j], second[k], same_piece))
+            {
+                return false;
+            }
+        }
+    }
+    vec3 at[4] = vec3[4](startOf(first.x), startOf(first.y), startOf(second.x), startOf(second.y));
+    const float furthest = this_step.thickness + this_search.self_margin + max(headingOf(first.x), headingOf(first.y))
+                           + max(headingOf(second.x), headingOf(second.y));
+    return length(contactGap(at, true)) <= furthest + slack;
+}
+
+bool overlap(vec3 a_low, vec3 a_high, vec3 b_low, vec3 b_high)
+{
+    return all(lessThanEqual(a_low, b_high)) && all(lessThanEqual(b_low, a_high));
+}
+
+// The corners of a face or the ends of an edge, -1 for none.
+ivec3 cornersOf(int item, bool face)
+{
+    return face ? ivec3(topology[this_search.faces + 3 * item], topology[this_search.faces + 3 * item + 1],
+                        topology[this_search.faces + 3 * item + 2])
+                : ivec3(topology[this_search.edges + 2 * item], topology[this_search.edges + 2 * item + 1], -1);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Each workgroup works out the reach of one cluster, each lane that of one of its members: a vertex, a face or an edge.
+void reachOut()
+{
+    const int cluster = int(gl_WorkGroupID.x);
+    const int lane = int(gl_LocalInvocationID.x);
+    const int member = lanes * cluster + lane;
+    const int item = topology[this_search.cluster_members + member];
+    const int kind = cluster < this_search.vertex_clusters ? 0
+                     : cluster < this_search.vertex_clusters + this_search.face_clusters ? 1 : 2;
+    const ivec3 corners = item < 0 ? ivec3(-1) : kind == 0 ? ivec3(item, -1, -1) : cornersOf(item, kind == 1);
+
+    vec3 low = vec3(unbounded);
+    vec3 high = vec3(-unbounded);
+    float heading = 0.0;
+    for (int k = 0; k < 3; ++k)
+    {
+        if (corners[k] >= 0)
+        {
+            const vec3 at = startOf(corners[k]);
+            low = min(low, at);
+            high = max(high, at);
+            heading = max(heading, headingOf(corners[k]));
+        }
+    }
+    if (item >= 0)
+    {
+        const float grow = (this_step.thickness + this_search.self_margin) / 2.0 + heading + slack;
+        low -= vec3(grow);
+        high += vec3(grow);
+    }
+    boxes[this_search.boxes + 2 * member] = vec4(low, 0.0);
+    boxes[this_search.boxes + 2 * member + 1] = vec4(high, 0.0);
+
+    lane_low[lane] = low;
+    lane_high[lane] = high;
+    memoryBarrierShared();
+    barrier();
+    for (int half_lanes = lanes / 2; half_lanes > 0; half_lanes /= 2)
+    {
+        if (lane < half_lanes)
+        {
+            lane_low[lane] = min(lane_low[lane], lane_low[lane + half_lanes]);
+            lane_high[lane] = max(lane_high[lane], lane_high[lane + half_lanes]);
+        }
+        memoryBarrierShared();
+        barrier();
+    }
+    if (lane == 0)
+    {
+        boxes[this_search.cluster_boxes + 2 * cluster] = vec4(lane_low[0], 0.0);
+        boxes[this_search.cluster_boxes + 2 * cluster + 1] = vec4(lane_high[0], 0.0);
+    }
+}
+
+// Each invocation pairs one cluster up with 32 others, as the bits of a word: a vertex cluster with face clusters, or
+// an edge cluster with the edge clusters from itself on.
+void pairUp(int word)
+{
+    const int face_rows = this_search.vertex_clusters * this_search.face_words;
+    const bool faces = word < face_rows;
+    const int words = faces ? this_search.face_words : this_search.edge_words;
+    const int row = (faces ? word : word - face_rows) / words;
+    const int first = 32 * ((faces ? word : word - face_rows) % words);
+    const int cluster = faces ? row : this_search.vertex_clusters + this_search.face_clusters + row;
+    const int others = faces ? this_search.vertex_clusters : this_search.vertex_clusters + this_search.face_clusters;
+    const int other_count = faces ? this_search.face_clusters : this_search.edge_clusters;
+    const vec3 low = boxes[this_search.cluster_boxes + 2 * cluster].xyz;
+    const vec3 high = boxes[this_search.cluster_boxes + 2 * cluster + 1].xyz;
+    int bits = 0;
+    for (int b = 0; b < 32; ++b)
+    {
+        const int other = first + b;
+        if (other < other_count && (faces || other >= row))
+        {
+            const int at = this_search.cluster_boxes + 2 * (others + other);
+            if (overlap(low, high, boxes[at].xyz, boxes[at + 1].xyz))
+            {
+                bits |= 1 << b;
+            }
+        }
+    }
+    search[this_search.pairs + word] = bits;
+}
+
+// Each workgroup looks for the contacts of one vertex cluster or edge cluster, each lane for one member's, through
+// the members of the clusters its own is paired with; it counts them, or lists them where its member's start. Every
+// lane reads the same members in turn, so they read them once for all.
+void findContacts(bool listing)
+{
+    const int group = int(gl_WorkGroupID.x);
+    const int lane = int(gl_LocalInvocationID.x);
+    const bool faces = group < this_search.vertex_clusters;
+    const int row = faces ? group : group - this_search.vertex_clusters;
+    const int cluster = faces ? row : this_search.vertex_clusters + this_search.face_clusters + row;
+    const int member = lanes * cluster + lane;
+    const int item = topology[this_search.cluster_members + member];
+    const int others = faces ? this_search.vertex_clusters : this_search.vertex_clusters + this_search.face_clusters;
+    const int words = faces ? this_search.face_words : this_search.edge_words;
+    const int row_at = this_search.pairs + (faces ? row * words
+                                                  : this_search.vertex_clusters * this_search.face_words
+                                                        + row * words);
+    const int counted = lanes * group + lane;
+    const int start = listing ? search[this_search.found + counted] : 0;
+
+    const vec3 low = boxes[this_search.boxes + 2 * member].xyz;
+    const vec3 high = boxes[this_search.boxes + 2 * member + 1].xyz;
+    const ivec3 own = item < 0 ? ivec3(-1) : faces ? ivec3(item, -1, -1) : cornersOf(item, false);
+    int found = 0;
+    for (int w = 0; w < words && item >= 0; ++w)
+    {
+        int bits = search[row_at + w];
+        while (bits != 0)
+        {
+            const int b = findLSB(bits);
+            bits &= bits - 1;
+            const int other = 32 * w + b;
+            for (int k = 0; k < lanes; ++k)
+            {
+                // Each pair of edges once, from the first of them in the clusters.
+                const int other_member = lanes * (others + other) + k;
+                const int other_item = topology[this_search.cluster_members + other_member];
+                if (other_item < 0 || (!faces && other == row && k <= lane))
+                {
+                    continue;
+                }
+                if (!overlap(low, high, boxes[this_search.boxes + 2 * other_member].xyz,
+                             boxes[this_search.boxes + 2 * other_member + 1].xyz))
+                {
+                    continue;
+                }
+                const ivec3 corners = cornersOf(other_item, faces);
+                // Of two edges, the one first in the mesh is the first part, as the solver lists them.
+                const bool first_own = faces || item < other_item;
+                const ivec4 vertices = faces ? ivec4(own.x, corners)
+                                       : first_own ? ivec4(own.xy, corners.xy) : ivec4(corners.xy, own.xy);
+                if (faces ? vertexMayTouch(own.x, corners) : edgesMayTouch(vertices.xy, vertices.zw))
+                {
+                    const int index = start + found;
+                    if (listing && index < this_step.self_capacity)
+                    {
+                        const int at = this_step.self_contacts + 8 * index;
+                        contacts[at] = vertices.x;
+                        contacts[at + 1] = vertices.y;
+                        contacts[at + 2] = vertices.z;
+                        contacts[at + 3] = vertices.w;
+                        contacts[at + 4] = faces ? 0 : 1;
+                        contacts[at + 5] = 0;
+                        contacts[at + 6] = 1;
+                        contacts[at + 7] = 0;
+                    }
+                    ++found;
+                }
+            }
+        }
+    }
+    if (!listing)
+    {
+        search[this_search.found + counted] = found;
+    }
+    else if (group == 0 && lane == 0)
+    {
+        // The vertices' clusters come first, then the edges'; the sum of all the counts is at the end.
+        contacts[this_step.self_count] = search[this_search.found + lanes * (this_search.vertex_clusters
+                                                                              + this_search.edge_clusters)];
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The numbers summed, in search or in contacts as the phase's value says.
+int numberAt(int index)
+{
+    return this_phase.value != 0 ? contacts[index] : search[index];
+}
+
+void setNumber(int index, int number)
+{
+    if (this_phase.value != 0)
+    {
+        contacts[index] = number;
+    }
+    else
+    {
+        search[index] = number;
+    }
+}
+
+// What a lane's numbers of its workgroup's block add up to.
+int laneSum(int group, int lane)
+{
+    const int first = lanes * per_lane * group + per_lane * lane;
+    int sum = 0;
+    for (int k = 0; k < per_lane; ++k)
+    {
+        if (first + k < this_phase.count)
+        {
+            sum += numberAt(this_phase.first + first + k);
+        }
+    }
+    return sum;
+}
+
+// Each workgroup sums one block of the numbers.
+void sumBlock()
+{
+    const int group = int(gl_WorkGroupID.x);
+    const int lane = int(gl_LocalInvocationID.x);
+    lane_sums[lane] = laneSum(group, lane);
+    memoryBarrierShared();
+    barrier();
+    for (int half_lanes = lanes / 2; half_lanes > 0; half_lanes /= 2)
+    {
+        if (lane < half_lanes)
+        {
+            lane_sums[lane] += lane_sums[lane + half_lanes];
+        }
+        memoryBarrierShared();
+        barrier();
+    }
+    if (lane == 0)
+    {
+        search[this_search.block_sums + group] = lane_sums[0];
+    }
+}
+
+// One workgroup sums the blocks' sums up to where each block starts, and puts the whole at the end of the numbers.
+void sumSums()
+{
+    const int lane = int(gl_LocalInvocationID.x);
+    const int block_count = (this_phase.count + block - 1) / block;
+    const int per = (block_count + lanes - 1) / lanes;
+    int sum = 0;
+    for (int k = 0; k < per; ++k)
+    {
+        const int at = per * lane + k;
+        sum += at < block_count ? search[this_search.block_sums + at] : 0;
+    }
+    lane_sums[lane] = sum;
+    memoryBarrierShared();
+    barrier();
+    for (int stride = 1; stride < lanes; stride *= 2)
+    {
+        const int before = lane >= stride ? lane_sums[lane - stride] : 0;
+        memoryBarrierShared();
+        barrier();
+        lane_sums[lane] += before;
+        memoryBarrierShared();
+        barrier();
+    }
+    int running = lane_sums[lane] - sum;
+    for (int k = 0; k < per; ++k)
+    {
+        const int at = per * lane + k;
+        if (at < block_count)
+        {
+            const int own = search[this_search.block_sums + at];
+            search[this_search.block_sums + at] = running;
+            running += own;
+        }
+    }
+    if (lane == lanes - 1)
+    {
+        setNumber(this_phase.first + this_phase.count, lane_sums[lane]);
+    }
+}
+
+// Each workgroup turns its block of numbers into where each one's items start.
+void addUp()
+{
+    const int group = int(gl_WorkGroupID.x);
+    const int lane = int(gl_LocalInvocationID.x);
+    const int own = laneSum(group, lane);
+    lane_sums[lane] = own;
+    memoryBarrierShared();
+    barrier();
+    for (int stride = 1; stride < lanes; stride *= 2)
+    {
+        const int before = lane >= stride ? lane_sums[lane - stride] : 0;
+        memoryBarrierShared();
+        barrier();
+        lane_sums[lane] += before;
+        memoryBarrierShared();
+        barrier();
+    }
+    int running = search[this_search.block_sums + group] + lane_sums[lane] - own;
+    const int first = block * group + per_lane * lane;
+    for (int k = 0; k < per_lane; ++k)
+    {
+        if (first + k < this_phase.count)
+        {
+            const int index = this_phase.first + first + k;
+            const int number = numberAt(index);
+            setNumber(index, running);
+            running += number;
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// How many self contacts there are, as far as there is room for them.
+int contactCount()
+{
+    return min(contacts[this_step.self_count], this_step.self_capacity);
+}
+
+// Each invocation counts one contact for each of its vertices.
+void countRoles(int contact)
+{
+    if (contact < contactCount())
+    {
+        for (int k = 0; k < 4; ++k)
+        {
+            atomicAdd(contacts[this_step.self_starts + contacts[this_step.self_contacts + 8 * contact + k]], 1);
+        }
+    }
+}
+
+// Each invocation lists one contact in each of its vertices' lists.
+void listRoles(int contact)
+{
+    if (contact < contactCount())
+    {
+        for (int k = 0; k < 4; ++k)
+        {
+            const int vertex = contacts[this_step.self_contacts + 8 * contact + k];
+            const int slot = contacts[this_step.self_starts + vertex]
+                             + atomicAdd(search[this_search.cursors + vertex], 1);
+            contacts[this_step.self_roles + slot] = contact << 2 | k;
+        }
+    }
+}
+
+// Each invocation sorts one vertex's list.
+void sortRoles(int vertex)
+{
+    if (vertex < this_step.vertex_count)
+    {
+        const int first = this_step.self_roles + contacts[this_step.self_starts + vertex];
+        const int end = this_step.self_roles + contacts[this_step.self_starts + vertex + 1];
+        for (int i = first + 1; i < end; ++i)
+        {
+            const int role = contacts[i];
+            int j = i - 1;
+            while (j >= first && contacts[j] > role)
+            {
+                contacts[j + 1] = contacts[j];
+                --j;
+            }
+            contacts[j + 1] = role;
+        }
+    }
+}
+
+// The side the layers of two pieces say the first part of a contact goes on, 1 or -1, or 0 where they don't say, as
+// ClothSolver::layeredSide() has it.
+float layeredSide(ivec4 vertices, bool edges, vec3 corners[4])
+{
+    const int first_count = edges ? 2 : 1;
+    const int first_piece = pieceOf(vertices.x);
+    const int second_piece = pieceOf(vertices[first_count]);
+    if (this_search.in_layers == 0 || layerOf(first_piece) == layerOf(second_piece))
+    {
+        return 0.0;
+    }
+
+    vec3 first_out = boxes[vertices.x].xyz;
+    if (edges)
+    {
+        first_out += boxes[vertices.y].xyz;
+    }
+    vec3 second_out;
+    if (edges)
+    {
+        second_out = boxes[vertices.z].xyz + boxes[vertices.w].xyz;
+    }
+    else
+    {
+        const vec3 normal = contactNormal(corners, false);
+        float outside = float(topology[this_search.pieces + 4 * second_piece + 2]);
+        if (topology[this_search.pieces + 4 * second_piece + 1] > 1)
+        {
+            const vec3 around = boxes[vertices.y].xyz + boxes[vertices.z].xyz + boxes[vertices.w].xyz;
+            outside = dot(normal, around) < 0.0 ? -1.0 : 1.0;
+        }
+        second_out = normal * outside;
+    }
+    const float first_length = length(first_out);
+    const float second_length = length(second_out);
+    if (first_length < tiny || second_length < tiny
+        || dot(first_out, second_out) < this_search.same_way * first_length * second_length)
+    {
+        return 0.0;
+    }
+
+    const vec3 normal = contactNormal(corners, edges);
+    const float along = dot(normal, second_out);
+    if (abs(along) < this_search.lying_on * length(normal) * second_length || abs(along) <= tiny)
+    {
+        return 0.0;
+    }
+    const float out_side = along < 0.0 ? -1.0 : 1.0;
+    return layerOf(first_piece) > layerOf(second_piece) ? out_side : -out_side;
+}
+
+// Each invocation notes which side of each other the parts of one contact start the step on and whether they can touch
+// during it, and limits how far their vertices may move, as ClothSolver::startSelfContact() does.
+void startContact(int contact)
+{
+    if (contact >= contactCount())
+    {
+        return;
+    }
+    const int at = this_step.self_contacts + 8 * contact;
+    const ivec4 vertices = ivec4(contacts[at], contacts[at + 1], contacts[at + 2], contacts[at + 3]);
+    const bool edges = contacts[at + 4] != 0;
+    vec3 corners[4];
+    for (int k = 0; k < 4; ++k)
+    {
+        corners[k] = startOf(vertices[k]);
+    }
+    const vec3 gap = contactGap(corners, edges);
+    const vec3 normal = contactNormal(corners, edges);
+    const float along = dot(gap, normal);
+    float side = 0.0;
+    if (clearNormal(corners, edges, normal) && abs(along) >= this_search.lying_on * length(gap) * length(normal)
+        && abs(along) > tiny)
+    {
+        side = along < 0.0 ? -1.0 : 1.0;
+    }
+
+    const int first_count = edges ? 2 : 1;
+    float first_heading = 0.0;
+    float second_heading = 0.0;
+    for (int k = 0; k < 4; ++k)
+    {
+        if (k < first_count)
+        {
+            first_heading = max(first_heading, headingOf(vertices[k]));
+        }
+        else
+        {
+            second_heading = max(second_heading, headingOf(vertices[k]));
+        }
+    }
+    bool live = length(gap) <= this_step.thickness + this_search.self_margin / 4.0 + first_heading + second_heading;
+
+    // Parts of pieces in layers go on the sides their layers say. While pieces pass through each other, as they are
+    // sewn together, those of others don't touch.
+    const float layered = layeredSide(vertices, edges, corners);
+    const bool apart = layered == 0.0 && this_search.pass_through != 0
+                       && pieceOf(vertices.x) != pieceOf(vertices[first_count]);
+    if (layered != 0.0)
+    {
+        side = 2.0 * layered;
+    }
+    contacts[at + 5] = int(side);
+    contacts[at + 6] = live && !apart ? 1 : 0;
+    if (apart)
+    {
+        return;
+    }
+
+    // Only parts lying on each other can pass through each other.
+    if (side != 0.0)
+    {
+        const int bound = floatBitsToInt(this_search.bound_share * max(length(gap), this_step.thickness));
+        for (int k = 0; k < 4; ++k)
+        {
+            atomicMin(search[this_search.bounds + vertices[k]], bound);
+        }
+    }
+}
+
+// Each invocation keeps one vertex's first guess within how far it may move, and notes that for the sweeps.
+void boundMove(int vertex)
+{
+    if (vertex < this_step.vertex_count)
+    {
+        const float bound = min(intBitsToFloat(search[this_search.bounds + vertex]), unbounded);
+        const vec3 start = motion[2 * vertex].xyz;
+        motion[2 * vertex].w = bound;
+        vec4 guess = positions[vertex];
+        const float travelled = length(guess.xyz - start);
+        if (travelled > bound)
+        {
+            guess.xyz = start + (guess.xyz - start) * (bound / travelled);
+            positions[vertex] = guess;
+        }
+        snapshot[vertex] = guess;
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void main()
+{
+    const int index = int(gl_GlobalInvocationID.x);
+    const int mode = this_phase.mode;
+    if (mode == set_search || mode == set_contacts)
+    {
+        if (index < this_phase.count)
+        {
+            if (mode == set_search)
+            {
+                search[this_phase.first + index] = this_phase.value;
+            }
+            else
+            {
+                contacts[this_phase.first + index] = this_phase.value;
+            }
+        }
+    }
+    else if (mode == reach_out)
+    {
+        reachOut();
+    }
+    else if (mode == pair_up)
+    {
+        if (index < this_phase.count)
+        {
+            pairUp(index);
+        }
+    }
+    else if (mode == count_found || mode == list_found)
+    {
+        findContacts(mode == list_found);
+    }
+    else if (mode == sum_blocks)
+    {
+        sumBlock();
+    }
+    else if (mode == sum_sums)
+    {
+        sumSums();
+    }
+    else if (mode == add_up)
+    {
+        addUp();
+    }
+    else if (mode == count_roles)
+    {
+        countRoles(index);
+    }
+    else if (mode == list_roles)
+    {
+        listRoles(index);
+    }
+    else if (mode == sort_roles)
+    {
+        sortRoles(index);
+    }
+    else if (mode == start_contacts)
+    {
+        startContact(index);
+    }
+    else if (mode == bound_moves)
+    {
+        boundMove(index);
+    }
+}

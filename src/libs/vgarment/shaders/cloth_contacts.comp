@@ -32,7 +32,9 @@ layout(std140, binding = 0) uniform Step
     int   self_starts;           // in contacts: where each vertex's self contacts start, and one more for the end
     int   self_roles;            // in contacts
     int   self_contacts;         // in contacts: eight for each self contact
-    int   self_contact_count;
+    int   self_capacity;         // how many self contacts there is room for
+    int   seam_folds;
+    int   self_count;            // in contacts: how many self contacts were found
 } this_step;
 
 // Where the vertices are, as the sweep starts.
@@ -41,7 +43,8 @@ layout(std430, binding = 2) readonly buffer Positions { vec4 positions[]; };
 // Where each vertex started the step, among other things; see cloth_sweep.comp.
 layout(std430, binding = 3) readonly buffer Motion { vec4 motion[]; };
 
-// The self contacts: four corners, whether of two edges, side, whether live; see cloth_sweep.comp.
+// How many self contacts there are, and the contacts: four corners, whether of two edges, side, whether live; see
+// cloth_sweep.comp.
 layout(std430, binding = 8) readonly buffer Contacts { int contacts[]; };
 
 // Nine numbers for each contact and role: the push, then how stiffly, as a symmetric 3 x 3 matrix's xx, xy, xz, yy, yz
@@ -215,7 +218,7 @@ float contactDistance(vec3 corners[4], bool edges, vec4 weights, vec3 gap, float
 void main()
 {
     const int contact = int(gl_GlobalInvocationID.x);
-    if (contact >= this_step.self_contact_count)
+    if (contact >= min(contacts[this_step.self_count], this_step.self_capacity))
     {
         return;
     }

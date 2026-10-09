@@ -137,7 +137,8 @@ struct ClothLayer
 /// a garment's colours are a few hundred vertices each, solved in a few dozen microseconds on all of them.
 ///
 /// The sweeps, most of a step's work, can run on the graphics card, where each colour's vertices move at once, in
-/// single precision; the cloth drapes the same within what that tells apart.
+/// single precision; the cloth drapes the same within what that tells apart. The parts of the cloth that may touch
+/// each other are then found on the card too, the same ones, and kept there.
 class ClothSolver
 {
 public:
@@ -289,6 +290,7 @@ private:
     QVector<double>              m_self_bound;      // how far each vertex may move in the step, cloth being near
     QVector<char>                m_stopped;         // whether each vertex was stopped by the bound
     QVector<double>              m_self_found_at;   // where the vertices were when the self contacts were found
+    bool                         m_found_on_device; // whether the graphics card found them, and has them
     QVector<double>              m_self_push;       // how each self contact pushes each of its vertices, nine
                                                     // numbers each; see pushSelfContacts()
     QVector<double>              m_facing;          // which way the cloth around each vertex faces as wound when the
@@ -307,6 +309,9 @@ private:
     ClothCompute::Cloth packedCloth();
     void               findContacts();
     void               findSelfContacts();
+    QVector<double>    headings() const;
+    bool               foundStill(const QVector<double>& heading, bool on_device) const;
+    void               findFacing();
     void               findSelfContactsAround(const QVector<double>& heading);
     bool               mayTouch(const SelfContact& contact, double furthest) const;
     void               startSelfContact(SelfContact* contact, const QVector<double>& heading);

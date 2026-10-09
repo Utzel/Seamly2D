@@ -643,6 +643,70 @@ struct CubeGrid
 };
 
 //---------------------------------------------------------------------------------------------------------------------
+// The bits of a number up to 0xffff spread out to every other bit, for a Z-order curve.
+quint32 spreadBits(quint32 bits)
+{
+    bits = (bits | (bits << 8)) & 0x00ff00ffu;
+    bits = (bits | (bits << 4)) & 0x0f0f0f0fu;
+    bits = (bits | (bits << 2)) & 0x33333333u;
+    bits = (bits | (bits << 1)) & 0x55555555u;
+    return bits;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The items, each of a piece and at a point in its flat piece, in clusters of so many that lie together there, as the
+// search on the graphics card takes them: along a Z-order curve through each piece, cut into runs, -1 filling up each
+// piece's last cluster.
+QVector<qint32> inClusters(const QVector<int>& pieces, const QVector<QPointF>& points, int cluster_size)
+{
+    const int piece_count = pieces.isEmpty() ? 0 : *std::max_element(pieces.cbegin(), pieces.cend()) + 1;
+    const qreal infinite = std::numeric_limits<qreal>::infinity();
+    QVector<QPointF> lows(piece_count, QPointF(infinite, infinite));
+    QVector<QPointF> highs(piece_count, QPointF(-infinite, -infinite));
+    for (int i = 0; i < pieces.size(); ++i)
+    {
+        const QPointF& point = points.at(i);
+        QPointF& low = lows[pieces.at(i)];
+        QPointF& high = highs[pieces.at(i)];
+        low = QPointF(qMin(low.x(), point.x()), qMin(low.y(), point.y()));
+        high = QPointF(qMax(high.x(), point.x()), qMax(high.y(), point.y()));
+    }
+
+    QVector<quint32> along(pieces.size());
+    for (int i = 0; i < pieces.size(); ++i)
+    {
+        const QPointF& low = lows.at(pieces.at(i));
+        const QPointF size = highs.at(pieces.at(i)) - low;
+        const qreal largest = qMax(qMax(size.x(), size.y()), tiny);
+        const QPointF at = (points.at(i) - low) / largest * 65535.0;
+        along[i] = spreadBits(static_cast<quint32>(qBound(0.0, at.x(), 65535.0)))
+                   | spreadBits(static_cast<quint32>(qBound(0.0, at.y(), 65535.0))) << 1;
+    }
+    QVector<int> order(pieces.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(), [&pieces, &along](int a, int b)
+    {
+        if (pieces.at(a) != pieces.at(b))
+        {
+            return pieces.at(a) < pieces.at(b);
+        }
+        return along.at(a) != along.at(b) ? along.at(a) < along.at(b) : a < b;
+    });
+
+    QVector<qint32> clusters;
+    for (int k = 0; k < order.size(); ++k)
+    {
+        clusters.append(order.at(k));
+        const bool piece_ends = k + 1 == order.size() || pieces.at(order.at(k + 1)) != pieces.at(order.at(k));
+        while (piece_ends && clusters.size() % cluster_size != 0)
+        {
+            clusters.append(-1);
+        }
+    }
+    return clusters;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 quint64 pairKey(int a, int b)
 {
     return (static_cast<quint64>(qMin(a, b)) << 32) | static_cast<quint32>(qMax(a, b));
@@ -659,6 +723,7 @@ quint64 edgeKey(quint32 a, quint32 b)
 ClothSolver::ClothSolver(const ClothSettings& settings)
     : m_settings(settings)
     , m_prepared(false)
+    , m_found_on_device(false)
     , m_compute()
     , m_on_device(false)
     , m_device_step()
@@ -1397,22 +1462,26 @@ void ClothSolver::step(qreal time_step)
     }
 
     findContacts();
-    findSelfContacts();
-    for (int i = 0; i < m_self_bound.size(); ++i)
-    {
-        const Vec3 start = load(m_previous, i);
-        const Vec3 guess = load(m_position, i);
-        const double travelled = (guess - start).length();
-        if (travelled > m_self_bound.at(i))
-        {
-            store(m_position, i, start + (guess - start) * (m_self_bound.at(i) / travelled));
-        }
-    }
 
-    // On the graphics card, if there is one; should it fail, on the processor from then on.
-    if (m_compute == nullptr || !sweepOnDevice(h))
+    // On the graphics card, if there is one, which finds where the cloth may touch itself too; should it fail, on the
+    // processor from then on.
+    if (m_compute != nullptr && !sweepOnDevice(h))
     {
         m_compute.reset();
+    }
+    if (m_compute == nullptr)
+    {
+        findSelfContacts();
+        for (int i = 0; i < m_self_bound.size(); ++i)
+        {
+            const Vec3 start = load(m_previous, i);
+            const Vec3 guess = load(m_position, i);
+            const double travelled = (guess - start).length();
+            if (travelled > m_self_bound.at(i))
+            {
+                store(m_position, i, start + (guess - start) * (m_self_bound.at(i) / travelled));
+            }
+        }
         sweep(h);
     }
 
@@ -1528,8 +1597,9 @@ void ClothSolver::sweep(double time_step)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// The sweeps on the graphics card: the cloth goes onto it once, then each step's start, and the vertices come back
-// where the sweeps left them. False if the card failed.
+// The step on the graphics card: the cloth goes onto it once, then each step's start; the card finds where the cloth
+// may touch itself when what it found last no longer does, as findSelfContacts() does, and sweeps, and the vertices
+// come back where the sweeps left them. False if the card failed.
 bool ClothSolver::sweepOnDevice(double time_step)
 {
     if (!m_on_device)
@@ -1559,12 +1629,13 @@ bool ClothSolver::sweepOnDevice(double time_step)
     step.vertex_count = count;
     step.seam_folds = m_settings.seam_folds ? 1 : 0;
 
-    // Where each vertex starts the sweeps and whether it is pinned; where it started the step and how far the cloth
-    // near it lets it move; where it would go by itself and its mass.
+    // Where each vertex is first guessed to go and whether it is pinned; where it started the step, then where it
+    // would go by itself and its mass; the body triangle it may touch. How far the cloth near it lets it move, the card
+    // works out.
     ClothCompute::Start start;
     start.positions.resize(4 * count);
     start.motion.resize(8 * count);
-    const float unbounded = 3.0e38f;
+    start.body.resize(count);
     for (int i = 0; i < count; ++i)
     {
         for (int k = 0; k < 3; ++k)
@@ -1574,34 +1645,27 @@ bool ClothSolver::sweepOnDevice(double time_step)
             start.motion[8 * i + 4 + k] = static_cast<float>(m_inertial.at(3 * i + k));
         }
         start.positions[4 * i + 3] = m_pinned.at(i) ? 1.0f : 0.0f;
-        start.motion[8 * i + 3] = static_cast<float>(qMin(m_self_bound.value(i, unbounded),
-                                                          static_cast<double>(unbounded)));
         start.motion[8 * i + 7] = static_cast<float>(m_mass.at(i));
+        start.body[i] = m_contact_triangle.value(i, -1);
     }
 
-    // The body triangle each vertex may touch, then the self contacts.
-    start.contacts.reserve(2 * count + 1 + m_self_roles.size() + 8 * m_self_contacts.size());
-    for (int i = 0; i < count; ++i)
+    // Whether the cloth keeps from passing through itself, and the parts that may touch are to be found again; which
+    // way the cloth faces, for pieces in layers.
+    start.self_contact = m_settings.self_contact && !m_faces.isEmpty();
+    start.search = start.self_contact && !foundStill(headings(), true);
+    start.pass_through = m_settings.pieces_pass_through;
+    findFacing();
+    if (start.self_contact && !m_facing.isEmpty())
     {
-        start.contacts.append(m_contact_triangle.value(i, -1));
-    }
-    step.self_starts = static_cast<qint32>(start.contacts.size());
-    for (int i = 0; i <= count; ++i)
-    {
-        start.contacts.append(m_self_role_start.value(i, 0));
-    }
-    step.self_roles = static_cast<qint32>(start.contacts.size());
-    for (const SelfContactRole& role : m_self_roles)
-    {
-        start.contacts.append(role.contact << 2 | role.role);
-    }
-    step.self_contacts = static_cast<qint32>(start.contacts.size());
-    step.self_contact_count = static_cast<qint32>(m_self_contacts.size());
-    for (const SelfContact& contact : m_self_contacts)
-    {
-        start.contacts << contact.vertices[0] << contact.vertices[1] << contact.vertices[2] << contact.vertices[3]
-                       << (contact.edges ? 1 : 0) << static_cast<qint32>(contact.side) << (contact.live ? 1 : 0)
-                       << 0;
+        start.facing.resize(4 * count);
+        for (int i = 0; i < count; ++i)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                start.facing[4 * i + k] = static_cast<float>(m_facing.at(3 * i + k));
+            }
+            start.facing[4 * i + 3] = 0.0f;
+        }
     }
 
     // Each sweep's Chebyshev weight, as sweep() has them.
@@ -1615,9 +1679,19 @@ bool ClothSolver::sweepOnDevice(double time_step)
 
     QVector<float> swept;
     QVector<qint32> stopped;
-    if (!m_compute->sweep(step, start, &swept, &stopped))
+    bool searched = false;
+    if (!m_compute->sweep(step, start, &swept, &stopped, &searched))
     {
         return false;
+    }
+    if (!start.self_contact)
+    {
+        m_self_found_at.clear();
+    }
+    else if (searched)
+    {
+        m_self_found_at = m_previous;
+        m_found_on_device = true;
     }
     for (int i = 0; i < count; ++i)
     {
@@ -1726,6 +1800,88 @@ ClothCompute::Cloth ClothSolver::packedCloth()
             terms << corner.x() << corner.y() << corner.z() << 0.0f;
         }
     }
+
+    // For finding where the cloth may touch itself, as findSelfContactsAround() does: the vertices, the faces and the
+    // edges in clusters that lie together in their flat pieces, the faces' corners and the edges' ends, which piece
+    // each vertex is of, each piece's layer, regions and outside, the vertices each is stitched to and those next to
+    // it across a seam, in sorted lists, and where each vertex is in its flat piece.
+    const int cluster_size = 32;
+    ClothCompute::Search& search = cloth.search;
+    QVector<int> face_pieces;
+    QVector<QPointF> face_points;
+    for (int f = 0; f + 2 < m_faces.size(); f += 3)
+    {
+        face_pieces.append(m_pieces.at(m_faces.at(f)));
+        face_points.append((m_rest.at(m_faces.at(f)) + m_rest.at(m_faces.at(f + 1)) + m_rest.at(m_faces.at(f + 2)))
+                           / 3.0);
+    }
+    QVector<int> edge_pieces;
+    QVector<QPointF> edge_points;
+    for (int e = 0; e + 1 < m_edges.size(); e += 2)
+    {
+        edge_pieces.append(m_pieces.at(m_edges.at(e)));
+        edge_points.append((m_rest.at(m_edges.at(e)) + m_rest.at(m_edges.at(e + 1))) / 2.0);
+    }
+    const QVector<qint32> vertex_members = inClusters(m_pieces, m_rest, cluster_size);
+    const QVector<qint32> face_members = inClusters(face_pieces, face_points, cluster_size);
+    const QVector<qint32> edge_members = inClusters(edge_pieces, edge_points, cluster_size);
+    search.vertex_clusters = static_cast<qint32>(vertex_members.size() / cluster_size);
+    search.face_clusters = static_cast<qint32>(face_members.size() / cluster_size);
+    search.edge_clusters = static_cast<qint32>(edge_members.size() / cluster_size);
+    search.cluster_members = static_cast<qint32>(topology.size());
+    topology += vertex_members;
+    topology += face_members;
+    topology += edge_members;
+    search.faces = static_cast<qint32>(topology.size());
+    topology += m_faces;
+    search.edges = static_cast<qint32>(topology.size());
+    topology += m_edges;
+    search.vertex_pieces = static_cast<qint32>(topology.size());
+    topology += m_pieces;
+    search.pieces = static_cast<qint32>(topology.size());
+    for (int piece = 0; piece < m_layers.size(); ++piece)
+    {
+        topology << m_layers.at(piece) << m_piece_regions.value(piece, 1) << (m_outside.value(piece, 1.0) < 0 ? -1 : 1)
+                 << 0;
+    }
+    auto add_lists = [&topology, count](const QVector<QVector<int>>& lists)
+    {
+        const qint32 starts = static_cast<qint32>(topology.size());
+        topology.resize(topology.size() + count + 1);
+        for (int vertex = 0; vertex < count; ++vertex)
+        {
+            topology[starts + vertex] = static_cast<qint32>(topology.size());
+            topology += lists.at(vertex);
+        }
+        topology[starts + count] = static_cast<qint32>(topology.size());
+        return starts;
+    };
+    search.stitched = add_lists(m_stitched);
+    QVector<QVector<int>> seam_neighbours(count);
+    for (const quint64 pair : m_seam_neighbours)
+    {
+        const int a = static_cast<int>(pair >> 32);
+        const int b = static_cast<int>(pair & 0xffffffffu);
+        seam_neighbours[a].append(b);
+        seam_neighbours[b].append(a);
+    }
+    for (QVector<int>& neighbours : seam_neighbours)
+    {
+        std::sort(neighbours.begin(), neighbours.end());
+        neighbours.erase(std::unique(neighbours.begin(), neighbours.end()), neighbours.end());
+    }
+    search.seam_neighbours = add_lists(seam_neighbours);
+    search.rest = static_cast<qint32>(terms.size() / 4);
+    for (const QPointF& rest : m_rest)
+    {
+        terms << static_cast<float>(rest.x()) << static_cast<float>(rest.y()) << 0.0f << 0.0f;
+    }
+    search.self_margin = static_cast<float>(self_margin);
+    search.reach_limit = static_cast<float>(self_reach_limit);
+    search.rest_neighbours = static_cast<float>(rest_neighbours);
+    search.lying_on = static_cast<float>(lying_on);
+    search.bound_share = static_cast<float>(self_bound_share);
+    search.same_way = static_cast<float>(same_way);
     return cloth;
 }
 
@@ -2283,31 +2439,65 @@ void ClothSolver::findSelfContacts()
         return;
     }
 
-    QVector<double> heading(count, 0.0);
-    for (int i = 0; i < count; ++i)
-    {
-        heading[i] = qMin((load(m_inertial, i) - load(m_previous, i)).length(), self_reach_limit);
-    }
-
-    // The contacts found in an earlier step still do while no vertex has moved, and is heading, further than half the
-    // margin from where they were found: parts that weren't near then can't touch yet.
-    bool still = m_self_found_at.size() == m_previous.size();
-    for (int i = 0; i < count && still; ++i)
-    {
-        still = (load(m_previous, i) - load(m_self_found_at, i)).length() + heading.at(i) <= self_margin / 2.0;
-    }
-    if (!still)
+    const QVector<double> heading = headings();
+    if (!foundStill(heading, false))
     {
         m_self_contacts.clear();
         findSelfContactsAround(heading);
         m_self_found_at = m_previous;
+        m_found_on_device = false;
     }
+    findFacing();
 
-    // Which way the cloth's outside faces around each vertex, for pieces in layers to tell their sides by.
+    // Which sides the parts start the step on, and how far their vertices may move in it.
+    m_self_bound = QVector<double>(count, std::numeric_limits<double>::infinity());
+    for (SelfContact& contact : m_self_contacts)
+    {
+        startSelfContact(&contact, heading);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// How far each vertex is heading in the step, as far as the search for the parts of the cloth near it looks.
+QVector<double> ClothSolver::headings() const
+{
+    QVector<double> heading(vertexCount(), 0.0);
+    for (int i = 0; i < heading.size(); ++i)
+    {
+        heading[i] = qMin((load(m_inertial, i) - load(m_previous, i)).length(), self_reach_limit);
+    }
+    return heading;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Whether the self contacts found in an earlier step, on the graphics card or on the processor, still do: they do
+// while no vertex has moved, and is heading, further than half the margin from where they were found, as parts that
+// weren't near then can't touch yet.
+bool ClothSolver::foundStill(const QVector<double>& heading, bool on_device) const
+{
+    if (m_self_found_at.size() != m_previous.size() || m_found_on_device != on_device)
+    {
+        return false;
+    }
+    for (int i = 0; i < heading.size(); ++i)
+    {
+        if ((load(m_previous, i) - load(m_self_found_at, i)).length() + heading.at(i) > self_margin / 2.0)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Which way the cloth's outside faces around each vertex as the step starts, for pieces in layers to tell their sides
+// by; nothing for pieces all in one layer.
+void ClothSolver::findFacing()
+{
     m_facing.clear();
     if (inLayers())
     {
-        m_facing.fill(0.0, 3 * count);
+        m_facing.fill(0.0, 3 * vertexCount());
         for (int t = 0; t + 2 < m_faces.size(); t += 3)
         {
             const Vec3 a = load(m_previous, m_faces.at(t));
@@ -2318,13 +2508,6 @@ void ClothSolver::findSelfContacts()
                 store(m_facing, m_faces.at(t + k), load(m_facing, m_faces.at(t + k)) + normal);
             }
         }
-    }
-
-    // Which sides the parts start the step on, and how far their vertices may move in it.
-    m_self_bound = QVector<double>(count, std::numeric_limits<double>::infinity());
-    for (SelfContact& contact : m_self_contacts)
-    {
-        startSelfContact(&contact, heading);
     }
 }
 

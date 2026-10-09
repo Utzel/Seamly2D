@@ -60,4 +60,5 @@ RESOURCES += \
 OTHER_FILES += \
     $$PWD/shaders/cloth_accelerate.comp \
     $$PWD/shaders/cloth_contacts.comp \
+    $$PWD/shaders/cloth_search.comp \
     $$PWD/shaders/cloth_sweep.comp

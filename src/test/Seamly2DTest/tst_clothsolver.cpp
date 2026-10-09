@@ -1470,3 +1470,69 @@ void TST_ClothSolver::deviceSweepsAsProcessor() const
              qUtf8Printable(QStringLiteral("on %1 the vertices end up %2 cm on average and up to %3 cm from where "
                                            "they do on the processor").arg(device.name()).arg(mean).arg(most)));
 }
+
+//---------------------------------------------------------------------------------------------------------------------
+// The graphics card finds all the parts of the cloth near each other, as the processor does, also more of them than it
+// first has room for: two large sheets lying on each other closer than the cloth is thick push each other apart
+// there as on the processor.
+void TST_ClothSolver::deviceFindsAllTheClothNearItself() const
+{
+    ComputeDevice device;
+    if (device.open() == nullptr)
+    {
+        QSKIP("No graphics card here can compute");
+    }
+
+    const PieceMesher mesher;
+    const GarmentMesh lower = mesher.meshOutline(rectangle(-30, -30, 60, 60, 1));
+    const GarmentMesh upper = mesher.meshOutline(rectangle(-30, -30, 60, 60, 11));
+    ClothSettings settings;
+    settings.floor = false;
+    settings.gravity = QVector3D();
+    auto push = [&](bool on_device, QVector<QVector3D>* positions)
+    {
+        ClothSolver solver(settings);
+        solver.addMesh(lower, lyingFlat(lower, 0.0));
+        solver.addMesh(upper, lyingFlat(upper, settings.thickness / 2.0));
+        if (on_device && !solver.useDevice(device.rhi()))
+        {
+            return false;
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            solver.step(frame);
+        }
+        *positions = solver.positions();
+        const bool stayed = solver.isOnDevice() == on_device;
+        solver.useDevice(nullptr);
+        return stayed;
+    };
+    QVector<QVector3D> on_processor;
+    QVector<QVector3D> on_device;
+    QVERIFY(push(false, &on_processor));
+    QVERIFY2(push(true, &on_device), qUtf8Printable(device.name()));
+    QCOMPARE(on_device.size(), on_processor.size());
+
+    // Each sheet pushed the other apart, all over.
+    const int lower_count = static_cast<int>(lower.rest_positions.size());
+    float closest = std::numeric_limits<float>::max();
+    for (int i = 0; i < lower_count; ++i)
+    {
+        closest = qMin(closest, on_device.at(lower_count + i).y() - on_device.at(i).y());
+    }
+    QVERIFY2(closest > settings.thickness / 2.0,
+             qUtf8Printable(QStringLiteral("on %1 the sheets are still %2 cm apart in places")
+                                .arg(device.name()).arg(closest)));
+
+    float mean = 0;
+    float most = 0;
+    for (int i = 0; i < on_device.size(); ++i)
+    {
+        const float distance = (on_device.at(i) - on_processor.at(i)).length();
+        mean += distance / static_cast<float>(on_device.size());
+        most = qMax(most, distance);
+    }
+    QVERIFY2(mean < 0.01f && most < 0.05f,
+             qUtf8Printable(QStringLiteral("on %1 the vertices end up %2 cm on average and up to %3 cm from where "
+                                           "they do on the processor").arg(device.name()).arg(mean).arg(most)));
+}

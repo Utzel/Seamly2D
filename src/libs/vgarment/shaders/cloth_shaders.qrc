@@ -2,6 +2,7 @@
     <qresource prefix="/cloth">
         <file>cloth_accelerate.comp.qsb</file>
         <file>cloth_contacts.comp.qsb</file>
+        <file>cloth_search.comp.qsb</file>
         <file>cloth_sweep.comp.qsb</file>
     </qresource>
 </RCC>

@@ -40,7 +40,7 @@ layout(std140, binding = 0) uniform Step
     int   self_starts;           // in contacts: where each vertex's self contacts start, and one more for the end
     int   self_roles;            // in contacts
     int   self_contacts;         // in contacts: eight for each self contact
-    int   self_contact_count;
+    int   self_capacity;         // how many self contacts there is room for
     int   seam_folds;            // whether seams hold their angles
 } this_step;
 
@@ -75,8 +75,9 @@ layout(std430, binding = 6) readonly buffer Topology { int topology[]; };
 // far along the edge) and the body's triangles (corners; normal).
 layout(std430, binding = 7) readonly buffer Terms { vec4 terms[]; };
 
-// The body triangle each vertex may touch, or -1, then the self contacts: where each vertex's start, the roles
-// (contact << 2 | role), and the contacts (four corners, whether of two edges, side, whether live).
+// The body triangle each vertex may touch, or -1, then the self contacts, as cloth_search.comp finds them: how many
+// there are, where each vertex's start, the roles (contact << 2 | role), and the contacts (four corners, whether of two
+// edges, side, whether live).
 layout(std430, binding = 8) readonly buffer Contacts { int contacts[]; };
 
 const float tiny = 1e-9;
