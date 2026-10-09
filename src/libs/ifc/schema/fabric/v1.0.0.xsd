@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified" attributeFormDefault="unqualified">
+  <xs:element name="fabric">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="version" type="formatVersion"/>
+      </xs:sequence>
+      <xs:attribute name="name" type="fabricName" use="required"/>
+      <xs:attribute name="weight" type="fabricProperty" use="required"/>
+      <xs:attribute name="warp" type="fabricProperty" use="required"/>
+      <xs:attribute name="weft" type="fabricProperty" use="required"/>
+      <xs:attribute name="bias" type="fabricProperty" use="required"/>
+      <xs:attribute name="bendingWarp" type="fabricProperty" use="required"/>
+      <xs:attribute name="bendingWeft" type="fabricProperty" use="required"/>
+      <xs:attribute name="thickness" type="fabricProperty" use="required"/>
+    </xs:complexType>
+  </xs:element>
+  <xs:simpleType name="formatVersion">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="(0|([1-9][0-9]*))\.(0|([1-9][0-9]*))\.(0|([1-9][0-9]*))"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="fabricName">
+    <xs:restriction base="xs:string">
+      <xs:minLength value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="fabricProperty">
+    <xs:restriction base="xs:double">
+      <xs:minExclusive value="0"/>
+    </xs:restriction>
+  </xs:simpleType>
+</xs:schema>

@@ -53,6 +53,7 @@ private slots:
     void fabricTexturesAreReadBack() const;
     void fabricShrinkageIsReadBack() const;
     void customFabricsAreReadBack() const;
+    void fabricFilesAreReadBack() const;
     void undoRestoresFabrics() const;
     void topstitchesAreReadBack() const;
     void undoRestoresTopstitches() const;

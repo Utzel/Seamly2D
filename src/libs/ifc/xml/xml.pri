@@ -3,6 +3,7 @@
 
 HEADERS += \
     $$PWD/abstract_converter.h \
+    $$PWD/fabric_converter.h \
     $$PWD/individual_size_converter.h \
     $$PWD/multi_size_converter.h \
     $$PWD/vdomdocument.h \
@@ -14,6 +15,7 @@ HEADERS += \
 
 SOURCES += \
     $$PWD/abstract_converter.cpp \
+    $$PWD/fabric_converter.cpp \
     $$PWD/individual_size_converter.cpp \
     $$PWD/multi_size_converter.cpp \
     $$PWD/vdomdocument.cpp \

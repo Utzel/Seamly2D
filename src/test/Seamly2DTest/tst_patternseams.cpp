@@ -34,6 +34,7 @@
 
 #include "../ifc/exception/vexception.h"
 #include "../ifc/ifcdef.h"
+#include "../ifc/xml/fabric_converter.h"
 #include "../ifc/xml/vabstractpattern.h"
 #include "../ifc/xml/vpatternconverter.h"
 #include "../vtools/undocommands/save_arrangements.h"
@@ -44,6 +45,7 @@
 #include "../vtools/undocommands/save_layers.h"
 #include "../vtools/undocommands/save_seams.h"
 #include "../vtools/undocommands/save_topstitches.h"
+#include "../vformat/fabric_file.h"
 
 namespace
 {
@@ -691,6 +693,49 @@ void TST_PatternSeams::customFabricsAreReadBack() const
     custom_only.custom = {fabrics.custom.at(1)};
     pattern.setFabrics(custom_only);
     QCOMPARE(pattern.getFabrics(), custom_only);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A fabric of the pattern's own goes into a fabric file, for the fabric library, and comes back as it was; a file
+// without one of its values isn't taken for one.
+void TST_PatternSeams::fabricFilesAreReadBack() const
+{
+    QTemporaryDir folder;
+    QVERIFY(folder.isValid());
+    const VCustomFabric twill{QStringLiteral("Heavy twill"), 380, 3500, 2200, 280, 55, 40, 0.9};
+    VFabricFile file;
+    file.setFabric(twill);
+    const QString path = folder.filePath(QStringLiteral("Heavy twill.") + VFabricFile::Extension);
+    QString error;
+    QVERIFY2(file.SaveDocument(path, error), qUtf8Printable(error));
+
+    VFabricFile read;
+    try
+    {
+        read.setXMLContent(VFabricConverter(path).Convert());
+    }
+    catch (const VException& exception)
+    {
+        QFAIL(qUtf8Printable(exception.ErrorMessage()));
+    }
+    QCOMPARE(read.fabric(), twill);
+    QCOMPARE(read.documentElement().firstChildElement(QStringLiteral("version")).text(),
+             VFabricConverter::FabricMaxVerStr);
+
+    QDomElement fabric_element = file.documentElement();
+    fabric_element.removeAttribute(VFabricFile::AttrBendingWeft);
+    const QString broken = folder.filePath(QStringLiteral("broken.") + VFabricFile::Extension);
+    QVERIFY(writeFile(broken, file.toString()));
+    bool refused = false;
+    try
+    {
+        VFabricConverter converter(broken);
+    }
+    catch (const VException&)
+    {
+        refused = true;
+    }
+    QVERIFY(refused);
 }
 
 //---------------------------------------------------------------------------------------------------------------------

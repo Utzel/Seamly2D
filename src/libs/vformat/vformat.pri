@@ -2,6 +2,7 @@
 # This need for corect working file translations.pro
 
 SOURCES += \
+    $$PWD/fabric_file.cpp \
     $$PWD/measurements.cpp \
     $$PWD/svg_generator.cpp \
     $$PWD/vlabeltemplate.cpp
@@ -9,6 +10,7 @@ SOURCES += \
 *msvc*:SOURCES += $$PWD/stable.cpp
 
 HEADERS += \
+    $$PWD/fabric_file.h \
     $$PWD/measurements.h \
     $$PWD/stable.h \
     $$PWD/svg_generator.h \
