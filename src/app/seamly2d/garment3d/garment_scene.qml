@@ -450,9 +450,9 @@ Rectangle {
             }
         }
 
-        // The avatar, fitted to the pattern's measurements, in a plain grey like a dress form. While sewing it fades,
-        // so the board behind it can be seen; while arranging it can be clicked to put pieces on, and while
-        // topstitching or folding it keeps clicks off the board behind it.
+        // The avatar, fitted to the pattern's measurements, in a plain grey like a dress form, or colored by how hard
+        // the cloth presses on it. While sewing it fades, so the board behind it can be seen; while arranging it can be
+        // clicked to put pieces on, and while topstitching or folding it keeps clicks off the board behind it.
         Model {
             readonly property bool isAvatar: true
 
@@ -463,7 +463,8 @@ Rectangle {
             geometry: root.sceneModel.avatarGeometry
 
             materials: PrincipledMaterial {
-                baseColor: "#b9b4ad"
+                baseColor: root.sceneModel.avatarFitShown ? "white" : "#b9b4ad"
+                vertexColorsEnabled: root.sceneModel.avatarFitShown
                 roughness: 0.7
                 metalness: 0.0
             }
@@ -591,11 +592,13 @@ Rectangle {
 
                     position: placed ? root.sceneModel.boardOffset.times(-1) : Qt.vector3d(0, 0, index * 0.05)
                     visible: pieceShown
+                    // With the avatar colored by a fit map, the cloth on it is seen through.
+                    opacity: placed && root.sceneModel.avatarFitShown ? 0.35 : 1.0
 
-                    // With a fit map shown, the vertex colors take the place of the piece's own; with an image of
-                    // its fabric, the image does.
-                    readonly property color ownColor: root.sceneModel.fitMapShown || pieceTexture ? "white"
-                                                                                                  : pieceColor
+                    // With a fit map shown on the cloth, the vertex colors take the place of the piece's own; with an
+                    // image of its fabric, the image does.
+                    readonly property color ownColor: root.sceneModel.clothFitShown || pieceTexture ? "white"
+                                                                                                    : pieceColor
 
                     // While a piece is selected the others step back, so the selection reads whatever the colors are.
                     readonly property color clothColor: selected
@@ -628,8 +631,8 @@ Rectangle {
 
                         materials: PrincipledMaterial {
                             baseColor: piece_node.clothColor
-                            vertexColorsEnabled: root.sceneModel.fitMapShown
-                            baseColorMap: root.sceneModel.fitMapShown ? null
+                            vertexColorsEnabled: root.sceneModel.clothFitShown
+                            baseColorMap: root.sceneModel.clothFitShown ? null
                                           : piece_node.pieceTexture ? fabric_texture
                                           : root.sceneModel.checksShown ? checks_texture : null
                             roughness: 0.85

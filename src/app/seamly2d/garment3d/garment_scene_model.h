@@ -70,6 +70,8 @@ class GarmentSceneModel : public QAbstractListModel
     Q_PROPERTY(bool arranging READ isArranging NOTIFY arrangingChanged)
     Q_PROPERTY(QString hint READ hint NOTIFY hintChanged)
     Q_PROPERTY(bool fitMapShown READ isFitMapShown NOTIFY fitMapChanged)
+    Q_PROPERTY(bool clothFitShown READ isClothFitShown NOTIFY fitMapChanged)
+    Q_PROPERTY(bool avatarFitShown READ isAvatarFitShown NOTIFY fitMapChanged)
     Q_PROPERTY(QVariantList fitColors READ fitColors NOTIFY fitMapChanged)
     Q_PROPERTY(QStringList fitLabels READ fitLabels NOTIFY fitMapChanged)
     Q_PROPERTY(bool checksShown READ isChecksShown NOTIFY checksShownChanged)
@@ -85,13 +87,14 @@ class GarmentSceneModel : public QAbstractListModel
 
 public:
     /// What the cloth can be colored by, as CLO's fit maps: how much it is stretched, how far it stands off the body,
-    /// how hard it presses on it.
+    /// how hard it presses on it; or the avatar, by how hard the cloth presses on it, as CLO shows pressure.
     enum class FitMap
     {
         None,
         Strain,
         Ease,
-        Pressure
+        Pressure,
+        AvatarPressure
     };
 
     /// The parts of the gizmo of a piece on the avatar, as CLO's: arrows to move it around its part of the body, up or
@@ -184,6 +187,8 @@ public:
     FitMap                 fitMap() const;
     void                   setFitMap(FitMap map);
     bool                   isFitMapShown() const;
+    bool                   isClothFitShown() const;
+    bool                   isAvatarFitShown() const;
     QVariantList           fitColors() const;
     QStringList            fitLabels() const;
     void                   setBody(const BodyCollider& body);
@@ -323,6 +328,7 @@ private:
     QString                m_hint;
     FitMap                 m_fit_map;
     BodyCollider           m_body;
+    bool                   m_avatar_map_due;
     bool                   m_checks_shown;
     bool                   m_avatar_shown;
     bool                   m_mesh_shown;
@@ -341,6 +347,8 @@ private:
     QColor                 clothColor(const Row& row) const;
     void                   showStitches(const Row& row) const;
     void                   showMesh(const Row& row) const;
+    void                   mapAvatarSoon();
+    void                   mapAvatar();
     void                   showEdges(const Row& row) const;
     void                   showLines(const Row& row) const;
     QVector<QColor>        vertexColors(const Row& row) const;

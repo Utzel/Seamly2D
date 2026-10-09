@@ -37,6 +37,8 @@
 
 #include "../vgarment/garment_fit.h"
 #include "../vgarment/piece_outline.h"
+#include <QTimer>
+
 #include "avatar_geometry.h"
 #include "piece_geometry.h"
 #include "stitch_geometry.h"
@@ -74,9 +76,10 @@ const char* const unmapped_color = "#c8c8c8";
 //---------------------------------------------------------------------------------------------------------------------
 const FitScale& fitScale(GarmentSceneModel::FitMap map)
 {
-    return map == GarmentSceneModel::FitMap::Ease       ? ease_scale
-           : map == GarmentSceneModel::FitMap::Pressure ? pressure_scale
-                                                        : strain_scale;
+    return map == GarmentSceneModel::FitMap::Ease ? ease_scale
+           : map == GarmentSceneModel::FitMap::Pressure || map == GarmentSceneModel::FitMap::AvatarPressure
+               ? pressure_scale
+               : strain_scale;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -195,6 +198,7 @@ GarmentSceneModel::GarmentSceneModel(QObject* parent)
     , m_hint()
     , m_fit_map(FitMap::None)
     , m_body()
+    , m_avatar_map_due(false)
     , m_checks_shown(false)
     , m_avatar_shown(true)
     , m_mesh_shown(false)
@@ -426,6 +430,7 @@ void GarmentSceneModel::setPieces(const QVector<Piece>& pieces)
         }
     }
     updateSceneBounds();
+    mapAvatarSoon();
 
     if (was_empty && !m_rows.isEmpty())
     {
@@ -449,6 +454,7 @@ void GarmentSceneModel::setPiecePositions(quint32 id, const QVector<QVector3D>& 
             showStitches(row);
         }
     }
+    mapAvatarSoon();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -754,6 +760,7 @@ void GarmentSceneModel::setFitMap(FitMap map)
         {
             showMesh(row);
         }
+        mapAvatarSoon();
         emit fitMapChanged();
     }
 }
@@ -762,6 +769,20 @@ void GarmentSceneModel::setFitMap(FitMap map)
 bool GarmentSceneModel::isFitMapShown() const
 {
     return m_fit_map != FitMap::None;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Whether the cloth is colored by the fit map shown.
+bool GarmentSceneModel::isClothFitShown() const
+{
+    return m_fit_map != FitMap::None && m_fit_map != FitMap::AvatarPressure;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Whether the avatar is colored by the fit map shown, the cloth seen through.
+bool GarmentSceneModel::isAvatarFitShown() const
+{
+    return m_fit_map == FitMap::AvatarPressure;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -802,6 +823,56 @@ void GarmentSceneModel::setBody(const BodyCollider& body)
             showMesh(row);
         }
     }
+    mapAvatarSoon();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Colors the avatar by the fit map shown on it once the changes coming in now are all in: the cloth moves piece by
+// piece as it drapes, and the pressure on the body is of all of it.
+void GarmentSceneModel::mapAvatarSoon()
+{
+    if (!m_avatar_map_due && m_avatar != nullptr)
+    {
+        m_avatar_map_due = true;
+        QTimer::singleShot(0, this, [this]()
+        {
+            m_avatar_map_due = false;
+            mapAvatar();
+        });
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Colors the avatar by how hard the cloth on it presses on its body, or plain without that map.
+void GarmentSceneModel::mapAvatar()
+{
+    if (m_avatar == nullptr)
+    {
+        return;
+    }
+    if (m_fit_map != FitMap::AvatarPressure || m_body.isEmpty()
+        || m_body.positions().size() != m_avatar->vertexCount())
+    {
+        m_avatar->setColors(QVector<QColor>());
+        return;
+    }
+
+    QVector<QVector3D> cloth;
+    for (const Row& row : m_rows)
+    {
+        if (row.placed)
+        {
+            cloth += row.positions;
+        }
+    }
+    const QVector<qreal> pressure = GarmentFit::bodyPressure(m_body, cloth);
+    QVector<QColor> colors;
+    colors.reserve(pressure.size());
+    for (const qreal kilopascals : pressure)
+    {
+        colors.append(scaleColor(pressure_scale, kilopascals));
+    }
+    m_avatar->setColors(colors);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1185,6 +1256,7 @@ void GarmentSceneModel::setAvatar(const QVector<QVector3D>& positions, const QVe
         m_avatar->setParent(this);
     }
     m_avatar->setBody(positions, triangles, skin_vertex_count);
+    mapAvatarSoon();
 
     const float largest = std::numeric_limits<float>::max();
     m_avatar_minimum = QVector3D(largest, largest, largest);
@@ -1391,12 +1463,12 @@ void GarmentSceneModel::showMesh(const Row& row) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// The color of each of the row's vertices on the fit map shown; none without one. Ease and pressure only tell
-// something about pieces on the avatar.
+// The color of each of the row's vertices on the fit map shown on the cloth; none without one. Ease and pressure only
+// tell something about pieces on the avatar.
 QVector<QColor> GarmentSceneModel::vertexColors(const Row& row) const
 {
     QVector<QColor> colors;
-    if (m_fit_map == FitMap::None)
+    if (!isClothFitShown())
     {
         return colors;
     }

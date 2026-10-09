@@ -25,11 +25,14 @@
 #ifndef AVATAR_GEOMETRY_H
 #define AVATAR_GEOMETRY_H
 
+#include <QByteArray>
+#include <QColor>
 #include <QVector3D>
 #include <QVector>
 #include <QtQuick3D/QQuick3DGeometry>
 
-/// @brief Hands the avatar's skin to Qt Quick 3D, with smooth normals. Units are cm, y up, facing +z.
+/// @brief Hands the avatar's skin to Qt Quick 3D, with smooth normals, and colors for a fit map shown on it. Units are
+/// cm, y up, facing +z.
 class AvatarGeometry : public QQuick3DGeometry
 {
     Q_OBJECT
@@ -39,9 +42,18 @@ public:
 
     void               setBody(const QVector<QVector3D>& positions, const QVector<quint32>& triangles,
                                int skin_vertex_count);
+    void               setColors(const QVector<QColor>& colors);
+    int                vertexCount() const;
 
 private:
     Q_DISABLE_COPY(AvatarGeometry)
+
+    QVector<QVector3D> m_positions;
+    QVector<QVector3D> m_normals;
+    QByteArray         m_index_data;
+    QVector<QColor>    m_colors;
+
+    void               build();
 };
 
 #endif // AVATAR_GEOMETRY_H

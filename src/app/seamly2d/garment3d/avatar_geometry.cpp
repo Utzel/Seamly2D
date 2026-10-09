@@ -24,18 +24,33 @@
 
 #include "avatar_geometry.h"
 
-#include <QByteArray>
+#include <QtMath>
 
 #include <limits>
+
+namespace
+{
+//---------------------------------------------------------------------------------------------------------------------
+// The color in linear RGB, as vertex colors are.
+QVector3D linear(const QColor& color)
+{
+    return QVector3D(qPow(static_cast<float>(color.redF()), 2.2f), qPow(static_cast<float>(color.greenF()), 2.2f),
+                     qPow(static_cast<float>(color.blueF()), 2.2f));
+}
+} // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
 AvatarGeometry::AvatarGeometry(QQuick3DObject* parent)
     : QQuick3DGeometry(parent)
+    , m_positions()
+    , m_normals()
+    , m_index_data()
+    , m_colors()
 {}
 
 //---------------------------------------------------------------------------------------------------------------------
 /// @brief Replaces the geometry with the first skin_vertex_count positions and the triangles between them. Each
-/// vertex normal is the area weighted average of the normals of the triangles around it.
+/// vertex normal is the area weighted average of the normals of the triangles around it. The skin is plain again.
 void AvatarGeometry::setBody(const QVector<QVector3D>& positions, const QVector<quint32>& triangles,
                              int skin_vertex_count)
 {
@@ -52,24 +67,70 @@ void AvatarGeometry::setBody(const QVector<QVector3D>& positions, const QVector<
         normals[b] += normal;
         normals[c] += normal;
     }
+    for (QVector3D& normal : normals)
+    {
+        normal.normalize();
+    }
 
-    const int vertex_bytes = 6 * static_cast<int>(sizeof(float));
-    QByteArray vertex_data(skin_vertex_count * vertex_bytes, Qt::Uninitialized);
+    m_positions = positions.mid(0, skin_vertex_count);
+    m_normals = normals;
+    m_index_data = QByteArray(reinterpret_cast<const char*>(triangles.constData()),
+                              static_cast<int>(triangles.size() * static_cast<int>(sizeof(quint32))));
+    m_colors.clear();
+    build();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Colors the skin vertex by vertex, as a fit map does, or plain again with no colors. Colors for another number
+/// of vertices are left out.
+void AvatarGeometry::setColors(const QVector<QColor>& colors)
+{
+    if ((colors.isEmpty() && m_colors.isEmpty()) || (!colors.isEmpty() && colors.size() != m_positions.size()))
+    {
+        return;
+    }
+    m_colors = colors;
+    build();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief How many vertices the skin has.
+int AvatarGeometry::vertexCount() const
+{
+    return static_cast<int>(m_positions.size());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// Hands the skin to Qt Quick 3D: each vertex's position and normal, and its color if it is colored.
+void AvatarGeometry::build()
+{
+    const bool colored = !m_colors.isEmpty();
+    const int floats_per_vertex = colored ? 10 : 6;
+    const int vertex_bytes = floats_per_vertex * static_cast<int>(sizeof(float));
+    QByteArray vertex_data(static_cast<int>(m_positions.size()) * vertex_bytes, Qt::Uninitialized);
     float* vertex = reinterpret_cast<float*>(vertex_data.data());
 
     const float largest = std::numeric_limits<float>::max();
     QVector3D minimum(largest, largest, largest);
     QVector3D maximum(-largest, -largest, -largest);
-    for (int i = 0; i < skin_vertex_count; ++i)
+    for (int i = 0; i < m_positions.size(); ++i)
     {
-        const QVector3D& position = positions.at(i);
-        const QVector3D normal = normals.at(i).normalized();
+        const QVector3D& position = m_positions.at(i);
+        const QVector3D& normal = m_normals.at(i);
         *vertex++ = position.x();
         *vertex++ = position.y();
         *vertex++ = position.z();
         *vertex++ = normal.x();
         *vertex++ = normal.y();
         *vertex++ = normal.z();
+        if (colored)
+        {
+            const QVector3D color = linear(m_colors.at(i));
+            *vertex++ = color.x();
+            *vertex++ = color.y();
+            *vertex++ = color.z();
+            *vertex++ = 1.0f;
+        }
 
         minimum = QVector3D(qMin(minimum.x(), position.x()), qMin(minimum.y(), position.y()),
                             qMin(minimum.z(), position.z()));
@@ -77,17 +138,18 @@ void AvatarGeometry::setBody(const QVector<QVector3D>& positions, const QVector<
                             qMax(maximum.z(), position.z()));
     }
 
-    QByteArray index_data(reinterpret_cast<const char*>(triangles.constData()),
-                          static_cast<int>(triangles.size() * static_cast<int>(sizeof(quint32))));
-
     clear();
     setStride(vertex_bytes);
     setPrimitiveType(PrimitiveType::Triangles);
     addAttribute(Attribute::PositionSemantic, 0, Attribute::F32Type);
     addAttribute(Attribute::NormalSemantic, 3 * static_cast<int>(sizeof(float)), Attribute::F32Type);
+    if (colored)
+    {
+        addAttribute(Attribute::ColorSemantic, 6 * static_cast<int>(sizeof(float)), Attribute::F32Type);
+    }
     addAttribute(Attribute::IndexSemantic, 0, Attribute::U32Type);
     setVertexData(vertex_data);
-    setIndexData(index_data);
+    setIndexData(m_index_data);
     setBounds(minimum, maximum);
     update();
 }

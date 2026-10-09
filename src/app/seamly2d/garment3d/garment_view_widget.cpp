@@ -4438,7 +4438,8 @@ void GarmentViewWidget::createToolBar()
     m_fit_action = tool_bar->addAction(tr("Fit Map"));
     m_fit_action->setCheckable(true);
     m_fit_action->setToolTip(tr("Color the cloth by how the garment fits, as chosen in the menu: how much the cloth is "
-                                "stretched, how far it stands off the body, or how hard it presses on it"));
+                                "stretched, how far it stands off the body, or how hard it presses on it; or the "
+                                "avatar by how hard the cloth presses on it"));
     connect(m_fit_action, &QAction::toggled, this, &GarmentViewWidget::showFitMap);
 
     QMenu* fit_menu = new QMenu(this);
@@ -4455,7 +4456,10 @@ void GarmentViewWidget::createToolBar()
         {GarmentSceneModel::FitMap::Ease, tr("Ease"),
          tr("How far the cloth stands off the body: red where it rests on it, blue 8 cm or more away")},
         {GarmentSceneModel::FitMap::Pressure, tr("Pressure"),
-         tr("How hard the cloth presses on the body: green not at all, red 2 kPa or more")}};
+         tr("How hard the cloth presses on the body: green not at all, red 2 kPa or more")},
+        {GarmentSceneModel::FitMap::AvatarPressure, tr("Pressure on the Avatar"),
+         tr("How hard the cloth presses on the body, shown on the avatar through the cloth: green not at all, red "
+            "2 kPa or more")}};
     for (const auto& fit_map : fit_maps)
     {
         QAction* action = fit_menu->addAction(fit_map.text);
