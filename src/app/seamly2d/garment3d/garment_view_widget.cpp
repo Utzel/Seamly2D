@@ -109,7 +109,6 @@
 #include "../vtools/undocommands/save_topstitches.h"
 #include "avatar_dialog.h"
 #include "drape_runner.h"
-#include "flow_layout.h"
 #include "elastic_editor.h"
 #include "fabric_dialog.h"
 #include "fabric_library.h"
@@ -118,6 +117,7 @@
 #include "piece_geometry.h"
 #include "seam_editor.h"
 #include "stitch_editor.h"
+#include "tool_strip.h"
 
 namespace
 {
@@ -192,11 +192,18 @@ const qreal default_age = 25.0;
 // The toolbar's icons are drawn this many pixels wide, and twice that for high resolution screens.
 const int icon_size = 32;
 
-// Gap between the toolbar's groups side by side, in pixels.
-const int tool_group_spacing = 6;
-
 // How long the view says how to leave full screen, in ms.
 const int full_screen_notice_time = 4000;
+
+// How soon each group of tools stays in the toolbar's row where the dock is too narrow for all: draping, the fit map
+// and the view first, as a dock beside the pattern shows the garment draped more than it is worked on.
+const int drape_rank = 0;
+const int fit_rank = 1;
+const int view_rank = 2;
+const int arrange_rank = 3;
+const int sew_rank = 4;
+const int fabric_rank = 5;
+const int export_rank = 6;
 
 // Fabrics give their thickness in mm, the scene is in cm.
 const qreal millimetres_per_cm = 10.0;
@@ -464,6 +471,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_hide_piece_action(nullptr)
     , m_show_pieces_action(nullptr)
     , m_snapshot_action(nullptr)
+    , m_tool_strip(nullptr)
     , m_maximize_action(nullptr)
     , m_full_screen_action(nullptr)
     , m_fabric_box(nullptr)
@@ -4136,23 +4144,23 @@ void GarmentViewWidget::createScene()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// The tools come in groups: sewing and topstitching, arranging and draping, how the cloth looks, and export. The
-// groups sit side by side as far as the dock is wide and wrap into rows where it isn't, so no tool is ever hidden
-// behind a toolbar's overflow. Delete and Esc only act while the view has the focus, so they don't get in the way of
-// the piece scene's.
+// The tools come in groups: sewing, arranging, draping, the fit map, the fabric, the view and export, with the button
+// maximizing the view at the end. The toolbar keeps to one row: in a narrow dock, draping, the fit map and the view
+// stay in it, and the other groups open from More; maximized, all are in the row. Delete and Esc only act while the
+// view has the focus, so they don't get in the way of the piece scene's.
 void GarmentViewWidget::createToolBar()
 {
-    QWidget* tool_area = new QWidget(this);
-    FlowLayout* tool_layout = new FlowLayout(tool_area, tool_group_spacing);
-    tool_layout->setContentsMargins(0, 0, 0, 0);
-    auto add_group = [tool_area, tool_layout]()
+    m_tool_strip = new ToolStrip(this);
+    // Each group, and how soon it stays in a narrow row: the lowest first.
+    QVector<QPair<QToolBar*, int>> groups;
+    auto add_group = [this, &groups](int rank)
     {
-        QToolBar* group = new QToolBar(tool_area);
+        QToolBar* group = new QToolBar(m_tool_strip);
         group->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        tool_layout->addWidget(group);
+        groups.append(qMakePair(group, rank));
         return group;
     };
-    QToolBar* tool_bar = add_group();
+    QToolBar* tool_bar = add_group(sew_rank);
 
     m_sew_action = tool_bar->addAction(tr("Sew"));
     m_sew_action->setCheckable(true);
@@ -4208,15 +4216,19 @@ void GarmentViewWidget::createToolBar()
         button->setPopupMode(QToolButton::MenuButtonPopup);
     }
 
-    m_flip_action = tool_bar->addAction(tr("Flip"));
+    // What can be done with the selected seam, in the Sew menu under its types; Delete takes it out, or while
+    // arranging puts the selected piece back on the board.
+    sew_menu->addSeparator();
+    m_flip_action = sew_menu->addAction(tr("Flip"));
     m_flip_action->setToolTip(tr("Turn the selected seam around, when its lines cross"));
     connect(m_flip_action, &QAction::triggered, this, &GarmentViewWidget::flipSeam);
 
-    m_remove_action = tool_bar->addAction(tr("Remove"));
+    m_remove_action = sew_menu->addAction(tr("Remove"));
     m_remove_action->setToolTip(tr("Take the selected seam out, or while arranging put the selected piece back on "
                                    "the board"));
     m_remove_action->setShortcut(QKeySequence::Delete);
     m_remove_action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    addAction(m_remove_action);
     connect(m_remove_action, &QAction::triggered, this, &GarmentViewWidget::removeSelected);
 
     m_topstitch_action = tool_bar->addAction(tr("Topstitch"));
@@ -4358,7 +4370,7 @@ void GarmentViewWidget::createToolBar()
         button->setPopupMode(QToolButton::MenuButtonPopup);
     }
 
-    tool_bar = add_group();
+    tool_bar = add_group(arrange_rank);
 
     m_avatar_action = tool_bar->addAction(tr("Avatar"));
     m_avatar_action->setToolTip(tr("Choose who wears the garment when the pattern has no measurements: a woman or a "
@@ -4453,6 +4465,8 @@ void GarmentViewWidget::createToolBar()
     m_piece_menu->setToolTipsVisible(true);
     m_piece_menu->addActions(arrange_menu->actions());
 
+    tool_bar = add_group(drape_rank);
+
     m_simulate_action = tool_bar->addAction(tr("Simulate"));
     m_simulate_action->setCheckable(true);
     m_simulate_action->setToolTip(tr("Drape the pieces on the avatar, sewn together by their seams; at rest, the "
@@ -4493,7 +4507,7 @@ void GarmentViewWidget::createToolBar()
     m_reset_action->setToolTip(tr("Put the draped pieces back where they were arranged"));
     connect(m_reset_action, &QAction::triggered, this, &GarmentViewWidget::resetDrape);
 
-    tool_bar = add_group();
+    tool_bar = add_group(fit_rank);
 
     // As CLO's fit maps, one at a time: the button shows the map chosen in its menu.
     m_fit_action = tool_bar->addAction(tr("Fit Map"));
@@ -4542,6 +4556,8 @@ void GarmentViewWidget::createToolBar()
     m_checks_action->setToolTip(tr("Show the pieces in checks that run along their grainlines, the wider stripe along "
                                    "the grain: how each piece is cut, and whether the checks meet at its seams"));
     connect(m_checks_action, &QAction::toggled, m_scene_model, &GarmentSceneModel::setChecksShown);
+
+    tool_bar = add_group(fabric_rank);
 
     m_fabric_box = new QComboBox(tool_bar);
     updateFabricBox(m_doc->getFabrics());
@@ -4602,7 +4618,7 @@ void GarmentViewWidget::createToolBar()
         button->setPopupMode(QToolButton::InstantPopup);
     }
 
-    tool_bar = add_group();
+    tool_bar = add_group(view_rank);
 
     // Where the garment is looked at from, and what shows; with keys laid out as on a number pad, the front at the
     // bottom.
@@ -4664,6 +4680,8 @@ void GarmentViewWidget::createToolBar()
         button->setPopupMode(QToolButton::InstantPopup);
     }
 
+    tool_bar = add_group(export_rank);
+
     m_snapshot_action = tool_bar->addAction(tr("Snapshot"));
     m_snapshot_action->setToolTip(tr("Save the 3D view as it is now as an image: PNG or JPG"));
     connect(m_snapshot_action, &QAction::triggered, this, &GarmentViewWidget::saveSnapshot);
@@ -4673,18 +4691,19 @@ void GarmentViewWidget::createToolBar()
                                    "glTF or OBJ"));
     connect(m_export_action, &QAction::triggered, this, &GarmentViewWidget::exportDrape);
 
-    tool_bar = add_group();
-
-    // How much room the view takes: all of the window, or of the screen. The main window sees to it.
-    m_maximize_action = tool_bar->addAction(tr("Maximize 3D View"));
+    // How much room the view takes: all of the window, at the end of the toolbar, or of the screen, in the View menu.
+    // The main window sees to it.
+    m_maximize_action = new QAction(tr("Maximize 3D View"), this);
     m_maximize_action->setCheckable(true);
     m_maximize_action->setShortcut(Qt::SHIFT | Qt::Key_F11);
     m_maximize_action->setToolTip(tr("Give the 3D View all of the window, the 2D view and the other panels put away "
                                      "until it goes back in its place, or all of its screen while it floats. "
                                      "Shift+F11 does the same"));
-    m_full_screen_action = tool_bar->addAction(tr("3D View Full Screen"));
+    view_menu->addSeparator();
+    m_full_screen_action = view_menu->addAction(tr("3D View Full Screen"));
     m_full_screen_action->setCheckable(true);
     m_full_screen_action->setShortcut(Qt::Key_F11);
+    addAction(m_full_screen_action);
     m_full_screen_action->setToolTip(tr("Show the 3D View alone on the whole screen. F11 does the same; F11 or Esc "
                                         "leaves it"));
     connect(m_full_screen_action, &QAction::toggled, this, [this](bool full_screen)
@@ -4721,7 +4740,12 @@ void GarmentViewWidget::createToolBar()
     connect(m_cancel_action, &QAction::triggered, this, &GarmentViewWidget::cancel);
     addAction(m_cancel_action);
 
-    layout()->addWidget(tool_area);
+    for (const QPair<QToolBar*, int>& group : std::as_const(groups))
+    {
+        m_tool_strip->addGroup(group.first, group.second);
+    }
+    m_tool_strip->addEndAction(m_maximize_action);
+    layout()->addWidget(m_tool_strip);
     updateIcons();
     updateActions();
 }
@@ -4750,6 +4774,7 @@ void GarmentViewWidget::updateIcons()
         m_snapshot_action->setIcon(toolIcon(QStringLiteral("snapshot")));
         m_export_action->setIcon(toolIcon(QStringLiteral("export")));
         m_maximize_action->setIcon(toolIcon(QStringLiteral("maximize")));
+        m_tool_strip->moreAction()->setIcon(toolIcon(QStringLiteral("more")));
         m_full_screen_action->setIcon(toolIcon(QStringLiteral("full_screen")));
     }
 }

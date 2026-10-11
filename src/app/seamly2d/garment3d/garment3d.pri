@@ -18,7 +18,8 @@ SOURCES += \
     $$PWD/seam_geometry.cpp \
     $$PWD/shown_piece.cpp \
     $$PWD/stitch_editor.cpp \
-    $$PWD/stitch_geometry.cpp
+    $$PWD/stitch_geometry.cpp \
+    $$PWD/tool_strip.cpp
 
 HEADERS += \
     $$PWD/avatar_dialog.h \
@@ -37,7 +38,8 @@ HEADERS += \
     $$PWD/seam_geometry.h \
     $$PWD/shown_piece.h \
     $$PWD/stitch_editor.h \
-    $$PWD/stitch_geometry.h
+    $$PWD/stitch_geometry.h \
+    $$PWD/tool_strip.h
 
 RESOURCES += \
     $$PWD/garment3d.qrc

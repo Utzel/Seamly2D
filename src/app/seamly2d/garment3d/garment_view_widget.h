@@ -62,6 +62,7 @@ class QQuickView;
 class QTimer;
 class SeamEditor;
 class StitchEditor;
+class ToolStrip;
 class VAbstractPattern;
 class VContainer;
 struct VFabricTexture;
@@ -324,6 +325,7 @@ private:
     QAction*                   m_hide_piece_action;
     QAction*                   m_show_pieces_action;
     QAction*                   m_snapshot_action;
+    ToolStrip*                 m_tool_strip;
     QAction*                   m_maximize_action;
     QAction*                   m_full_screen_action;
     QComboBox*                 m_fabric_box;

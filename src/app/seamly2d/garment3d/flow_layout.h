@@ -31,8 +31,8 @@
 #include <QVector>
 
 /// @brief Lays its widgets out side by side at their preferred sizes, as many in a row as fit, and the rest in rows
-/// below, as words flow into lines. It is as tall as its rows take at the width it gets, so a dock's toolbar of
-/// several groups wraps onto a second row where the dock is narrow instead of hiding tools behind its overflow.
+/// below, as words flow into lines. It is as tall as its rows take at the width it gets, so the groups of tools
+/// there is no room for in a narrow toolbar's row fill rows of their own in the panel they open in.
 class FlowLayout : public QLayout
 {
 public:
