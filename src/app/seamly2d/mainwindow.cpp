@@ -62,6 +62,7 @@
 #include "dialogs/calculator_dialog.h"
 #include "dialogs/decimalchart_dialog.h"
 #include "dialogs/export_progress_dialog.h"
+#include "garment3d/dock_maximizer.h"
 #include "garment3d/garment_view_widget.h"
 #include "../ifc/exception/vexceptionobjecterror.h"
 #include "../ifc/exception/vexceptionconversionerror.h"
@@ -212,6 +213,7 @@ MainWindow::MainWindow(QWidget *parent)
     , groupsWidget(nullptr)
     , piecesWidget(nullptr)
     , m_garment_view_widget(nullptr)
+    , m_garment_maximizer(nullptr)
     , m_lock(nullptr)
     , zoomScaleSpinBox(nullptr)
     , m_penToolBar(nullptr)
@@ -3996,6 +3998,7 @@ void MainWindow::changeDraftBlock(Selection selection)
  */
 void MainWindow::showDraftMode(bool checked)
 {
+    m_garment_maximizer->restore();
     if (checked)
     {
         ui->toolbox_StackedWidget->setCurrentIndex(0);
@@ -4060,6 +4063,7 @@ void MainWindow::showDraftMode(bool checked)
  */
 void MainWindow::showPieceMode(bool checked)
 {
+    m_garment_maximizer->restore();
     if (checked)
     {
         ui->toolbox_StackedWidget->setCurrentIndex(1);
@@ -4143,6 +4147,7 @@ void MainWindow::showPieceMode(bool checked)
  */
 void MainWindow::showLayoutMode(bool checked)
 {
+    m_garment_maximizer->restore();
     if (checked)
     {
         ui->toolbox_StackedWidget->setCurrentIndex(2);
@@ -4926,6 +4931,8 @@ void MainWindow::setWidgetsEnabled(bool enable)
     actionDockWidgetLayouts->setEnabled(enable && layoutStage);
     ui->garment3d_DockWidget->setEnabled(enable);
     ui->garment3d_DockWidget->toggleViewAction()->setEnabled(enable);
+    m_garment_view_widget->maximizeAction()->setEnabled(enable);
+    m_garment_view_widget->fullScreenAction()->setEnabled(enable);
 
     //Now we don't want allow user call context menu
     draftScene->setToolsDisabled(!enable, doc->getActiveDraftBlockName());
@@ -5556,6 +5563,8 @@ void MainWindow::ReadSettings()
  */
 void MainWindow::WriteSettings()
 {
+    // The window is kept as it was before the 3D View took all of it.
+    m_garment_maximizer->restore();
     showDraftMode(true);
 
     VSettings *setings = qApp->Seamly2DSettings();
@@ -5703,6 +5712,8 @@ void MainWindow::createMenus()
     });
 
     ui->view_Menu->addAction(ui->garment3d_DockWidget->toggleViewAction());
+    ui->view_Menu->addAction(m_garment_view_widget->maximizeAction());
+    ui->view_Menu->addAction(m_garment_view_widget->fullScreenAction());
     // Opened from the menu, the 3D View gets room to show the avatar rather than the least it can do with: the
     // docks beside it would otherwise leave it at its minimum size.
     connect(ui->garment3d_DockWidget->toggleViewAction(), &QAction::triggered, this, [this](bool checked)
@@ -6017,6 +6028,17 @@ void MainWindow::initializeDocksContain()
     connect(doc, &VPattern::showPiece, m_garment_view_widget, &GarmentViewWidget::selectPiece);
     connect(m_garment_view_widget, &GarmentViewWidget::pieceSelected, pieceScene, &VMainGraphicsScene::HighlightItem);
     connect(m_garment_view_widget, &GarmentViewWidget::pieceSelected, piecesWidget, &PiecesWidget::selectPiece);
+
+    // The 3D View can take all of the window, or of the screen, and give it back as it was.
+    m_garment_maximizer = new DockMaximizer(this, ui->garment3d_DockWidget);
+    connect(m_garment_view_widget->maximizeAction(), &QAction::toggled, m_garment_maximizer,
+            &DockMaximizer::setMaximized);
+    connect(m_garment_view_widget->fullScreenAction(), &QAction::toggled, m_garment_maximizer,
+            &DockMaximizer::setFullScreen);
+    connect(m_garment_maximizer, &DockMaximizer::maximizedChanged, m_garment_view_widget->maximizeAction(),
+            &QAction::setChecked);
+    connect(m_garment_maximizer, &DockMaximizer::fullScreenChanged, m_garment_view_widget->fullScreenAction(),
+            &QAction::setChecked);
 
     // Opt-in: hidden until the user opens it from the View menu. ReadSettings() restores it after that.
     ui->garment3d_DockWidget->hide();

@@ -195,6 +195,9 @@ const int icon_size = 32;
 // Gap between the toolbar's groups side by side, in pixels.
 const int tool_group_spacing = 6;
 
+// How long the view says how to leave full screen, in ms.
+const int full_screen_notice_time = 4000;
+
 // Fabrics give their thickness in mm, the scene is in cm.
 const qreal millimetres_per_cm = 10.0;
 
@@ -461,6 +464,8 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_hide_piece_action(nullptr)
     , m_show_pieces_action(nullptr)
     , m_snapshot_action(nullptr)
+    , m_maximize_action(nullptr)
+    , m_full_screen_action(nullptr)
     , m_fabric_box(nullptr)
     , m_custom_fabrics_listed()
     , m_fabric_library(new FabricLibrary(this))
@@ -1675,9 +1680,13 @@ void GarmentViewWidget::cancel()
     {
         m_elastic_editor->cancel();
     }
-    else
+    else if (m_seam_editor->isSewing() || m_seam_editor->selectedSeam() >= 0)
     {
         m_seam_editor->cancel();
+    }
+    else if (m_full_screen_action->isChecked())
+    {
+        m_full_screen_action->setChecked(false);
     }
 }
 
@@ -2563,6 +2572,20 @@ bool GarmentViewWidget::isDraping() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief Switches the view between its place and all of the window; the main window gives it the room.
+QAction* GarmentViewWidget::maximizeAction() const
+{
+    return m_maximize_action;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Switches the view between its place and all of the screen; the main window gives it the room.
+QAction* GarmentViewWidget::fullScreenAction() const
+{
+    return m_full_screen_action;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // The cloth came to rest. The drape stays on, working out nothing, until the cloth is pulled or pinned somewhere else.
 void GarmentViewWidget::drapeSettled(int generation)
 {
@@ -2697,7 +2720,7 @@ void GarmentViewWidget::updateActions()
     const bool stitching = m_stitch_editor->isStitching() || m_fold_editor->isFolding()
                            || m_elastic_editor->isEditing();
     m_cancel_action->setEnabled(m_seam_editor->isSewing() || seam_selected || m_scene_model->isArranging()
-                                || stitching);
+                                || stitching || m_full_screen_action->isChecked());
 
     if ((m_seam_editor->isSewing() || m_scene_model->isArranging() || stitching) && m_view_container != nullptr)
     {
@@ -4650,6 +4673,48 @@ void GarmentViewWidget::createToolBar()
                                    "glTF or OBJ"));
     connect(m_export_action, &QAction::triggered, this, &GarmentViewWidget::exportDrape);
 
+    tool_bar = add_group();
+
+    // How much room the view takes: all of the window, or of the screen. The main window sees to it.
+    m_maximize_action = tool_bar->addAction(tr("Maximize 3D View"));
+    m_maximize_action->setCheckable(true);
+    m_maximize_action->setShortcut(Qt::SHIFT | Qt::Key_F11);
+    m_maximize_action->setToolTip(tr("Give the 3D View all of the window, the 2D view and the other panels put away "
+                                     "until it goes back in its place, or all of its screen while it floats. "
+                                     "Shift+F11 does the same"));
+    m_full_screen_action = tool_bar->addAction(tr("3D View Full Screen"));
+    m_full_screen_action->setCheckable(true);
+    m_full_screen_action->setShortcut(Qt::Key_F11);
+    m_full_screen_action->setToolTip(tr("Show the 3D View alone on the whole screen. F11 does the same; F11 or Esc "
+                                        "leaves it"));
+    connect(m_full_screen_action, &QAction::toggled, this, [this](bool full_screen)
+    {
+        // In full screen, the view says for a moment how to leave it, and takes the keys.
+        const QString notice = tr("Esc or %1 leaves full screen.")
+                                   .arg(m_full_screen_action->shortcut().toString(QKeySequence::NativeText));
+        if (full_screen)
+        {
+            m_notice = notice;
+            QTimer::singleShot(full_screen_notice_time, this, [this, notice]()
+            {
+                if (m_notice == notice)
+                {
+                    m_notice.clear();
+                    updateHint();
+                }
+            });
+            if (m_view_container != nullptr)
+            {
+                m_view_container->setFocus();
+            }
+        }
+        else if (m_notice == notice)
+        {
+            m_notice.clear();
+        }
+        updateActions();
+    });
+
     m_cancel_action = new QAction(this);
     m_cancel_action->setShortcut(Qt::Key_Escape);
     m_cancel_action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
@@ -4684,6 +4749,8 @@ void GarmentViewWidget::updateIcons()
         m_view_action->setIcon(toolIcon(QStringLiteral("views")));
         m_snapshot_action->setIcon(toolIcon(QStringLiteral("snapshot")));
         m_export_action->setIcon(toolIcon(QStringLiteral("export")));
+        m_maximize_action->setIcon(toolIcon(QStringLiteral("maximize")));
+        m_full_screen_action->setIcon(toolIcon(QStringLiteral("full_screen")));
     }
 }
 

@@ -4,6 +4,7 @@
 SOURCES += \
     $$PWD/avatar_dialog.cpp \
     $$PWD/avatar_geometry.cpp \
+    $$PWD/dock_maximizer.cpp \
     $$PWD/drape_runner.cpp \
     $$PWD/elastic_editor.cpp \
     $$PWD/fabric_dialog.cpp \
@@ -22,6 +23,7 @@ SOURCES += \
 HEADERS += \
     $$PWD/avatar_dialog.h \
     $$PWD/avatar_geometry.h \
+    $$PWD/dock_maximizer.h \
     $$PWD/drape_runner.h \
     $$PWD/elastic_editor.h \
     $$PWD/fabric_dialog.h \

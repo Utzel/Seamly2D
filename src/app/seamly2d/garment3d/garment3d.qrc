@@ -38,5 +38,9 @@
         <file>icons/32x32/views@2x.png</file>
         <file>icons/32x32/snapshot.png</file>
         <file>icons/32x32/snapshot@2x.png</file>
+        <file>icons/32x32/maximize.png</file>
+        <file>icons/32x32/maximize@2x.png</file>
+        <file>icons/32x32/full_screen.png</file>
+        <file>icons/32x32/full_screen@2x.png</file>
     </qresource>
 </RCC>

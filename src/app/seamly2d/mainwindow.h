@@ -84,6 +84,7 @@ class ShortcutsDialog;
 class GroupsWidget;
 class PiecesWidget;
 class GarmentViewWidget;
+class DockMaximizer;
 class DraftToolBox;
 class PieceToolBox;
 class LayoutToolBox;
@@ -339,6 +340,7 @@ private:
     GroupsWidget                     *groupsWidget;
     PiecesWidget                     *piecesWidget;
     GarmentViewWidget*                m_garment_view_widget;
+    DockMaximizer*                    m_garment_maximizer;
     std::shared_ptr<VLockGuard<char>> m_lock;
 
     QDoubleSpinBox                   *zoomScaleSpinBox;

@@ -89,6 +89,8 @@ public:
     virtual           ~GarmentViewWidget();
 
     bool               isDraping() const;
+    QAction*           maximizeAction() const;
+    QAction*           fullScreenAction() const;
 
 signals:
     void               pieceSelected(quint32 id);
@@ -322,6 +324,8 @@ private:
     QAction*                   m_hide_piece_action;
     QAction*                   m_show_pieces_action;
     QAction*                   m_snapshot_action;
+    QAction*                   m_maximize_action;
+    QAction*                   m_full_screen_action;
     QComboBox*                 m_fabric_box;
     QStringList                m_custom_fabrics_listed;
     FabricLibrary*             m_fabric_library;
