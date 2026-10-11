@@ -149,6 +149,7 @@ private slots:
     void               dropPiece();
     void               setSimulating(bool simulating);
     void               resetDrape();
+    void               takeBackDrape();
     void               setFine(bool fine);
     void               setOnDevice(bool on_device);
     void               showComputing(int generation, const QString& device);
@@ -325,6 +326,11 @@ private:
     QStringList                m_custom_fabrics_listed;
     FabricLibrary*             m_fabric_library;
     QStringList                m_library_fabrics_listed;
+    QAction*                   m_fabric_action;
+    QAction*                   m_new_fabric_action;
+    QAction*                   m_edit_fabric_action;
+    QAction*                   m_add_to_library_action;
+    QAction*                   m_open_library_action;
     QAction*                   m_image_action;
     QAction*                   m_image_width_action;
     QAction*                   m_remove_image_action;
@@ -354,11 +360,13 @@ private:
     PieceDrag                  m_drag;
     QVector<ClothPin>          m_pins;
     bool                       m_resting;
+    QString                    m_notice;              ///< what couldn't be done, until something is done
     ClothPull                  m_pull;
     QString                    m_avatar_fingerprint;  ///< of what the avatar shown was fitted to
     bool                       m_drape_taken_in;      ///< whether the pattern's drape was taken in for this avatar
     QVector<VDrapedCloth>      m_cloths_taken_in;     ///< the pattern's cloth, for the meshes about to be made
     VGarmentDrape              m_pattern_drape;       ///< the drape the pattern has, as taken in or kept since
+    bool                       m_keeping_drape;       ///< set while the drape shown goes into the pattern
 
     void               createScene();
     void               createToolBar();

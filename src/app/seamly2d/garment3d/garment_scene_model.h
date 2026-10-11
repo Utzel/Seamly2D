@@ -69,11 +69,15 @@ class GarmentSceneModel : public QAbstractListModel
     Q_PROPERTY(qreal avatarReach READ avatarReach NOTIFY avatarChanged)
     Q_PROPERTY(bool arranging READ isArranging NOTIFY arrangingChanged)
     Q_PROPERTY(QString hint READ hint NOTIFY hintChanged)
+    Q_PROPERTY(QString modeStatus READ modeStatus NOTIFY statusChanged)
+    Q_PROPERTY(QString drapeStatus READ drapeStatus NOTIFY statusChanged)
+    Q_PROPERTY(bool resting READ isResting NOTIFY statusChanged)
     Q_PROPERTY(bool fitMapShown READ isFitMapShown NOTIFY fitMapChanged)
     Q_PROPERTY(bool clothFitShown READ isClothFitShown NOTIFY fitMapChanged)
     Q_PROPERTY(bool avatarFitShown READ isAvatarFitShown NOTIFY fitMapChanged)
     Q_PROPERTY(QVariantList fitColors READ fitColors NOTIFY fitMapChanged)
     Q_PROPERTY(QStringList fitLabels READ fitLabels NOTIFY fitMapChanged)
+    Q_PROPERTY(QString fitTitle READ fitTitle NOTIFY fitMapChanged)
     Q_PROPERTY(bool checksShown READ isChecksShown NOTIFY checksShownChanged)
     Q_PROPERTY(bool avatarShown READ isAvatarShown NOTIFY avatarShownChanged)
     Q_PROPERTY(bool meshShown READ isMeshShown NOTIFY meshShownChanged)
@@ -183,6 +187,10 @@ public:
     void                   setArranging(bool arranging);
     QString                hint() const;
     void                   setHint(const QString& hint);
+    QString                modeStatus() const;
+    QString                drapeStatus() const;
+    bool                   isResting() const;
+    void                   setStatus(const QString& mode, const QString& drape, bool resting);
 
     FitMap                 fitMap() const;
     void                   setFitMap(FitMap map);
@@ -191,6 +199,9 @@ public:
     bool                   isAvatarFitShown() const;
     QVariantList           fitColors() const;
     QStringList            fitLabels() const;
+    QString                fitTitle() const;
+    Q_INVOKABLE QString    fitReading(int id, const QVector3D& point) const;
+    Q_INVOKABLE QString    avatarFitReading(const QVector3D& point) const;
     void                   setBody(const BodyCollider& body);
 
     bool                   isChecksShown() const;
@@ -249,6 +260,7 @@ signals:
     void                   piecePicked(quint32 id);
     void                   arrangingChanged();
     void                   hintChanged();
+    void                   statusChanged();
     void                   fitMapChanged();
     void                   checksShownChanged();
     void                   avatarShownChanged();
@@ -326,9 +338,14 @@ private:
     QString                m_avatar_note;
     bool                   m_arranging;
     QString                m_hint;
+    QString                m_mode_status;
+    QString                m_drape_status;
+    bool                   m_resting;
     FitMap                 m_fit_map;
     BodyCollider           m_body;
     bool                   m_avatar_map_due;
+    mutable QHash<quint32, QVector<qreal>> m_fit_values;  // each piece's vertices' values on the fit map shown
+    QVector<qreal>         m_avatar_pressure;             // how hard the cloth presses on each skin vertex, shown
     bool                   m_checks_shown;
     bool                   m_avatar_shown;
     bool                   m_mesh_shown;
@@ -352,6 +369,7 @@ private:
     void                   showEdges(const Row& row) const;
     void                   showLines(const Row& row) const;
     QVector<QColor>        vertexColors(const Row& row) const;
+    QString                fitText(qreal value) const;
 };
 
 #endif // GARMENT_SCENE_MODEL_H

@@ -105,6 +105,24 @@ QColor scaleColor(const FitScale& scale, qreal value)
 const qreal matching_thread_share = 0.55;
 
 //---------------------------------------------------------------------------------------------------------------------
+// The value at the vertex nearest to the point, of the values each of the vertices has.
+qreal nearestValue(const QVector<QVector3D>& positions, const QVector<qreal>& values, const QVector3D& point)
+{
+    int nearest = 0;
+    float closest = std::numeric_limits<float>::max();
+    for (int i = 0; i < positions.size() && i < values.size(); ++i)
+    {
+        const float apart = (positions.at(i) - point).lengthSquared();
+        if (apart < closest)
+        {
+            closest = apart;
+            nearest = i;
+        }
+    }
+    return values.value(nearest);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 // The pattern piece a row shows, or shows the mirrored copy of.
 quint32 patternPiece(quint32 id)
 {
@@ -196,9 +214,14 @@ GarmentSceneModel::GarmentSceneModel(QObject* parent)
     , m_avatar_note()
     , m_arranging(false)
     , m_hint()
+    , m_mode_status()
+    , m_drape_status()
+    , m_resting(false)
     , m_fit_map(FitMap::None)
     , m_body()
     , m_avatar_map_due(false)
+    , m_fit_values()
+    , m_avatar_pressure()
     , m_checks_shown(false)
     , m_avatar_shown(true)
     , m_mesh_shown(false)
@@ -744,6 +767,40 @@ void GarmentSceneModel::setHint(const QString& hint)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief The tool in use, such as sewing or arranging, for the view's corner; empty for none.
+QString GarmentSceneModel::modeStatus() const
+{
+    return m_mode_status;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Whether the cloth drapes or rests, for the view's corner; empty while it doesn't drape.
+QString GarmentSceneModel::drapeStatus() const
+{
+    return m_drape_status;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Whether the draping cloth has come to rest.
+bool GarmentSceneModel::isResting() const
+{
+    return m_resting;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief Says what the view is doing: the tool in use and whether the cloth drapes or rests, either empty for none.
+void GarmentSceneModel::setStatus(const QString& mode, const QString& drape, bool resting)
+{
+    if (mode != m_mode_status || drape != m_drape_status || resting != m_resting)
+    {
+        m_mode_status = mode;
+        m_drape_status = drape;
+        m_resting = resting;
+        emit statusChanged();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief What the cloth is colored by instead of the pieces' own colors, if anything.
 GarmentSceneModel::FitMap GarmentSceneModel::fitMap() const
 {
@@ -812,6 +869,58 @@ QStringList GarmentSceneModel::fitLabels() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+/// @brief What the fit map shown shows, for its legend.
+QString GarmentSceneModel::fitTitle() const
+{
+    switch (m_fit_map)
+    {
+        case FitMap::Strain:
+            return tr("Strain");
+        case FitMap::Ease:
+            return tr("Ease");
+        case FitMap::Pressure:
+            return tr("Pressure");
+        case FitMap::AvatarPressure:
+            return tr("Pressure on the Avatar");
+        case FitMap::None:
+        default:
+            return QString();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief The fit map's value where a point of a piece on the avatar is, at the vertex nearest to it, as the legend
+/// writes its values; empty off the map, as on the board.
+QString GarmentSceneModel::fitReading(int id, const QVector3D& point) const
+{
+    for (const Row& row : m_rows)
+    {
+        if (row.id == static_cast<quint32>(id))
+        {
+            const QVector<qreal> values = m_fit_values.value(row.id);
+            if (row.placed && isClothFitShown() && !values.isEmpty() && values.size() == row.positions.size())
+            {
+                return fitText(nearestValue(row.positions, values, point));
+            }
+            break;
+        }
+    }
+    return QString();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/// @brief How hard the cloth presses where a point of the avatar is, at the skin vertex nearest to it, while the
+/// avatar shows it; empty otherwise.
+QString GarmentSceneModel::avatarFitReading(const QVector3D& point) const
+{
+    if (!isAvatarFitShown() || m_avatar_pressure.isEmpty() || m_avatar_pressure.size() != m_body.positions().size())
+    {
+        return QString();
+    }
+    return fitText(nearestValue(m_body.positions(), m_avatar_pressure, point));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /// @brief The avatar's body, which the ease and pressure maps measure the cloth against.
 void GarmentSceneModel::setBody(const BodyCollider& body)
 {
@@ -853,6 +962,7 @@ void GarmentSceneModel::mapAvatar()
     if (m_fit_map != FitMap::AvatarPressure || m_body.isEmpty()
         || m_body.positions().size() != m_avatar->vertexCount())
     {
+        m_avatar_pressure.clear();
         m_avatar->setColors(QVector<QColor>());
         return;
     }
@@ -865,10 +975,10 @@ void GarmentSceneModel::mapAvatar()
             cloth += row.positions;
         }
     }
-    const QVector<qreal> pressure = GarmentFit::bodyPressure(m_body, cloth);
+    m_avatar_pressure = GarmentFit::bodyPressure(m_body, cloth);
     QVector<QColor> colors;
-    colors.reserve(pressure.size());
-    for (const qreal kilopascals : pressure)
+    colors.reserve(m_avatar_pressure.size());
+    for (const qreal kilopascals : std::as_const(m_avatar_pressure))
     {
         colors.append(scaleColor(pressure_scale, kilopascals));
     }
@@ -1468,6 +1578,7 @@ void GarmentSceneModel::showMesh(const Row& row) const
 QVector<QColor> GarmentSceneModel::vertexColors(const Row& row) const
 {
     QVector<QColor> colors;
+    m_fit_values.remove(row.id);
     if (!isClothFitShown())
     {
         return colors;
@@ -1497,11 +1608,21 @@ QVector<QColor> GarmentSceneModel::vertexColors(const Row& row) const
 
     const FitScale& scale = fitScale(m_fit_map);
     colors.reserve(values.size());
-    for (const qreal value : values)
+    for (const qreal value : std::as_const(values))
     {
         colors.append(scaleColor(scale, value));
     }
+    m_fit_values.insert(row.id, values);
     return colors;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// A value of the fit map shown, as its legend writes them: in its unit, to a tenth, or a hundredth of a kPa.
+QString GarmentSceneModel::fitText(qreal value) const
+{
+    const FitScale& scale = fitScale(m_fit_map);
+    const int decimals = &scale == &pressure_scale ? 2 : 1;
+    return QString::number(value, 'f', decimals) + QString::fromLatin1(scale.unit);
 }
 
 //---------------------------------------------------------------------------------------------------------------------

@@ -39,6 +39,8 @@ Rectangle {
     required property var elasticEditor
     required property string emptyText
     required property string hintText
+    required property string leaveKey
+    required property string drapeKey
     required property color backgroundColor
     required property color textColor
     required property color highlightColor
@@ -47,6 +49,106 @@ Rectangle {
 
     // How close, in pixels, the mouse has to come to a seam line to sew it or to pick a seam.
     readonly property real pickDistance: 8
+
+    // What is written over the scene stands on a dark plate in light letters, so it reads over the cloth, the avatar
+    // and the background alike.
+    readonly property color plateColor: Qt.rgba(0.1, 0.1, 0.1, 0.75)
+    readonly property color plateTextColor: "#f2f2f2"
+
+    // The fit map's value under the mouse, while one is shown, and where the mouse is.
+    property string fitReading: ""
+    property point fitReadingAt: Qt.point(0, 0)
+
+    // Reads the fit map shown where the mouse is: on the nearest piece on the avatar, or on the avatar itself where
+    // the avatar shows the map, through the cloth.
+    function readFit(x, y) {
+        let reading = ""
+        if (root.sceneModel.fitMapShown && !root.capturing) {
+            const results = view.pickAll(x, y)
+            for (let i = 0; i < results.length; ++i) {
+                const hit = results[i].objectHit
+                if (!hit) {
+                    continue
+                }
+                if (root.sceneModel.avatarFitShown) {
+                    if (hit.isAvatar === true) {
+                        reading = root.sceneModel.avatarFitReading(results[i].scenePosition)
+                        break
+                    }
+                } else {
+                    if (hit.pieceId !== undefined) {
+                        reading = root.sceneModel.fitReading(hit.pieceId, results[i].scenePosition)
+                    }
+                    break
+                }
+            }
+        }
+        root.fitReading = reading
+        root.fitReadingAt = Qt.point(x, y)
+    }
+
+    // A note of what the view is doing, in its corner: a dot, what it is, and the key that stops it.
+    component StatusChip: Rectangle {
+        id: chip
+
+        property string text
+        property string key
+        property color dotColor
+        property bool pulsing: false
+        property real glow: 1
+
+        visible: chip.text !== ""
+        width: chip_row.width + 14
+        height: chip_row.height + 8
+        radius: 4
+        color: root.plateColor
+
+        SequentialAnimation on glow {
+            running: chip.pulsing && chip.visible
+            loops: Animation.Infinite
+            NumberAnimation { to: 0.25; duration: 650; easing.type: Easing.InOutSine }
+            NumberAnimation { to: 1.0; duration: 650; easing.type: Easing.InOutSine }
+        }
+
+        Row {
+            id: chip_row
+            anchors.centerIn: parent
+            spacing: 7
+
+            Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                width: 8
+                height: 8
+                radius: 4
+                color: chip.dotColor
+                opacity: chip.pulsing ? chip.glow : 1.0
+            }
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: chip.text
+                color: root.plateTextColor
+                font.pointSize: 9
+            }
+
+            Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                width: key_text.width + 8
+                height: key_text.height + 2
+                radius: 3
+                color: "transparent"
+                border.color: Qt.rgba(1, 1, 1, 0.45)
+
+                Text {
+                    id: key_text
+                    anchors.centerIn: parent
+                    text: chip.key
+                    color: Qt.rgba(1, 1, 1, 0.8)
+                    font.pointSize: 7
+                }
+            }
+        }
+    }
 
     // How close, in pixels, the mouse has to come to an arrangement point to put a piece there.
     readonly property real snapDistance: 12
@@ -1132,6 +1234,7 @@ Rectangle {
             onPointChanged: {
                 const x = hover_handler.point.position.x
                 const y = hover_handler.point.position.y
+                root.readFit(x, y)
                 if (root.sceneModel.arranging) {
                     if (!root.draggingGizmo) {
                         const part = root.gizmoPartAt(x, y)
@@ -1189,6 +1292,7 @@ Rectangle {
             }
             onHoveredChanged: {
                 if (!hover_handler.hovered) {
+                    root.fitReading = ""
                     root.seamEditor.leave()
                     root.stitchEditor.leave()
                     root.foldEditor.leave()
@@ -1212,79 +1316,149 @@ Rectangle {
         horizontalAlignment: Text.AlignHCenter
     }
 
-    Text {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        anchors.margins: 6
-        visible: (root.sceneModel.pieceCount > 0 || root.sceneModel.hasAvatar) && !root.capturing
+    // What to do next in the tool in use, on a plate along the bottom; without one, how to look around, quietly.
+    Rectangle {
+        id: hint_plate
+
         readonly property string task: root.sceneModel.hint !== "" ? root.sceneModel.hint
                                        : root.stitchEditor.hint !== "" ? root.stitchEditor.hint
                                        : root.foldEditor.hint !== "" ? root.foldEditor.hint
                                        : root.elasticEditor.hint !== "" ? root.elasticEditor.hint
                                                                         : root.seamEditor.hint
 
-        text: task !== "" ? task : root.hintText
-        color: root.textColor
-        opacity: task !== "" ? 1.0 : 0.6
-        font.pointSize: 8
-        wrapMode: Text.WordWrap
-        horizontalAlignment: Text.AlignHCenter
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 8
+        width: hint_text.width + 16
+        height: hint_text.height + 8
+        radius: 4
+        color: hint_plate.task !== "" ? root.plateColor : "transparent"
+        visible: (root.sceneModel.pieceCount > 0 || root.sceneModel.hasAvatar) && !root.capturing
+
+        Text {
+            id: hint_text
+            anchors.centerIn: parent
+            width: Math.min(implicitWidth, root.width - 32)
+            text: hint_plate.task !== "" ? hint_plate.task : root.hintText
+            color: hint_plate.task !== "" ? root.plateTextColor : root.textColor
+            opacity: hint_plate.task !== "" ? 1.0 : 0.6
+            font.pointSize: hint_plate.task !== "" ? 9 : 8
+            wrapMode: Text.WordWrap
+            horizontalAlignment: Text.AlignHCenter
+        }
     }
 
-    // How the fit map's colors read: the values its four colors stand for, the lowest at the bottom.
-    Row {
+    // How the fit map's colors read: what it shows, and the values its four colors stand for, the lowest at the bottom.
+    Column {
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
         anchors.margins: 8
-        spacing: 4
+        spacing: 6
         visible: root.sceneModel.fitMapShown
 
-        Item {
-            id: fit_labels
-            width: 48
-            height: fit_bar.height
-
-            Repeater {
-                model: root.sceneModel.fitLabels
-
-                Text {
-                    required property int index
-                    required property string modelData
-
-                    anchors.right: parent.right
-                    y: (fit_labels.height - height) * (1 - index / 3)
-                    text: modelData
-                    color: root.textColor
-                    font.pointSize: 8
-                }
-            }
+        Text {
+            anchors.right: parent.right
+            text: root.sceneModel.fitTitle
+            color: root.textColor
+            font.pointSize: 9
+            font.bold: true
         }
 
-        Rectangle {
-            id: fit_bar
-            width: 10
-            height: 120
-            gradient: Gradient {
-                GradientStop { position: 0.0; color: root.sceneModel.fitColors[3] }
-                GradientStop { position: 1 / 3; color: root.sceneModel.fitColors[2] }
-                GradientStop { position: 2 / 3; color: root.sceneModel.fitColors[1] }
-                GradientStop { position: 1.0; color: root.sceneModel.fitColors[0] }
+        Row {
+            anchors.right: parent.right
+            spacing: 4
+
+            Item {
+                id: fit_labels
+                width: 48
+                height: fit_bar.height
+
+                Repeater {
+                    model: root.sceneModel.fitLabels
+
+                    Text {
+                        required property int index
+                        required property string modelData
+
+                        anchors.right: parent.right
+                        y: (fit_labels.height - height) * (1 - index / 3)
+                        text: modelData
+                        color: root.textColor
+                        font.pointSize: 8
+                    }
+                }
+            }
+
+            Rectangle {
+                id: fit_bar
+                width: 10
+                height: 120
+                gradient: Gradient {
+                    GradientStop { position: 0.0; color: root.sceneModel.fitColors[3] }
+                    GradientStop { position: 1 / 3; color: root.sceneModel.fitColors[2] }
+                    GradientStop { position: 2 / 3; color: root.sceneModel.fitColors[1] }
+                    GradientStop { position: 1.0; color: root.sceneModel.fitColors[0] }
+                }
             }
         }
     }
 
-    // What the avatar couldn't match, if anything.
-    Text {
+    // The fit map's value under the mouse, beside it.
+    Rectangle {
+        visible: root.sceneModel.fitMapShown && root.fitReading !== "" && !root.capturing
+        x: Math.max(4, Math.min(root.fitReadingAt.x + 14, root.width - width - 4))
+        y: root.fitReadingAt.y + 18 + height > root.height - 4 ? root.fitReadingAt.y - height - 10
+                                                               : root.fitReadingAt.y + 18
+        width: reading_text.width + 12
+        height: reading_text.height + 6
+        radius: 3
+        color: root.plateColor
+
+        Text {
+            id: reading_text
+            anchors.centerIn: parent
+            text: root.fitReading
+            color: root.plateTextColor
+            font.pointSize: 9
+        }
+    }
+
+    // In the corner: the tool in use and whether the cloth drapes, each with the key that stops it; below them, what
+    // the avatar couldn't match, if anything.
+    Column {
         anchors.left: parent.left
-        anchors.right: parent.right
         anchors.top: parent.top
-        anchors.margins: 6
-        visible: root.sceneModel.avatarNote !== "" && !root.capturing
-        text: root.sceneModel.avatarNote
-        color: root.textColor
-        font.pointSize: 8
-        wrapMode: Text.WordWrap
+        anchors.margins: 8
+        width: parent.width - 16
+        spacing: 6
+        visible: !root.capturing
+
+        Row {
+            spacing: 6
+            visible: root.sceneModel.modeStatus !== "" || root.sceneModel.drapeStatus !== ""
+
+            StatusChip {
+                text: root.sceneModel.modeStatus
+                key: root.leaveKey
+                dotColor: root.highlightColor
+            }
+
+            StatusChip {
+                text: root.sceneModel.drapeStatus
+                key: root.drapeKey
+                dotColor: root.sceneModel.resting ? "#3db24a" : "#f0a020"
+                pulsing: !root.sceneModel.resting
+            }
+        }
+
+        Text {
+            width: parent.width
+            visible: root.sceneModel.avatarNote !== ""
+            text: root.sceneModel.avatarNote
+            color: root.textColor
+            font.pointSize: 8
+            wrapMode: Text.WordWrap
+        }
     }
 
     Component.onCompleted: {

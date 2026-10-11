@@ -852,6 +852,7 @@ signals:
     void           fabricsChanged();
     void           topstitchesChanged();
     void           avatarChanged();
+    void           drapeChanged();
     void           setCurrentDraftBlock(const QString &draftblock);
     void           patternHasGroups(bool value);
     void           updateGroups();

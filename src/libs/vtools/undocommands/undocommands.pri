@@ -18,6 +18,7 @@ HEADERS += \
     $$PWD/save_avatar.h \
     $$PWD/save_fabrics.h \
     $$PWD/save_folds.h \
+    $$PWD/save_drape.h \
     $$PWD/save_layers.h \
     $$PWD/save_elastics.h \
     $$PWD/save_topstitches.h \
@@ -60,6 +61,7 @@ SOURCES += \
     $$PWD/save_avatar.cpp \
     $$PWD/save_fabrics.cpp \
     $$PWD/save_folds.cpp \
+    $$PWD/save_drape.cpp \
     $$PWD/save_layers.cpp \
     $$PWD/save_elastics.cpp \
     $$PWD/save_topstitches.cpp \

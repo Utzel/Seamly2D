@@ -3270,8 +3270,8 @@ VGarmentDrape VAbstractPattern::getDrape() const
 //---------------------------------------------------------------------------------------------------------------------
 /// @brief Replaces the drape; a null one takes it out.
 ///
-/// How the cloth hangs isn't an edit to undo, so this goes past the undo stack; but the pattern counts as changed, to
-/// be saved with it.
+/// How the cloth hangs as it drapes isn't an edit to undo, so the 3D View keeps it here past the undo stack; putting
+/// the garment back as arranged is, through SaveDrape. The pattern counts as changed either way, to be saved with it.
 void VAbstractPattern::setDrape(const VGarmentDrape& drape)
 {
     QDomElement pattern = documentElement();
@@ -3327,6 +3327,7 @@ void VAbstractPattern::setDrape(const VGarmentDrape& drape)
 
     modified = true;
     emit patternChanged(false);
+    emit drapeChanged();
 }
 
 //---------------------------------------------------------------------------------------------------------------------

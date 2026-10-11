@@ -100,6 +100,7 @@
 #include "../vgarment/standard_sizes.h"
 #include "../vtools/undocommands/save_arrangements.h"
 #include "../vtools/undocommands/save_avatar.h"
+#include "../vtools/undocommands/save_drape.h"
 #include "../vtools/undocommands/save_fabrics.h"
 #include "../vtools/undocommands/save_elastics.h"
 #include "../vtools/undocommands/save_folds.h"
@@ -206,14 +207,8 @@ const qreal widest_image_width = 500.0;
 // Images of fabrics are kept in the pattern at most this many pixels across and along; larger ones are scaled down.
 const int kept_image_limit = 2048;
 
-// The items of the fabric box that are no fabrics have this role: making a new one, editing the one shown, adding it
-// to the fabric library, or opening the library's folder. The library's fabrics have their files in another one.
-const int fabric_command_role = Qt::UserRole + 1;
-const int fabric_file_role = Qt::UserRole + 2;
-const int new_fabric = 1;
-const int edit_fabric = 2;
-const int add_to_library = 3;
-const int open_library = 4;
+// The fabric library's fabrics in the fabric box have their files in this role.
+const int fabric_file_role = Qt::UserRole + 1;
 
 // A fabric shrinks to no less than this share of its drafted size, and stretches out to no more than this one.
 const qreal least_shrinkage = 0.5;
@@ -470,6 +465,11 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_custom_fabrics_listed()
     , m_fabric_library(new FabricLibrary(this))
     , m_library_fabrics_listed()
+    , m_fabric_action(nullptr)
+    , m_new_fabric_action(nullptr)
+    , m_edit_fabric_action(nullptr)
+    , m_add_to_library_action(nullptr)
+    , m_open_library_action(nullptr)
     , m_image_action(nullptr)
     , m_image_width_action(nullptr)
     , m_remove_image_action(nullptr)
@@ -498,11 +498,13 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     , m_drag()
     , m_pins()
     , m_resting(false)
+    , m_notice()
     , m_pull()
     , m_avatar_fingerprint()
     , m_drape_taken_in(false)
     , m_cloths_taken_in()
     , m_pattern_drape()
+    , m_keeping_drape(false)
 {
     QVBoxLayout* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -532,6 +534,7 @@ GarmentViewWidget::GarmentViewWidget(VContainer* data, VAbstractPattern* doc, QW
     connect(m_fabric_library, &FabricLibrary::changed, this, &GarmentViewWidget::updateActions);
     connect(m_doc, &VAbstractPattern::topstitchesChanged, this, &GarmentViewWidget::updateTopstitches);
     connect(m_doc, &VAbstractPattern::avatarChanged, this, &GarmentViewWidget::updateChosenAvatar);
+    connect(m_doc, &VAbstractPattern::drapeChanged, this, &GarmentViewWidget::takeBackDrape);
     connect(m_stitch_editor, &StitchEditor::topstitchesEdited, this, &GarmentViewWidget::saveTopstitches);
     connect(m_stitch_editor, &StitchEditor::stitchingChanged, this, &GarmentViewWidget::updateActions);
     connect(m_stitch_editor, &StitchEditor::stitchesChanged, this, &GarmentViewWidget::showStitches);
@@ -610,6 +613,7 @@ void GarmentViewWidget::selectPiece(quint32 id)
 void GarmentViewWidget::clear()
 {
     m_drape_taken_in = false;  // nothing more goes into the pattern being closed
+    m_notice.clear();
     m_cloths_taken_in.clear();
     m_pattern_drape = VGarmentDrape();
     m_avatar_fingerprint.clear();
@@ -1019,7 +1023,9 @@ void GarmentViewWidget::keepDrape()
         if (!(drape == m_pattern_drape))
         {
             m_pattern_drape = drape;
+            m_keeping_drape = true;
             m_doc->setDrape(drape);
+            m_keeping_drape = false;
         }
     }
 }
@@ -2432,7 +2438,7 @@ void GarmentViewWidget::startSimulation()
     {
         const QSignalBlocker blocker(m_simulate_action);
         m_simulate_action->setChecked(false);
-        m_scene_model->setHint(tr("Put pieces on the avatar first: Arrange, click a piece, then the avatar."));
+        m_notice = tr("Nothing to drape yet: put pieces on the avatar first. Arrange, click a piece, then the avatar.");
         return;
     }
 
@@ -2483,12 +2489,45 @@ void GarmentViewWidget::startSimulation()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// Back to the pieces as arranged, before any draping.
+// Back to the pieces as arranged, before any draping. Stopped, the drape is the pattern's, so putting the pieces back
+// takes it out of the pattern, as a step that can be undone.
 void GarmentViewWidget::resetDrape()
 {
     m_simulate_action->setChecked(false);
+    const VGarmentDrape drape = m_doc->getDrape();
+    if (m_drape_taken_in && !drape.isNull())
+    {
+        qApp->getUndoStack()->push(new SaveDrape(tr("reset drape"), drape, VGarmentDrape(), m_doc));
+        return;
+    }
     m_draped.clear();
     m_pins.clear();
+    rebuildScene();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+// The pattern's drape was taken out or put back, as by undo: the garment hangs as the pattern has it now, or as
+// arranged without a drape. The drape the view keeps in the pattern itself it shows already.
+void GarmentViewWidget::takeBackDrape()
+{
+    if (m_keeping_drape || !m_drape_taken_in)
+    {
+        return;
+    }
+    const VGarmentDrape drape = m_doc->getDrape();
+    if (drape == m_pattern_drape)
+    {
+        return;
+    }
+    {
+        const QSignalBlocker blocker(m_simulate_action);
+        m_simulate_action->setChecked(false);
+    }
+    m_runner->stop();
+    m_draped.clear();
+    m_pins.clear();
+    takeInDrape();
+    m_pattern_drape = drape;
     rebuildScene();
 }
 
@@ -2674,16 +2713,9 @@ void GarmentViewWidget::updateActions()
     const QString fabric = selected != 0 ? fabrics.of(selected) : fabrics.garment;
     const int index = m_fabric_box->findData(fabric.isEmpty() ? Fabric::defaultName() : fabric);
     m_fabric_box->setCurrentIndex(qMax(index, 0));
-    if (auto* items = qobject_cast<QStandardItemModel*>(m_fabric_box->model()))
-    {
-        for (const int command : {edit_fabric, add_to_library})
-        {
-            if (QStandardItem* item = items->item(m_fabric_box->findData(command, fabric_command_role)))
-            {
-                item->setEnabled(!fabrics.customFabric(fabric).name.isEmpty());
-            }
-        }
-    }
+    const bool own_fabric = !fabrics.customFabric(fabric).name.isEmpty();
+    m_edit_fabric_action->setEnabled(own_fabric);
+    m_add_to_library_action->setEnabled(own_fabric);
 
     const bool own_image = !ownFabricImage().isNull();
     m_image_width_action->setEnabled(own_image);
@@ -2706,28 +2738,10 @@ void GarmentViewWidget::updateFabrics()
 void GarmentViewWidget::chooseFabric(int index)
 {
     const QString library_file = m_fabric_box->itemData(index, fabric_file_role).toString();
-    const int command = m_fabric_box->itemData(index, fabric_command_role).toInt();
-    if (!library_file.isEmpty() || command != 0)
+    if (!library_file.isEmpty())
     {
-        switch (command)
-        {
-            case new_fabric:
-                editFabric(true);
-                break;
-            case edit_fabric:
-                editFabric(false);
-                break;
-            case add_to_library:
-                addFabricToLibrary();
-                break;
-            case open_library:
-                openFabricLibrary();
-                break;
-            default:
-                takeLibraryFabric(library_file);
-                break;
-        }
-        updateActions();  // the box shows the fabric again
+        takeLibraryFabric(library_file);
+        updateActions();  // the box shows the fabric taken in, or the one before
         return;
     }
 
@@ -3939,12 +3953,6 @@ void GarmentViewWidget::updateFabricBox(const VGarmentFabrics& fabrics)
             item->setFlags(Qt::NoItemFlags);
         }
     };
-    auto add_command = [this](const QString& text, int command, const QString& tip)
-    {
-        m_fabric_box->addItem(text);
-        m_fabric_box->setItemData(m_fabric_box->count() - 1, command, fabric_command_role);
-        m_fabric_box->setItemData(m_fabric_box->count() - 1, tip, Qt::ToolTipRole);
-    };
 
     for (const Fabric& fabric : Fabric::presets())
     {
@@ -3969,15 +3977,6 @@ void GarmentViewWidget::updateFabricBox(const VGarmentFabrics& fabrics)
                                       Qt::ToolTipRole);
         }
     }
-    m_fabric_box->insertSeparator(m_fabric_box->count());
-    add_command(tr("New Fabric..."), new_fabric,
-                tr("A fabric of the pattern's own, starting from the one shown, as fabric tests describe it"));
-    add_command(tr("Edit Fabric..."), edit_fabric, tr("Change or delete the fabric of the pattern's own shown"));
-    add_command(tr("Add Fabric to Library"), add_to_library,
-                tr("Keep the fabric of the pattern's own shown in the fabric library, for other patterns to take"));
-    add_command(tr("Open Fabric Library"), open_library,
-                tr("Open the fabric library's folder, set in the preferences: its fabric files can be shared, or "
-                   "taken out"));
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -3992,9 +3991,17 @@ QString GarmentViewWidget::stitchStyleTitle(const TopstitchStyle& style) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-// What to do next while arranging or draping, for the scene to show.
+// What to do next while arranging or draping, or what couldn't be done, and what the view is doing, for the scene to
+// show.
 void GarmentViewWidget::updateHint()
 {
+    const bool stitching = m_stitch_editor->isStitching() || m_fold_editor->isFolding()
+                           || m_elastic_editor->isEditing();
+    if (m_runner->isRunning() || m_scene_model->isArranging() || m_seam_editor->isSewing() || stitching)
+    {
+        m_notice.clear();
+    }
+
     QString hint;
     if (m_runner->isRunning())
     {
@@ -4014,7 +4021,36 @@ void GarmentViewWidget::updateHint()
                  : tr("Click a point or any spot on the avatar to put the piece there, or drag a placed piece "
                       "around.");
     }
+    else
+    {
+        hint = m_notice;
+    }
     m_scene_model->setHint(hint);
+
+    // What the view is doing, shown in its corner: the tool in use, and whether the cloth drapes.
+    QString mode;
+    if (m_seam_editor->isSewing())
+    {
+        mode = tr("Sewing");
+    }
+    else if (m_scene_model->isArranging())
+    {
+        mode = tr("Arranging");
+    }
+    else if (m_stitch_editor->isStitching())
+    {
+        mode = tr("Topstitching");
+    }
+    else if (m_fold_editor->isFolding())
+    {
+        mode = tr("Folding");
+    }
+    else if (m_elastic_editor->isEditing())
+    {
+        mode = tr("Sewing Elastic");
+    }
+    const QString drape = !m_runner->isRunning() ? QString() : m_resting ? tr("At rest") : tr("Draping");
+    m_scene_model->setStatus(mode, drape, m_resting);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -4059,6 +4095,8 @@ void GarmentViewWidget::createScene()
     properties.insert(QStringLiteral("emptyText"), tr("Pieces included in the layout show up here."));
     properties.insert(QStringLiteral("hintText"),
                       tr("Drag to turn, Ctrl+drag to move, scroll to zoom, double-click to fit"));
+    properties.insert(QStringLiteral("leaveKey"), QKeySequence(Qt::Key_Escape).toString(QKeySequence::NativeText));
+    properties.insert(QStringLiteral("drapeKey"), QKeySequence(Qt::Key_Space).toString(QKeySequence::NativeText));
     properties.insert(QStringLiteral("backgroundColor"), background);
     properties.insert(QStringLiteral("textColor"), colors.color(QPalette::WindowText));
     properties.insert(QStringLiteral("highlightColor"), colors.color(QPalette::Highlight));
@@ -4489,31 +4527,56 @@ void GarmentViewWidget::createToolBar()
     tool_bar->addWidget(m_fabric_box);
     connect(m_fabric_box, QOverload<int>::of(&QComboBox::activated), this, &GarmentViewWidget::chooseFabric);
 
-    // As CLO's fabric textures: an image of the fabric, kept in the pattern, in place of the piece's color.
-    m_image_action = tool_bar->addAction(tr("Fabric Image"));
+    // What can be done with the fabric shown, beside the box choosing it: a fabric of the pattern's own made or
+    // changed, how the cloth shrinks, an image of it, as CLO's fabric textures, and the fabric library.
+    m_fabric_action = tool_bar->addAction(tr("Fabric"));
+    m_fabric_action->setToolTip(tr("Make or change a fabric of the pattern's own, say how the cloth shrinks, show it "
+                                   "as an image of it, and keep it in the fabric library"));
+    QMenu* fabric_menu = new QMenu(this);
+    fabric_menu->setToolTipsVisible(true);
+    m_new_fabric_action = fabric_menu->addAction(tr("New Fabric..."));
+    m_new_fabric_action->setToolTip(tr("A fabric of the pattern's own, starting from the one shown, as fabric tests "
+                                       "describe it"));
+    connect(m_new_fabric_action, &QAction::triggered, this, [this]()
+    {
+        editFabric(true);
+    });
+    m_edit_fabric_action = fabric_menu->addAction(tr("Edit Fabric..."));
+    m_edit_fabric_action->setToolTip(tr("Change or delete the fabric of the pattern's own shown"));
+    connect(m_edit_fabric_action, &QAction::triggered, this, [this]()
+    {
+        editFabric(false);
+    });
+    m_shrinkage_action = fabric_menu->addAction(tr("Shrinkage..."));
+    m_shrinkage_action->setToolTip(tr("How much the fabric of the selected piece, or of the whole garment when no "
+                                      "piece is selected, shrinks across the grain and along it, as a rib knit worn "
+                                      "snug does"));
+    connect(m_shrinkage_action, &QAction::triggered, this, &GarmentViewWidget::chooseShrinkage);
+    fabric_menu->addSeparator();
+    m_image_action = fabric_menu->addAction(tr("Fabric Image..."));
     m_image_action->setToolTip(tr("Show the fabric of the selected piece, or of the whole garment when no piece is "
                                   "selected, as an image of it, repeating across and along the grain. The image is "
                                   "kept in the pattern."));
     connect(m_image_action, &QAction::triggered, this, &GarmentViewWidget::chooseFabricImage);
-
-    QMenu* image_menu = new QMenu(this);
-    image_menu->setToolTipsVisible(true);
-    m_image_width_action = image_menu->addAction(tr("Image Width..."));
+    m_image_width_action = fabric_menu->addAction(tr("Image Width..."));
     m_image_width_action->setToolTip(tr("How wide the cloth in the image is, which is how often it repeats"));
     connect(m_image_width_action, &QAction::triggered, this, &GarmentViewWidget::changeFabricImageWidth);
-    m_remove_image_action = image_menu->addAction(tr("Remove Image"));
+    m_remove_image_action = fabric_menu->addAction(tr("Remove Image"));
     m_remove_image_action->setToolTip(tr("Show the fabric in the piece's color again"));
     connect(m_remove_image_action, &QAction::triggered, this, &GarmentViewWidget::removeFabricImage);
-    image_menu->addSeparator();
-    m_shrinkage_action = image_menu->addAction(tr("Shrinkage..."));
-    m_shrinkage_action->setToolTip(tr("How much the fabric of the selected piece, or of the whole garment when no piece "
-                                      "is selected, shrinks across the grain and along it, as a rib knit worn snug "
-                                      "does"));
-    connect(m_shrinkage_action, &QAction::triggered, this, &GarmentViewWidget::chooseShrinkage);
-    m_image_action->setMenu(image_menu);
-    if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_image_action)))
+    fabric_menu->addSeparator();
+    m_add_to_library_action = fabric_menu->addAction(tr("Add Fabric to Library"));
+    m_add_to_library_action->setToolTip(tr("Keep the fabric of the pattern's own shown in the fabric library, for "
+                                           "other patterns to take"));
+    connect(m_add_to_library_action, &QAction::triggered, this, &GarmentViewWidget::addFabricToLibrary);
+    m_open_library_action = fabric_menu->addAction(tr("Open Fabric Library"));
+    m_open_library_action->setToolTip(tr("Open the fabric library's folder, set in the preferences: its fabric files "
+                                         "can be shared, or taken out"));
+    connect(m_open_library_action, &QAction::triggered, this, &GarmentViewWidget::openFabricLibrary);
+    m_fabric_action->setMenu(fabric_menu);
+    if (QToolButton* button = qobject_cast<QToolButton*>(tool_bar->widgetForAction(m_fabric_action)))
     {
-        button->setPopupMode(QToolButton::MenuButtonPopup);
+        button->setPopupMode(QToolButton::InstantPopup);
     }
 
     tool_bar = add_group();
@@ -4616,6 +4679,7 @@ void GarmentViewWidget::updateIcons()
         m_fine_action->setIcon(toolIcon(QStringLiteral("fine")));
         m_fit_action->setIcon(toolIcon(QStringLiteral("strain")));
         m_checks_action->setIcon(toolIcon(QStringLiteral("checks")));
+        m_fabric_action->setIcon(toolIcon(QStringLiteral("fabric")));
         m_image_action->setIcon(toolIcon(QStringLiteral("fabric_image")));
         m_view_action->setIcon(toolIcon(QStringLiteral("views")));
         m_snapshot_action->setIcon(toolIcon(QStringLiteral("snapshot")));
